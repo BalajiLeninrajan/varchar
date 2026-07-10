@@ -1,0 +1,21 @@
+[package]
+name = "varchar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "A database stored in one string and queried with regex"
+publish = false
+
+[dependencies]
+fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode"] }
+thiserror = "2"
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

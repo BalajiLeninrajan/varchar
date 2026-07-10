@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Native checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.0 --profile minimal --component rustfmt,clippy
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
+
+  wasm:
+    name: WebAssembly checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-unknown,wasm32-wasip1
+
+      - name: Check browser-oriented core
+        run: cargo check -p varchar --target wasm32-unknown-unknown
+
+      - name: Check WASI core
+        run: cargo check -p varchar --target wasm32-wasip1
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.1
+
+      - name: Run core tests in WebAssembly
+        run: wasm-pack test --node crates/varchar
