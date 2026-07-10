@@ -178,7 +178,7 @@ impl Database {
             self.limits.max_database_bytes,
             "database bytes",
         )?;
-        let next_catalog = storage::validate_and_catalog(&candidate)?;
+        let next_catalog = storage::validate_candidate(&candidate)?;
         (self.blob, self.catalog) = (candidate, next_catalog);
         Ok(())
     }
@@ -201,7 +201,7 @@ mod tests {
         assert_catalog_current(&database);
 
         for sql in [
-            "CREATE TABLE t (id INTEGER NOT NULL, note TEXT)",
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, note TEXT)",
             "INSERT INTO t VALUES (1, 'first')",
             "CREATE TABLE flags (enabled BOOLEAN NOT NULL)",
             "UPDATE t SET note = 'changed' WHERE id = 1",
@@ -222,8 +222,28 @@ mod tests {
         let before_catalog = database.catalog.clone();
 
         assert!(matches!(
-            database.commit_candidate(String::from("V1;garbage")),
+            database.commit_candidate(String::from("V2;garbage")),
             Err(Error::CorruptStorage { .. })
+        ));
+        assert_eq!(database.blob, before_blob);
+        assert_eq!(database.catalog, before_catalog);
+    }
+
+    #[test]
+    fn failed_constraint_validation_preserves_blob_and_catalog() {
+        let mut database = Database::new();
+        database
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .expect("fixture schema succeeds");
+        database
+            .execute("INSERT INTO t VALUES (1)")
+            .expect("fixture row succeeds");
+        let before_blob = database.blob.clone();
+        let before_catalog = database.catalog.clone();
+
+        assert!(matches!(
+            database.execute("INSERT INTO t VALUES (1)"),
+            Err(Error::Constraint(_))
         ));
         assert_eq!(database.blob, before_blob);
         assert_eq!(database.catalog, before_catalog);

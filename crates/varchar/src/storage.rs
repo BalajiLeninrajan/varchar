@@ -5,13 +5,14 @@ mod catalog;
 mod decode;
 mod encode;
 mod format;
+mod integrity;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Column, Error, Result};
 
 pub(crate) use candidate::Candidate;
-pub(crate) use catalog::validate_and_catalog;
+pub(crate) use catalog::{validate_and_catalog, validate_candidate};
 pub(crate) use decode::decode_row;
 pub(crate) use encode::{encode_cell, encode_row, encode_schema};
 pub(crate) use format::{
@@ -50,11 +51,13 @@ pub(crate) struct RowLayout<'a> {
     pub(crate) columns: &'a [Column],
 }
 
-/// A table definition reconstructed from a schema record.
+/// A table definition reconstructed from its schema and key metadata records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TableSchema {
     pub(crate) name: String,
     pub(crate) columns: Vec<Column>,
+    pub(crate) primary_key: Option<usize>,
+    pub(crate) foreign_keys: Vec<ForeignKey>,
 }
 
 impl TableSchema {
@@ -66,8 +69,57 @@ impl TableSchema {
     }
 }
 
+/// A single-column foreign key reconstructed from schema metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ForeignKey {
+    /// Index of the referencing column in the local table.
+    pub(crate) column: usize,
+    pub(crate) referenced_table: String,
+    pub(crate) referenced_column: String,
+}
+
 pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
-    validate_row_layout(schema.row_layout())
+    validate_row_layout(schema.row_layout())?;
+
+    if let Some(primary_key) = schema.primary_key {
+        let Some(column) = schema.columns.get(primary_key) else {
+            return Err(Error::Schema(format!(
+                "primary-key index {primary_key} is outside table {:?}",
+                schema.name
+            )));
+        };
+        if column.nullable {
+            return Err(Error::Schema(format!(
+                "primary-key column {:?}.{:?} must be NOT NULL",
+                schema.name, column.name
+            )));
+        }
+    }
+
+    let mut foreign_key_columns = BTreeSet::new();
+    for foreign_key in &schema.foreign_keys {
+        if schema.columns.get(foreign_key.column).is_none() {
+            return Err(Error::Schema(format!(
+                "foreign-key index {} is outside table {:?}",
+                foreign_key.column, schema.name
+            )));
+        }
+        if !foreign_key_columns.insert(foreign_key.column) {
+            return Err(Error::Schema(format!(
+                "column {:?}.{:?} has multiple foreign keys",
+                schema.name, schema.columns[foreign_key.column].name
+            )));
+        }
+        if !format::is_valid_identifier(&foreign_key.referenced_table)
+            || !format::is_valid_identifier(&foreign_key.referenced_column)
+        {
+            return Err(Error::Schema(format!(
+                "invalid foreign-key target {:?}.{:?}",
+                foreign_key.referenced_table, foreign_key.referenced_column
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {

@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use crate::sql::{Assignment, CreateTable, Predicate, PredicateOperator, Projection};
-use crate::storage::{Catalog, TableSchema};
+use crate::storage::{Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
@@ -27,17 +27,36 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         )));
     }
 
+    let mut primary_key = None;
+    let mut foreign_keys = Vec::new();
+    let mut columns = Vec::with_capacity(statement.columns.len());
+
+    for (index, column) in statement.columns.into_iter().enumerate() {
+        if column.primary_key && primary_key.replace(index).is_some() {
+            return Err(Error::Schema(format!(
+                "table {:?} may have only one PRIMARY KEY column",
+                statement.table
+            )));
+        }
+        if let Some(reference) = column.references {
+            foreign_keys.push(ForeignKey {
+                column: index,
+                referenced_table: reference.table,
+                referenced_column: reference.column,
+            });
+        }
+        columns.push(Column {
+            name: column.name,
+            data_type: column.data_type,
+            nullable: column.nullable,
+        });
+    }
+
     Ok(TableSchema {
         name: statement.table,
-        columns: statement
-            .columns
-            .into_iter()
-            .map(|column| Column {
-                name: column.name,
-                data_type: column.data_type,
-                nullable: column.nullable,
-            })
-            .collect(),
+        columns,
+        primary_key,
+        foreign_keys,
     })
 }
 
@@ -167,9 +186,9 @@ fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assignments, insert_values, predicate};
-    use crate::sql::{Assignment, Predicate, PredicateOperator};
-    use crate::storage::TableSchema;
+    use super::{assignments, create_schema, insert_values, predicate};
+    use crate::sql::{self, Assignment, Predicate, PredicateOperator, Statement};
+    use crate::storage::{Catalog, ForeignKey, TableSchema};
     use crate::{Column, DataType, Error, Value};
 
     fn people_schema() -> TableSchema {
@@ -192,7 +211,32 @@ mod tests {
                     nullable: false,
                 },
             ],
+            primary_key: None,
+            foreign_keys: Vec::new(),
         }
+    }
+
+    #[test]
+    fn create_schema_retains_resolved_key_metadata() {
+        let Statement::CreateTable(statement) = sql::parse(
+            "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id))",
+        )
+        .expect("statement parses")
+        else {
+            panic!("expected CREATE TABLE");
+        };
+
+        let schema = create_schema(&Catalog::empty(), statement).expect("schema resolves");
+        assert_eq!(schema.primary_key, Some(0));
+        assert!(!schema.columns[0].nullable);
+        assert_eq!(
+            schema.foreign_keys,
+            vec![ForeignKey {
+                column: 1,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+            }]
+        );
     }
 
     #[test]

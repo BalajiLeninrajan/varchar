@@ -42,7 +42,7 @@ fn single_text_column(database: &mut Database, sql: &str) -> Vec<Value> {
 #[test]
 fn typed_crud_and_optional_insert_columns() {
     let mut database = Database::new();
-    assert_eq!(database.as_str(), "V1;");
+    assert_eq!(database.as_str(), "V2;");
 
     assert_eq!(
         execute(
@@ -393,7 +393,7 @@ fn unicode_reserved_characters_and_regex_metacharacters_round_trip() {
     }
 
     let blob = database.as_str().to_owned();
-    assert!(blob.starts_with("V1;"));
+    assert!(blob.starts_with("V2;"));
     assert!(
         !blob.chars().any(char::is_control),
         "storage must remain a printable single line: {blob:?}"
@@ -625,21 +625,22 @@ fn canonical_storage_is_strictly_validated() {
     let corrupt = [
         "",
         "V0;",
-        "V1",
-        "V1;garbage",
-        "V1;~X|t;",
-        "V1;~S|t|v:T:?",
-        "V1;~S|T|v:T:?;",
-        "V1;~S|t|v:T:?;~S|t|v:T:?;",
-        "V1;~S|t|v:T:?|v:I:?;",
-        "V1;~R|t|Tx;",
-        "V1;~S|t|v:T:?;~R|t;",
-        "V1;~S|t|v:T:?;~R|t|I1;",
-        "V1;~S|t|v:I:?;~R|t|I01;",
-        "V1;~S|t|v:I:?;~R|t|I9223372036854775808;",
-        "V1;~S|t|v:B:?;~R|t|B2;",
-        "V1;~S|t|v:T:?;~R|t|T%0000zz;",
-        "V1;~S|t|v:T:?;~R|t|T%00007C;~S|later|v:T:?;",
+        "V1;",
+        "V2",
+        "V2;garbage",
+        "V2;~X|t;",
+        "V2;~S|t|v:T:?",
+        "V2;~S|T|v:T:?;",
+        "V2;~S|t|v:T:?;~S|t|v:T:?;",
+        "V2;~S|t|v:T:?|v:I:?;",
+        "V2;~R|t|Tx;",
+        "V2;~S|t|v:T:?;~R|t;",
+        "V2;~S|t|v:T:?;~R|t|I1;",
+        "V2;~S|t|v:I:?;~R|t|I01;",
+        "V2;~S|t|v:I:?;~R|t|I9223372036854775808;",
+        "V2;~S|t|v:B:?;~R|t|B2;",
+        "V2;~S|t|v:T:?;~R|t|T%0000zz;",
+        "V2;~S|t|v:T:?;~R|t|T%00007C;~S|later|v:T:?;",
     ];
 
     for blob in corrupt {
@@ -665,10 +666,10 @@ fn canonical_storage_is_strictly_validated() {
 }
 
 #[test]
-fn known_v1_storage_fixture_remains_compatible() {
+fn known_v2_storage_fixture_is_canonical() {
     let blob =
-        "V1;~S|people|id:I:!|note:T:?|active:B:!;~R|people|I-7|Tsemi%00003Bline%002028break|B1;";
-    let mut database = Database::from_string(blob.to_owned()).expect("known V1 fixture loads");
+        "V2;~S|people|id:I:!|note:T:?|active:B:!;~R|people|I-7|Tsemi%00003Bline%002028break|B1;";
+    let mut database = Database::from_string(blob.to_owned()).expect("known V2 fixture loads");
 
     assert_eq!(
         row_set(execute(
@@ -707,7 +708,7 @@ fn storage_edits_preserve_canonical_record_order() {
     execute(&mut database, "CREATE TABLE u (flag BOOLEAN NOT NULL)");
     assert_eq!(
         database.as_str(),
-        "V1;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tfirst;~R|t|I2|Tsecond;"
+        "V2;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tfirst;~R|t|I2|Tsecond;"
     );
 
     execute(&mut database, "INSERT INTO u VALUES (TRUE)");
@@ -715,13 +716,13 @@ fn storage_edits_preserve_canonical_record_order() {
     execute(&mut database, "DELETE FROM t WHERE id = 2");
     assert_eq!(
         database.as_str(),
-        "V1;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tchanged;~R|u|B1;"
+        "V2;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tchanged;~R|u|B1;"
     );
 }
 
 #[test]
 fn corrupt_storage_offsets_point_to_the_exact_cell_payload() {
-    let blob = "V1;~S|t|id:I:?|note:T:?;~R|t|I1|Tok%0000zz;";
+    let blob = "V2;~S|t|id:I:?|note:T:?;~R|t|I1|Tok%0000zz;";
     let expected = blob.find('%').expect("malformed escape is present");
 
     assert!(matches!(
@@ -741,7 +742,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
         database.execute("CREATE TABLE t (id INTEGER)"),
         Err(Error::ResourceLimit { limit: 8, .. })
     ));
-    assert_eq!(database.as_str(), "V1;");
+    assert_eq!(database.as_str(), "V2;");
 
     let mut database = Database::new();
     execute(&mut database, "CREATE TABLE t (id INTEGER, name TEXT)");

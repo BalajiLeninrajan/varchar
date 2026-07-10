@@ -3,11 +3,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::format::{
-    ROW_PREFIX, SCHEMA_PREFIX, allocation_limit, complete_record_body, corrupt,
-    is_valid_identifier, scan_text,
+    FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, SCHEMA_PREFIX, allocation_limit,
+    complete_record_body, corrupt, is_valid_identifier, scan_text,
 };
 use super::{RowLayout, TableSchema};
 use crate::{Column, DataType, Error, Result, Value};
+
+pub(super) struct PrimaryKeyMetadata<'a> {
+    pub(super) table: &'a str,
+    pub(super) column: &'a str,
+}
+
+pub(super) struct ForeignKeyMetadata<'a> {
+    pub(super) table: &'a str,
+    pub(super) column: &'a str,
+    pub(super) referenced_table: &'a str,
+    pub(super) referenced_column: &'a str,
+}
 
 /// Decode a complete canonical row record for `schema`.
 pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Value>> {
@@ -68,6 +80,48 @@ pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableS
     Ok(TableSchema {
         name: table.to_owned(),
         columns,
+        primary_key: None,
+        foreign_keys: Vec::new(),
+    })
+}
+
+pub(super) fn decode_primary_key_record(
+    record: &str,
+    offset: usize,
+) -> Result<PrimaryKeyMetadata<'_>> {
+    let body = complete_record_body(record, PRIMARY_KEY_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
+        return Err(corrupt(offset, "malformed primary-key metadata"));
+    }
+    Ok(PrimaryKeyMetadata { table, column })
+}
+
+pub(super) fn decode_foreign_key_record(
+    record: &str,
+    offset: usize,
+) -> Result<ForeignKeyMetadata<'_>> {
+    let body = complete_record_body(record, FOREIGN_KEY_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    let referenced_table = fields.next().unwrap_or_default();
+    let referenced_column = fields.next().unwrap_or_default();
+    if fields.next().is_some()
+        || !is_valid_identifier(table)
+        || !is_valid_identifier(column)
+        || !is_valid_identifier(referenced_table)
+        || !is_valid_identifier(referenced_column)
+    {
+        return Err(corrupt(offset, "malformed foreign-key metadata"));
+    }
+    Ok(ForeignKeyMetadata {
+        table,
+        column,
+        referenced_table,
+        referenced_column,
     })
 }
 

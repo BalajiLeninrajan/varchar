@@ -23,6 +23,14 @@ pub(crate) struct ColumnDef {
     pub(crate) name: String,
     pub(crate) data_type: DataType,
     pub(crate) nullable: bool,
+    pub(crate) primary_key: bool,
+    pub(crate) references: Option<ForeignKeyReference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ForeignKeyReference {
+    pub(crate) table: String,
+    pub(crate) column: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn failed_splice_leaves_the_candidate_reusable() {
-        let source = "V1;~R|t|I1;";
+        let source = "V2;~R|t|I1;";
         let mut candidate = Candidate::new(source, source.len()).expect("source fits");
 
         assert!(

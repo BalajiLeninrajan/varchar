@@ -1,18 +1,22 @@
-//! The physical V1 grammar shared by decoding, encoding, and row scans.
+//! The physical V2 grammar shared by decoding, encoding, and row scans.
 
 use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::{Column, DataType, Error, Result};
 
-pub(super) const HEADER: &str = "V1;";
+pub(super) const HEADER: &str = "V2;";
 pub(super) const SCHEMA_PREFIX: &str = "~S|";
+pub(super) const PRIMARY_KEY_PREFIX: &str = "~P|";
+pub(super) const FOREIGN_KEY_PREFIX: &str = "~F|";
 pub(super) const ROW_PREFIX: &str = "~R|";
 const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecordKind {
     Schema,
+    PrimaryKey,
+    ForeignKey,
     Row,
     Unknown,
 }
@@ -49,7 +53,10 @@ impl<'a> Iterator for RecordIter<'a> {
         let start = self.offset;
         if !self.blob[start..].starts_with('~') {
             self.failed = true;
-            return Some(Err(corrupt(start, "expected a schema or row record")));
+            return Some(Err(corrupt(
+                start,
+                "expected a schema, key metadata, or row record",
+            )));
         }
         let Some(relative_end) = self.blob[start..].find(';') else {
             self.failed = true;
@@ -60,6 +67,10 @@ impl<'a> Iterator for RecordIter<'a> {
         let text = &self.blob[start..end];
         let kind = if text.starts_with(SCHEMA_PREFIX) {
             RecordKind::Schema
+        } else if text.starts_with(PRIMARY_KEY_PREFIX) {
+            RecordKind::PrimaryKey
+        } else if text.starts_with(FOREIGN_KEY_PREFIX) {
+            RecordKind::ForeignKey
         } else if text.starts_with(ROW_PREFIX) {
             RecordKind::Row
         } else {

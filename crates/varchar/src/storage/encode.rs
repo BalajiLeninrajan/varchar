@@ -1,6 +1,8 @@
 //! Canonical serialization for schemas, rows, and typed cells.
 
-use super::format::{SCHEMA_PREFIX, encode_text_into, type_tag};
+use super::format::{
+    FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX, encode_text_into, type_tag,
+};
 use super::{RowLayout, TableSchema, validate_row_layout, validate_schema_for_write};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
@@ -20,6 +22,35 @@ pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
         encoded.push(if column.nullable { '?' } else { '!' });
     }
     encoded.push(';');
+
+    if let Some(primary_key) = schema.primary_key {
+        encoded.push_str(PRIMARY_KEY_PREFIX);
+        encoded.push_str(&schema.name);
+        encoded.push('|');
+        encoded.push_str(&schema.columns[primary_key].name);
+        encoded.push(';');
+    }
+
+    // Foreign-key order is not semantically meaningful. Encoding by local
+    // column keeps the authoritative string deterministic.
+    for column in 0..schema.columns.len() {
+        let Some(foreign_key) = schema
+            .foreign_keys
+            .iter()
+            .find(|foreign_key| foreign_key.column == column)
+        else {
+            continue;
+        };
+        encoded.push_str(FOREIGN_KEY_PREFIX);
+        encoded.push_str(&schema.name);
+        encoded.push('|');
+        encoded.push_str(&schema.columns[column].name);
+        encoded.push('|');
+        encoded.push_str(&foreign_key.referenced_table);
+        encoded.push('|');
+        encoded.push_str(&foreign_key.referenced_column);
+        encoded.push(';');
+    }
     Ok(encoded)
 }
 

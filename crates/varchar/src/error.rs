@@ -37,6 +37,9 @@ pub enum Error {
     #[error("type error: {0}")]
     Type(String),
 
+    #[error("constraint violation: {0}")]
+    Constraint(String),
+
     #[error("corrupt database at byte {offset}: {message}")]
     CorruptStorage { offset: usize, message: String },
 

@@ -1,8 +1,8 @@
 //! Recursive-descent statement parser for Varchar's small SQL dialect.
 
 use super::ast::{
-    Assignment, ColumnDef, CreateTable, Delete, Insert, Predicate, PredicateOperator, Projection,
-    Select, Statement, Update,
+    Assignment, ColumnDef, CreateTable, Delete, ForeignKeyReference, Insert, Predicate,
+    PredicateOperator, Projection, Select, Statement, Update,
 };
 use super::lexer::{Token, TokenKind, lex};
 use crate::{DataType, Error, Result, Value};
@@ -74,44 +74,187 @@ impl Parser {
         let table = self.expect_identifier()?;
         self.expect(TokenKind::LeftParen, "expected `(` after table name")?;
         let mut columns = Vec::new();
+        let mut table_primary_keys = Vec::new();
+        let mut table_foreign_keys = Vec::new();
         loop {
-            let name = self.expect_identifier()?;
-            let data_type = match self.current_word() {
-                Some("TEXT") => DataType::Text,
-                Some("INTEGER") => DataType::Integer,
-                Some("BOOLEAN") => DataType::Boolean,
-                Some(other) => {
-                    return Err(Error::unsupported(
-                        format!("column type `{other}`"),
-                        self.current().span,
-                    ));
-                }
-                None => {
-                    return Err(Error::parse(
-                        "expected TEXT, INTEGER, or BOOLEAN",
-                        self.current().span,
-                    ));
-                }
-            };
-            self.advance();
-            let nullable = if self.consume_keyword("NOT") {
-                self.expect_keyword("NULL")?;
-                false
+            if self.current_word() == Some("PRIMARY") && self.peek_word() == Some("KEY") {
+                table_primary_keys.push(self.parse_table_primary_key()?);
+            } else if self.current_word() == Some("FOREIGN") && self.peek_word() == Some("KEY") {
+                table_foreign_keys.push(self.parse_table_foreign_key()?);
             } else {
-                true
-            };
-            columns.push(ColumnDef {
-                name,
-                data_type,
-                nullable,
-            });
+                columns.push(self.parse_column_definition()?);
+            }
             if self.consume(&TokenKind::Comma) {
                 continue;
             }
             self.expect(TokenKind::RightParen, "expected `,` or `)`")?;
             break;
         }
+
+        for name in table_primary_keys {
+            let column = columns
+                .iter_mut()
+                .find(|column| column.name == name)
+                .ok_or_else(|| {
+                    Error::Schema(format!(
+                        "PRIMARY KEY references unknown column {name:?} in table {table:?}"
+                    ))
+                })?;
+            if column.primary_key {
+                return Err(Error::Schema(format!(
+                    "duplicate PRIMARY KEY declaration for column {name:?}"
+                )));
+            }
+            column.primary_key = true;
+            column.nullable = false;
+        }
+
+        for (name, reference) in table_foreign_keys {
+            let column = columns
+                .iter_mut()
+                .find(|column| column.name == name)
+                .ok_or_else(|| {
+                    Error::Schema(format!(
+                        "FOREIGN KEY references unknown column {name:?} in table {table:?}"
+                    ))
+                })?;
+            if column.references.is_some() {
+                return Err(Error::Schema(format!(
+                    "duplicate FOREIGN KEY declaration for column {name:?}"
+                )));
+            }
+            column.references = Some(reference);
+        }
+
+        let primary_key_count = columns.iter().filter(|column| column.primary_key).count();
+        if primary_key_count > 1 {
+            return Err(Error::Schema(format!(
+                "table {table:?} may have only one PRIMARY KEY column"
+            )));
+        }
+
         Ok(CreateTable { table, columns })
+    }
+
+    fn parse_column_definition(&mut self) -> Result<ColumnDef> {
+        let name = self.expect_identifier()?;
+        let data_type = match self.current_word() {
+            Some("TEXT") => DataType::Text,
+            Some("INTEGER") => DataType::Integer,
+            Some("BOOLEAN") => DataType::Boolean,
+            Some(other) => {
+                return Err(Error::unsupported(
+                    format!("column type `{other}`"),
+                    self.current().span,
+                ));
+            }
+            None => {
+                return Err(Error::parse(
+                    "expected TEXT, INTEGER, or BOOLEAN",
+                    self.current().span,
+                ));
+            }
+        };
+        self.advance();
+
+        let mut nullable = true;
+        let mut primary_key = false;
+        let mut references = None;
+        let mut saw_not_null = false;
+        loop {
+            match self.current_word() {
+                Some("NOT") => {
+                    if saw_not_null {
+                        return Err(Error::Schema(format!(
+                            "duplicate NOT NULL declaration for column {name:?}"
+                        )));
+                    }
+                    self.advance();
+                    self.expect_keyword("NULL")?;
+                    nullable = false;
+                    saw_not_null = true;
+                }
+                Some("PRIMARY") if self.peek_word() == Some("KEY") => {
+                    if primary_key {
+                        return Err(Error::Schema(format!(
+                            "duplicate PRIMARY KEY declaration for column {name:?}"
+                        )));
+                    }
+                    self.advance();
+                    self.advance();
+                    primary_key = true;
+                    nullable = false;
+                }
+                Some("REFERENCES") => {
+                    if references.is_some() {
+                        return Err(Error::Schema(format!(
+                            "duplicate REFERENCES declaration for column {name:?}"
+                        )));
+                    }
+                    references = Some(self.parse_reference()?);
+                }
+                _ => break,
+            }
+        }
+
+        Ok(ColumnDef {
+            name,
+            data_type,
+            nullable,
+            primary_key,
+            references,
+        })
+    }
+
+    fn parse_table_primary_key(&mut self) -> Result<String> {
+        self.expect_keyword("PRIMARY")?;
+        self.expect_keyword("KEY")?;
+        self.expect(TokenKind::LeftParen, "expected `(` after PRIMARY KEY")?;
+        let column = self.expect_identifier()?;
+        self.reject_composite_constraint("PRIMARY KEY")?;
+        self.expect(
+            TokenKind::RightParen,
+            "expected `)` after PRIMARY KEY column",
+        )?;
+        Ok(column)
+    }
+
+    fn parse_table_foreign_key(&mut self) -> Result<(String, ForeignKeyReference)> {
+        self.expect_keyword("FOREIGN")?;
+        self.expect_keyword("KEY")?;
+        self.expect(TokenKind::LeftParen, "expected `(` after FOREIGN KEY")?;
+        let column = self.expect_identifier()?;
+        self.reject_composite_constraint("FOREIGN KEY")?;
+        self.expect(
+            TokenKind::RightParen,
+            "expected `)` after FOREIGN KEY column",
+        )?;
+        let reference = self.parse_reference()?;
+        Ok((column, reference))
+    }
+
+    fn parse_reference(&mut self) -> Result<ForeignKeyReference> {
+        self.expect_keyword("REFERENCES")?;
+        let table = self.expect_identifier()?;
+        self.expect(TokenKind::LeftParen, "expected `(` after referenced table")?;
+        let column = self.expect_identifier()?;
+        self.reject_composite_constraint("FOREIGN KEY")?;
+        self.expect(
+            TokenKind::RightParen,
+            "expected `)` after referenced column",
+        )?;
+        Ok(ForeignKeyReference { table, column })
+    }
+
+    fn reject_composite_constraint(&self, constraint: &str) -> Result<()> {
+        if matches!(self.current().kind, TokenKind::Comma) {
+            Err(Error::unsupported(
+                format!("composite {constraint} constraints"),
+                self.current().span,
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn parse_insert(&mut self) -> Result<Insert> {
@@ -351,6 +494,13 @@ impl Parser {
         }
     }
 
+    fn peek_word(&self) -> Option<&str> {
+        match self.tokens.get(self.position + 1).map(|token| &token.kind) {
+            Some(TokenKind::Word(word)) => Some(word),
+            _ => None,
+        }
+    }
+
     fn current(&self) -> &Token {
         &self.tokens[self.position]
     }
@@ -408,8 +558,18 @@ fn is_reserved(word: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::parse;
-    use crate::sql::ast::{Predicate, PredicateOperator, Projection, Select, Statement};
-    use crate::{Error, Value};
+    use crate::sql::ast::{
+        ColumnDef, CreateTable, ForeignKeyReference, Predicate, PredicateOperator, Projection,
+        Select, Statement,
+    };
+    use crate::{DataType, Error, Value};
+
+    fn create_table(sql: &str) -> CreateTable {
+        match parse(sql).expect("CREATE TABLE parses") {
+            Statement::CreateTable(statement) => statement,
+            other => panic!("expected CREATE TABLE, got {other:?}"),
+        }
+    }
 
     #[test]
     fn parsing_produces_the_exact_normalized_ast() {
@@ -443,5 +603,84 @@ mod tests {
                 span_end: 20,
             }) if feature == "joins"
         ));
+    }
+
+    #[test]
+    fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
+        let statement = create_table(
+            "CREATE TABLE children (\
+                id INTEGER REFERENCES parents(id) PRIMARY KEY, \
+                owner_id INTEGER NOT NULL REFERENCES owners(id), \
+                note TEXT\
+            )",
+        );
+
+        assert_eq!(
+            statement.columns,
+            vec![
+                ColumnDef {
+                    name: "id".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                    primary_key: true,
+                    references: Some(ForeignKeyReference {
+                        table: "parents".to_owned(),
+                        column: "id".to_owned(),
+                    }),
+                },
+                ColumnDef {
+                    name: "owner_id".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                    primary_key: false,
+                    references: Some(ForeignKeyReference {
+                        table: "owners".to_owned(),
+                        column: "id".to_owned(),
+                    }),
+                },
+                ColumnDef {
+                    name: "note".to_owned(),
+                    data_type: DataType::Text,
+                    nullable: true,
+                    primary_key: false,
+                    references: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn normalizes_single_column_table_constraints_onto_columns() {
+        let statement = create_table(
+            "CREATE TABLE children (\
+                id INTEGER, parent_id INTEGER, \
+                PRIMARY KEY (id), \
+                FOREIGN KEY (parent_id) REFERENCES parents(id)\
+            )",
+        );
+
+        assert!(statement.columns[0].primary_key);
+        assert!(!statement.columns[0].nullable);
+        assert_eq!(
+            statement.columns[1].references,
+            Some(ForeignKeyReference {
+                table: "parents".to_owned(),
+                column: "id".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_composite_key_constraints_explicitly() {
+        for sql in [
+            "CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b))",
+            "CREATE TABLE t (a INTEGER, b INTEGER, FOREIGN KEY (a, b) REFERENCES p(a))",
+            "CREATE TABLE t (a INTEGER REFERENCES p(a, b))",
+        ] {
+            assert!(
+                matches!(parse(sql), Err(Error::Unsupported { .. })),
+                "expected composite constraint to be unsupported: {sql}"
+            );
+        }
     }
 }
