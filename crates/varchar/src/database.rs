@@ -103,7 +103,7 @@ impl Database {
         }
     }
 
-    /// Parse, resolve, and compile a `SELECT` into its exact row-selection regex.
+    /// Parse, resolve, and compile a `SELECT` into its exact source-row scan regex.
     pub fn compile_select(&self, sql: &str) -> Result<RegexPlan> {
         self.check_request(sql)?;
         match sql::parse(sql)? {

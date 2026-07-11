@@ -173,3 +173,37 @@ fn auto_increment_high_water_survives_reload_in_wasm() {
         vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]
     );
 }
+
+#[wasm_bindgen_test]
+fn inner_joins_execute_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id), name TEXT NOT NULL)",
+        )
+        .unwrap();
+    database
+        .execute("INSERT INTO parents VALUES (1, 'parent')")
+        .unwrap();
+    database
+        .execute("INSERT INTO children VALUES (1, 'child')")
+        .unwrap();
+
+    assert_eq!(
+        rows(
+            database
+                .execute(
+                    "SELECT parents.name, children.name FROM parents \
+                     JOIN children ON parents.id = children.parent_id",
+                )
+                .unwrap(),
+        ),
+        vec![vec![
+            Value::Text("parent".to_owned()),
+            Value::Text("child".to_owned()),
+        ]]
+    );
+}

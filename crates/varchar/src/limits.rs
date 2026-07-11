@@ -13,10 +13,14 @@ pub struct Limits {
     pub max_sql_bytes: usize,
     /// Maximum number of `WHERE` terms joined by `AND`.
     pub max_predicates: usize,
+    /// Maximum number of tables participating in one joined `SELECT`.
+    pub max_join_sources: usize,
     /// Maximum size of a generated regular expression, in UTF-8 bytes.
     pub max_pattern_bytes: usize,
     /// Maximum amount of typed value data materialized by a query.
     pub max_result_bytes: usize,
+    /// Maximum amount of value-comparison work performed while joining rows.
+    pub max_join_steps: usize,
     /// Per-search backtracking limit passed to the regex engine.
     pub regex_backtrack_limit: usize,
 }
@@ -27,8 +31,10 @@ impl Default for Limits {
             max_database_bytes: 64 * MIB,
             max_sql_bytes: 64 * 1024,
             max_predicates: 64,
+            max_join_sources: 64,
             max_pattern_bytes: 8 * MIB,
             max_result_bytes: 64 * MIB,
+            max_join_steps: 1_000_000,
             regex_backtrack_limit: 1_000_000,
         }
     }

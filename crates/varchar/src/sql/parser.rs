@@ -1,8 +1,9 @@
 //! Recursive-descent statement parser for Varchar's small SQL dialect.
 
 use super::ast::{
-    Assignment, ColumnDef, ColumnModifier, CreateElement, CreateTable, Delete, ForeignKeyReference,
-    Insert, Predicate, PredicateOperator, Projection, Select, Statement, TableConstraint, Update,
+    Assignment, ColumnDef, ColumnModifier, ColumnRef, CreateElement, CreateTable, Delete,
+    ForeignKeyReference, Insert, Join, JoinCondition, Predicate, PredicateOperator, Projection,
+    ProjectionItem, Select, Statement, TableConstraint, Update,
 };
 use super::lexer::{Token, TokenKind, lex};
 use crate::{DataType, Error, Result, Value};
@@ -57,6 +58,9 @@ impl Parser {
             let feature = match self.current_word() {
                 Some("OR") => "OR predicates",
                 Some("JOIN") => "joins",
+                Some("LEFT" | "RIGHT" | "FULL" | "OUTER") => "outer joins",
+                Some("CROSS") => "cross joins",
+                Some("NATURAL") => "natural joins",
                 Some("ORDER") => "ORDER BY",
                 Some("GROUP") => "GROUP BY",
                 Some("LIMIT") => "LIMIT",
@@ -224,19 +228,87 @@ impl Parser {
 
     fn parse_select(&mut self) -> Result<Select> {
         self.expect_keyword("SELECT")?;
-        let projection = if self.consume(&TokenKind::Star) {
-            Projection::All
-        } else {
-            Projection::Columns(self.parse_identifier_list()?)
-        };
+        let projection = self.parse_projection()?;
         self.expect_keyword("FROM")?;
         let table = self.expect_identifier()?;
+        let joins = self.parse_joins(&table)?;
         let predicates = self.parse_optional_where()?;
         Ok(Select {
             table,
+            joins,
             projection,
             predicates,
         })
+    }
+
+    fn parse_projection(&mut self) -> Result<Projection> {
+        if self.consume(&TokenKind::Star) {
+            return Ok(Projection::All);
+        }
+
+        let mut items = vec![self.parse_projection_item()?];
+        while self.consume(&TokenKind::Comma) {
+            items.push(self.parse_projection_item()?);
+        }
+        Ok(Projection::Items(items))
+    }
+
+    fn parse_projection_item(&mut self) -> Result<ProjectionItem> {
+        let first = self.expect_identifier()?;
+        if !self.consume(&TokenKind::Dot) {
+            return Ok(ProjectionItem::Column(ColumnRef {
+                qualifier: None,
+                name: first,
+            }));
+        }
+
+        if self.consume(&TokenKind::Star) {
+            return Ok(ProjectionItem::QualifiedAll(first));
+        }
+
+        let name = self.expect_identifier()?;
+        Ok(ProjectionItem::Column(ColumnRef {
+            qualifier: Some(first),
+            name,
+        }))
+    }
+
+    fn parse_joins(&mut self, base_table: &str) -> Result<Vec<Join>> {
+        let mut joins = Vec::new();
+        loop {
+            if self.current_word() == Some("INNER") && self.peek_word() == Some("JOIN") {
+                self.advance();
+                self.advance();
+            } else if self.consume_keyword("JOIN") {
+                // Bare JOIN is an INNER JOIN.
+            } else {
+                break;
+            }
+
+            let table_span = self.current().span;
+            let table = self.expect_identifier()?;
+            if table == base_table || joins.iter().any(|join: &Join| join.table == table) {
+                return Err(Error::unsupported("self joins", table_span));
+            }
+            if self.current_word() == Some("AS") {
+                return Err(Error::unsupported("aliases", self.current().span));
+            }
+
+            self.expect_keyword("ON")?;
+            let mut conditions = vec![self.parse_join_condition()?];
+            while self.consume_keyword("AND") {
+                conditions.push(self.parse_join_condition()?);
+            }
+            joins.push(Join { table, conditions });
+        }
+        Ok(joins)
+    }
+
+    fn parse_join_condition(&mut self) -> Result<JoinCondition> {
+        let left = self.parse_column_ref()?;
+        self.expect(TokenKind::Equal, "expected `=` in JOIN condition")?;
+        let right = self.parse_column_ref()?;
+        Ok(JoinCondition { left, right })
     }
 
     fn parse_update(&mut self) -> Result<Update> {
@@ -296,7 +368,7 @@ impl Parser {
     }
 
     fn parse_predicate(&mut self) -> Result<Predicate> {
-        let column = self.expect_identifier()?;
+        let column = self.parse_column_ref()?;
         let operator = match self.current().kind.clone() {
             TokenKind::Equal => {
                 self.advance();
@@ -339,6 +411,21 @@ impl Parser {
             }
         };
         Ok(Predicate { column, operator })
+    }
+
+    fn parse_column_ref(&mut self) -> Result<ColumnRef> {
+        let first = self.expect_identifier()?;
+        if self.consume(&TokenKind::Dot) {
+            Ok(ColumnRef {
+                qualifier: Some(first),
+                name: self.expect_identifier()?,
+            })
+        } else {
+            Ok(ColumnRef {
+                qualifier: None,
+                name: first,
+            })
+        }
     }
 
     fn parse_identifier_list(&mut self) -> Result<Vec<String>> {
@@ -499,8 +586,9 @@ fn is_reserved(word: &str) -> bool {
 mod tests {
     use super::parse;
     use crate::sql::ast::{
-        ColumnDef, ColumnModifier, CreateElement, CreateTable, ForeignKeyReference, Predicate,
-        PredicateOperator, Projection, Select, Statement, TableConstraint,
+        ColumnDef, ColumnModifier, ColumnRef, CreateElement, CreateTable, ForeignKeyReference,
+        Join, JoinCondition, Predicate, PredicateOperator, Projection, ProjectionItem, Select,
+        Statement, TableConstraint,
     };
     use crate::{DataType, Error, Value};
 
@@ -511,6 +599,20 @@ mod tests {
         }
     }
 
+    fn select(sql: &str) -> Select {
+        match parse(sql).expect("SELECT parses") {
+            Statement::Select(statement) => statement,
+            other => panic!("expected SELECT, got {other:?}"),
+        }
+    }
+
+    fn column_ref(qualifier: Option<&str>, name: &str) -> ColumnRef {
+        ColumnRef {
+            qualifier: qualifier.map(str::to_owned),
+            name: name.to_owned(),
+        }
+    }
+
     #[test]
     fn parsing_produces_the_exact_normalized_ast() {
         assert_eq!(
@@ -518,14 +620,18 @@ mod tests {
                 .expect("SELECT parses"),
             Statement::Select(Select {
                 table: String::from("users"),
-                projection: Projection::Columns(vec![String::from("name"), String::from("id"),]),
+                joins: Vec::new(),
+                projection: Projection::Items(vec![
+                    ProjectionItem::Column(column_ref(None, "name")),
+                    ProjectionItem::Column(column_ref(None, "id")),
+                ]),
                 predicates: vec![
                     Predicate {
-                        column: String::from("name"),
+                        column: column_ref(None, "name"),
                         operator: PredicateOperator::Like(String::from("a_%")),
                     },
                     Predicate {
-                        column: String::from("id"),
+                        column: column_ref(None, "id"),
                         operator: PredicateOperator::NotEqual(Value::Integer(-7)),
                     },
                 ],
@@ -534,15 +640,73 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_trailing_syntax_keeps_its_feature_and_span() {
+    fn unsupported_join_syntax_keeps_its_feature_and_span() {
         assert!(matches!(
-            parse("SELECT * FROM t JOIN u"),
+            parse("SELECT * FROM t LEFT JOIN u ON t.id = u.id"),
             Err(Error::Unsupported {
                 ref feature,
                 span_start: 16,
                 span_end: 20,
-            }) if feature == "joins"
+            }) if feature == "outer joins"
         ));
+    }
+
+    #[test]
+    fn parses_qualified_projection_inner_join_and_predicate_ast() {
+        assert_eq!(
+            select(
+                "SELECT authors.name, books.* FROM authors INNER JOIN books \
+                 ON authors.id = books.author_id AND authors.kind = books.kind \
+                 WHERE books.title LIKE 'R%'",
+            ),
+            Select {
+                table: "authors".to_owned(),
+                joins: vec![Join {
+                    table: "books".to_owned(),
+                    conditions: vec![
+                        JoinCondition {
+                            left: column_ref(Some("authors"), "id"),
+                            right: column_ref(Some("books"), "author_id"),
+                        },
+                        JoinCondition {
+                            left: column_ref(Some("authors"), "kind"),
+                            right: column_ref(Some("books"), "kind"),
+                        },
+                    ],
+                }],
+                projection: Projection::Items(vec![
+                    ProjectionItem::Column(column_ref(Some("authors"), "name")),
+                    ProjectionItem::QualifiedAll("books".to_owned()),
+                ]),
+                predicates: vec![Predicate {
+                    column: column_ref(Some("books"), "title"),
+                    operator: PredicateOperator::Like("R%".to_owned()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn inner_and_on_remain_contextual_identifiers() {
+        let statement = create_table("CREATE TABLE inner (on INTEGER)");
+        assert_eq!(statement.table, "inner");
+        let CreateElement::Column(column) = &statement.elements[0] else {
+            panic!("expected a column");
+        };
+        assert_eq!(column.name, "on");
+
+        let statement = select("SELECT inner.on FROM inner WHERE inner.on = 1");
+        assert_eq!(
+            statement.projection,
+            Projection::Items(vec![ProjectionItem::Column(column_ref(
+                Some("inner"),
+                "on",
+            ))])
+        );
+        assert_eq!(
+            statement.predicates[0].column,
+            column_ref(Some("inner"), "on")
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ mod execute;
 use fancy_regex::Regex;
 
 use crate::limits::{Limits, check_limit};
-use crate::resolve;
+use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Catalog, TableSchema};
 use crate::{Column, Result, RowSet, Value};
@@ -44,24 +44,54 @@ impl RegexPlan {
 }
 
 pub(crate) struct ScanPlan {
-    pattern: String,
     regex: Regex,
     table: String,
     schema: Vec<Column>,
 }
 
+struct SelectSource {
+    table: String,
+    schema: Vec<Column>,
+}
+
 pub(crate) struct SelectPlan {
-    scan: ScanPlan,
-    projection: Vec<usize>,
+    pattern: String,
+    regex: Regex,
+    sources: Vec<SelectSource>,
+    projection: Vec<ColumnLocation>,
+    joins: Vec<ResolvedJoin>,
 }
 
 impl SelectPlan {
     pub(crate) fn into_regex_plan(self) -> RegexPlan {
+        let Self {
+            pattern,
+            regex: _,
+            sources,
+            projection,
+            joins: _,
+        } = self;
+        let table = sources
+            .first()
+            .expect("a SELECT plan always has a root source")
+            .table
+            .clone();
+        let mut source_offsets = Vec::with_capacity(sources.len());
+        let mut schema = Vec::new();
+        for source in sources {
+            source_offsets.push(schema.len());
+            schema.extend(source.schema);
+        }
+        let projection = projection
+            .into_iter()
+            .map(|location| source_offsets[location.source] + location.column)
+            .collect();
+
         RegexPlan {
-            pattern: self.scan.pattern,
-            table: self.scan.table,
-            schema: self.scan.schema,
-            projection: self.projection,
+            pattern,
+            table,
+            schema,
+            projection,
         }
     }
 }
@@ -71,10 +101,13 @@ pub(crate) fn compile_select(
     statement: &Select,
     limits: &Limits,
 ) -> Result<SelectPlan> {
-    let schema = resolve::require_table(catalog, &statement.table)?;
-    let projection = resolve::projection(schema, &statement.projection)?;
-    let scan = compile_scan(schema, &statement.predicates, limits)?;
-    Ok(SelectPlan { scan, projection })
+    let resolved = resolve::select(
+        catalog,
+        statement,
+        limits.max_join_sources,
+        limits.max_predicates,
+    )?;
+    compile::select(resolved, limits)
 }
 
 pub(crate) fn compile_scan(

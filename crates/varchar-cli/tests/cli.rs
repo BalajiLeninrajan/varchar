@@ -154,6 +154,35 @@ fn auto_increment_state_persists_across_cli_processes() {
         .stdout(predicate::str::contains("~A|messages|id|I2;"));
 }
 
+#[test]
+fn inner_joins_execute_across_persisted_cli_commands() {
+    let (_directory, path) = initialized_database();
+    exec(
+        &path,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    )
+    .success();
+    exec(
+        &path,
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id), name TEXT NOT NULL)",
+    )
+    .success();
+    exec(&path, "INSERT INTO parents VALUES (1, 'parent')").success();
+    exec(&path, "INSERT INTO children VALUES (1, 'child')").success();
+
+    exec(
+        &path,
+        "SELECT parents.name, children.name FROM parents \
+         JOIN children ON parents.id = children.parent_id",
+    )
+    .success()
+    .stdout(
+        predicate::str::contains("parent")
+            .and(predicate::str::contains("child"))
+            .and(predicate::str::contains("1 row")),
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_persistence_preserves_the_previous_database() {

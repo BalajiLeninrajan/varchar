@@ -32,6 +32,24 @@ pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Valu
     decode_row_at(record, layout, 0)
 }
 
+/// Return the canonical table name carried by a complete row record.
+///
+/// Query execution uses this to route a row selected by a multi-table regex
+/// without depending on the persisted record grammar.
+pub(crate) fn row_table(record: &str) -> Result<&str> {
+    let body = complete_record_body(record, ROW_PREFIX, 0)?;
+    let (table, _) = body
+        .split_once('|')
+        .ok_or_else(|| corrupt(0, "row is missing its cell list"))?;
+    if !is_valid_identifier(table) {
+        return Err(corrupt(
+            ROW_PREFIX.len(),
+            "invalid or noncanonical table name",
+        ));
+    }
+    Ok(table)
+}
+
 pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableSchema> {
     let body = complete_record_body(record, SCHEMA_PREFIX, offset)?;
     let mut fields = body.split('|');
@@ -323,4 +341,23 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
         .map_err(|_| allocation_limit("decoded text bytes", payload.len()))?;
     scan_text(payload, offset, |character| decoded.push(character))?;
     Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_table;
+
+    #[test]
+    fn row_table_validates_the_complete_record_envelope() {
+        assert_eq!(row_table("~R|people|I1;").expect("valid row"), "people");
+
+        for malformed in [
+            "~S|people|id:I:!;",
+            "~R|People|I1;",
+            "~R|people;",
+            "~R|people|I1",
+        ] {
+            assert!(row_table(malformed).is_err(), "accepted {malformed:?}");
+        }
+    }
 }

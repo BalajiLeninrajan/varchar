@@ -6,20 +6,50 @@
 
 use std::collections::BTreeSet;
 
+use crate::limits::check_limit;
 use crate::sql::{
-    Assignment, ColumnModifier, CreateElement, CreateTable, Predicate, PredicateOperator,
-    Projection, TableConstraint,
+    Assignment, ColumnModifier, ColumnRef, CreateElement, CreateTable, Predicate,
+    PredicateOperator, Projection, ProjectionItem, Select, TableConstraint,
 };
 use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedPredicate<'a> {
     Equal { column: usize, value: &'a Value },
     NotEqual { column: usize, value: &'a Value },
     Like { column: usize, pattern: &'a str },
     IsNull { column: usize },
     IsNotNull { column: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ColumnLocation {
+    pub(crate) source: usize,
+    pub(crate) column: usize,
+}
+
+pub(crate) struct ResolvedJoinCondition {
+    pub(crate) left: ColumnLocation,
+    pub(crate) right: ColumnLocation,
+}
+
+pub(crate) struct ResolvedJoin {
+    pub(crate) source: usize,
+    pub(crate) conditions: Vec<ResolvedJoinCondition>,
+}
+
+pub(crate) struct ResolvedSourcePredicate<'a> {
+    pub(crate) source: usize,
+    pub(crate) predicate: ResolvedPredicate<'a>,
+}
+
+pub(crate) struct ResolvedSelect<'catalog, 'statement> {
+    pub(crate) sources: Vec<&'catalog TableSchema>,
+    pub(crate) projection: Vec<ColumnLocation>,
+    pub(crate) joins: Vec<ResolvedJoin>,
+    pub(crate) predicates: &'statement [Predicate],
 }
 
 pub(crate) struct ResolvedCreate {
@@ -303,14 +333,177 @@ pub(crate) fn require_table<'a>(catalog: &'a Catalog, table: &str) -> Result<&'a
         .ok_or_else(|| Error::Schema(format!("unknown table {table:?}")))
 }
 
-pub(crate) fn projection(schema: &TableSchema, projection: &Projection) -> Result<Vec<usize>> {
-    match projection {
-        Projection::All => Ok((0..schema.columns.len()).collect()),
-        Projection::Columns(columns) => columns
-            .iter()
-            .map(|name| require_column(schema, name))
-            .collect(),
+pub(crate) fn select<'catalog, 'statement>(
+    catalog: &'catalog Catalog,
+    statement: &'statement Select,
+    max_join_sources: usize,
+    max_predicates: usize,
+) -> Result<ResolvedSelect<'catalog, 'statement>> {
+    let source_count = statement
+        .joins
+        .len()
+        .checked_add(1)
+        .ok_or(Error::ResourceLimit {
+            resource: "JOIN sources",
+            limit: max_join_sources,
+        })?;
+    check_limit(source_count, max_join_sources, "JOIN sources")?;
+
+    let mut sources = Vec::with_capacity(source_count);
+    sources.push(require_table(catalog, &statement.table)?);
+    for join in &statement.joins {
+        if sources.iter().any(|schema| schema.name == join.table) {
+            return Err(Error::Schema(format!(
+                "table {:?} appears more than once in a SELECT",
+                join.table
+            )));
+        }
+        sources.push(require_table(catalog, &join.table)?);
     }
+
+    let projection = resolve_projection(&sources, &statement.projection)?;
+    let joins = resolve_joins(statement, &sources)?;
+    check_limit(
+        statement.predicates.len(),
+        max_predicates,
+        "WHERE predicates",
+    )?;
+
+    Ok(ResolvedSelect {
+        sources,
+        projection,
+        joins,
+        predicates: &statement.predicates,
+    })
+}
+
+pub(crate) fn select_predicate<'a>(
+    sources: &[&TableSchema],
+    predicate: &'a Predicate,
+) -> Result<ResolvedSourcePredicate<'a>> {
+    let location = resolve_column(sources, &predicate.column)?;
+    Ok(ResolvedSourcePredicate {
+        source: location.source,
+        predicate: predicate_at(
+            sources[location.source],
+            location.column,
+            &predicate.operator,
+        )?,
+    })
+}
+
+fn resolve_projection(
+    schemas: &[&TableSchema],
+    projection: &Projection,
+) -> Result<Vec<ColumnLocation>> {
+    match projection {
+        Projection::All => Ok(schemas
+            .iter()
+            .enumerate()
+            .flat_map(|(source, schema)| {
+                (0..schema.columns.len()).map(move |column| ColumnLocation { source, column })
+            })
+            .collect()),
+        Projection::Items(items) => {
+            let mut resolved = Vec::new();
+            for item in items {
+                match item {
+                    ProjectionItem::Column(column) => {
+                        resolved.push(resolve_column(schemas, column)?);
+                    }
+                    ProjectionItem::QualifiedAll(table) => {
+                        let source = schemas
+                            .iter()
+                            .position(|schema| schema.name == *table)
+                            .ok_or_else(|| {
+                                Error::Schema(format!(
+                                    "unknown table qualifier {table:?} in projection"
+                                ))
+                            })?;
+                        resolved.extend(
+                            (0..schemas[source].columns.len())
+                                .map(|column| ColumnLocation { source, column }),
+                        );
+                    }
+                }
+            }
+            Ok(resolved)
+        }
+    }
+}
+
+fn resolve_joins(statement: &Select, schemas: &[&TableSchema]) -> Result<Vec<ResolvedJoin>> {
+    let mut joins = Vec::with_capacity(statement.joins.len());
+    for (join_index, join) in statement.joins.iter().enumerate() {
+        let source = join_index + 1;
+        let visible = &schemas[..=source];
+        let mut conditions = Vec::with_capacity(join.conditions.len());
+        let mut connects_source = false;
+        for condition in &join.conditions {
+            let left = resolve_column(visible, &condition.left)?;
+            let right = resolve_column(visible, &condition.right)?;
+            connects_source |= (left.source == source && right.source < source)
+                || (right.source == source && left.source < source);
+            let left_type = schemas[left.source].columns[left.column].data_type;
+            let right_type = schemas[right.source].columns[right.column].data_type;
+            if left_type != right_type {
+                return Err(Error::Type(format!(
+                    "JOIN columns {:?}.{:?} and {:?}.{:?} have different types",
+                    schemas[left.source].name,
+                    schemas[left.source].columns[left.column].name,
+                    schemas[right.source].name,
+                    schemas[right.source].columns[right.column].name
+                )));
+            }
+            conditions.push(ResolvedJoinCondition { left, right });
+        }
+        if !connects_source {
+            return Err(Error::Schema(format!(
+                "JOIN for table {:?} must connect it to an earlier table",
+                join.table
+            )));
+        }
+        joins.push(ResolvedJoin { source, conditions });
+    }
+    Ok(joins)
+}
+
+fn resolve_column(schemas: &[&TableSchema], reference: &ColumnRef) -> Result<ColumnLocation> {
+    if let Some(qualifier) = &reference.qualifier {
+        let source = schemas
+            .iter()
+            .position(|schema| schema.name == *qualifier)
+            .ok_or_else(|| Error::Schema(format!("unknown table qualifier {qualifier:?}")))?;
+        let column = require_column(schemas[source], &reference.name)?;
+        return Ok(ColumnLocation { source, column });
+    }
+
+    let mut match_ = None;
+    for (source, schema) in schemas.iter().enumerate() {
+        if let Some(column) = schema
+            .columns
+            .iter()
+            .position(|column| column.name == reference.name)
+        {
+            if match_.is_some() {
+                return Err(Error::Schema(format!(
+                    "ambiguous column {:?}; qualify it with a table name",
+                    reference.name
+                )));
+            }
+            match_ = Some(ColumnLocation { source, column });
+        }
+    }
+    match_.ok_or_else(|| {
+        if let [schema] = schemas {
+            Error::Schema(format!(
+                "unknown column {:?} in table {:?}",
+                reference.name, schema.name
+            ))
+        } else {
+            Error::Schema(format!("unknown column {:?}", reference.name))
+        }
+    })
 }
 
 pub(crate) fn insert_values(
@@ -417,9 +610,17 @@ pub(crate) fn predicate<'a>(
     schema: &TableSchema,
     predicate: &'a Predicate,
 ) -> Result<ResolvedPredicate<'a>> {
-    let column = require_column(schema, &predicate.column)?;
+    let column = require_local_column(schema, &predicate.column)?;
+    predicate_at(schema, column, &predicate.operator)
+}
+
+fn predicate_at<'a>(
+    schema: &TableSchema,
+    column: usize,
+    operator: &'a PredicateOperator,
+) -> Result<ResolvedPredicate<'a>> {
     let definition = &schema.columns[column];
-    match &predicate.operator {
+    match operator {
         PredicateOperator::Equal(Value::Null) | PredicateOperator::NotEqual(Value::Null) => {
             Err(Error::Type(String::from(
                 "NULL cannot be compared with `=` or `!=`; use IS NULL or IS NOT NULL",
@@ -447,6 +648,18 @@ pub(crate) fn predicate<'a>(
     }
 }
 
+fn require_local_column(schema: &TableSchema, reference: &ColumnRef) -> Result<usize> {
+    if let Some(qualifier) = &reference.qualifier
+        && qualifier != &schema.name
+    {
+        return Err(Error::Schema(format!(
+            "unknown table qualifier {qualifier:?} for table {:?}",
+            schema.name
+        )));
+    }
+    require_column(schema, &reference.name)
+}
+
 fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
     schema
         .columns
@@ -462,9 +675,14 @@ fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{assignments, create_schema, insert_values, predicate};
-    use crate::sql::{self, Assignment, Predicate, PredicateOperator, Statement};
-    use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema, validate_and_catalog};
+    use super::{
+        ResolvedPredicate, assignments, create_schema, insert_values, predicate, select,
+        select_predicate,
+    };
+    use crate::sql::{self, Assignment, ColumnRef, Predicate, PredicateOperator, Statement};
+    use crate::storage::{
+        self, AutoIncrement, Catalog, ForeignKey, TableSchema, validate_and_catalog,
+    };
     use crate::{Column, DataType, Error, Value};
 
     fn people_schema() -> TableSchema {
@@ -810,6 +1028,57 @@ mod tests {
     }
 
     #[test]
+    fn joined_select_resolution_tracks_sources_locations_and_predicates() {
+        let catalog = storage::validate_and_catalog(
+            "V2;~S|authors|id:I:!|name:T:!;~S|books|author_id:I:!|title:T:!;",
+        )
+        .expect("fixture catalog is valid");
+        let Statement::Select(statement) = sql::parse(
+            "SELECT authors.name, books.title FROM authors \
+             JOIN books ON authors.id = books.author_id \
+             WHERE books.title LIKE 'N%' AND authors.name = 'Ada'",
+        )
+        .expect("statement parses") else {
+            panic!("expected SELECT");
+        };
+
+        let resolved = select(&catalog, &statement, 4, 4).expect("SELECT resolves");
+        assert_eq!(resolved.sources[0].name, "authors");
+        assert_eq!(resolved.sources[1].name, "books");
+        assert_eq!(
+            (resolved.projection[0].source, resolved.projection[0].column),
+            (0, 1)
+        );
+        assert_eq!(
+            (resolved.projection[1].source, resolved.projection[1].column),
+            (1, 1)
+        );
+        assert_eq!(resolved.joins[0].source, 1);
+        assert_eq!(resolved.joins[0].conditions[0].left.source, 0);
+        assert_eq!(resolved.joins[0].conditions[0].right.source, 1);
+        let first = select_predicate(&resolved.sources, &resolved.predicates[0])
+            .expect("first predicate resolves");
+        assert_eq!(first.source, 1);
+        assert!(matches!(
+            first.predicate,
+            ResolvedPredicate::Like {
+                column: 1,
+                pattern: "N%"
+            }
+        ));
+        let second = select_predicate(&resolved.sources, &resolved.predicates[1])
+            .expect("second predicate resolves");
+        assert_eq!(second.source, 0);
+        assert!(matches!(
+            second.predicate,
+            ResolvedPredicate::Equal {
+                column: 1,
+                value: Value::Text(value)
+            } if value == "Ada"
+        ));
+    }
+
+    #[test]
     fn named_insert_resolves_names_before_validating_the_row() {
         let schema = people_schema();
         assert!(matches!(
@@ -902,7 +1171,10 @@ mod tests {
     fn predicate_resolution_preserves_name_and_operator_error_order() {
         let schema = people_schema();
         let missing = Predicate {
-            column: String::from("missing"),
+            column: ColumnRef {
+                qualifier: None,
+                name: String::from("missing"),
+            },
             operator: PredicateOperator::Equal(Value::Null),
         };
         assert!(matches!(
@@ -912,7 +1184,10 @@ mod tests {
         ));
 
         let null_comparison = Predicate {
-            column: String::from("id"),
+            column: ColumnRef {
+                qualifier: None,
+                name: String::from("id"),
+            },
             operator: PredicateOperator::Equal(Value::Null),
         };
         assert!(matches!(
@@ -923,7 +1198,10 @@ mod tests {
         ));
 
         let wrong_like_type = Predicate {
-            column: String::from("id"),
+            column: ColumnRef {
+                qualifier: None,
+                name: String::from("id"),
+            },
             operator: PredicateOperator::Like(String::from("anything")),
         };
         assert!(matches!(

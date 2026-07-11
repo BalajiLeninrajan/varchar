@@ -64,6 +64,7 @@ pub(crate) struct Insert {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Select {
     pub(crate) table: String,
+    pub(crate) joins: Vec<Join>,
     pub(crate) projection: Projection,
     pub(crate) predicates: Vec<Predicate>,
 }
@@ -71,7 +72,31 @@ pub(crate) struct Select {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Projection {
     All,
-    Columns(Vec<String>),
+    Items(Vec<ProjectionItem>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectionItem {
+    Column(ColumnRef),
+    QualifiedAll(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ColumnRef {
+    pub(crate) qualifier: Option<String>,
+    pub(crate) name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Join {
+    pub(crate) table: String,
+    pub(crate) conditions: Vec<JoinCondition>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct JoinCondition {
+    pub(crate) left: ColumnRef,
+    pub(crate) right: ColumnRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,7 +120,7 @@ pub(crate) struct Delete {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Predicate {
-    pub(crate) column: String,
+    pub(crate) column: ColumnRef,
     pub(crate) operator: PredicateOperator,
 }
 
