@@ -6,6 +6,7 @@
 
 use std::ops::Range;
 
+use super::encode::encode_auto_increment_record;
 use super::{Catalog, RowLayout, TableSchema, encode_row, encode_schema};
 use crate::{Error, Result, Value};
 
@@ -32,9 +33,40 @@ impl<'a> Candidate<'a> {
         })
     }
 
-    pub(crate) fn insert_schema(&mut self, catalog: &Catalog, schema: &TableSchema) -> Result<()> {
+    pub(crate) fn insert_schema_with_auto_increment(
+        &mut self,
+        catalog: &Catalog,
+        schema: &TableSchema,
+        auto_increment: Option<usize>,
+    ) -> Result<()> {
         let encoded = encode_schema(schema)?;
+        let encoded = if let Some(column) = auto_increment {
+            encoded + &encode_auto_increment_record(schema, column, 0)?
+        } else {
+            encoded
+        };
         self.splice(catalog.row_start..catalog.row_start, &encoded)
+    }
+
+    pub(crate) fn advance_auto_increment(
+        &mut self,
+        catalog: &Catalog,
+        table: &str,
+        last: i64,
+    ) -> Result<()> {
+        let state = catalog.auto_increment_state(table).ok_or_else(|| {
+            Error::Schema(format!("table {table:?} has no auto-increment column"))
+        })?;
+        if last < state.last {
+            return Err(Error::Schema(format!(
+                "auto-increment high-water mark for table {table:?} cannot decrease"
+            )));
+        }
+        let schema = catalog
+            .table(table)
+            .expect("auto-increment state always names a catalog table");
+        let encoded = encode_auto_increment_record(schema, state.column, last)?;
+        self.splice(state.record_range.clone(), &encoded)
     }
 
     pub(crate) fn append_row(&mut self, layout: RowLayout<'_>, values: &[Value]) -> Result<()> {

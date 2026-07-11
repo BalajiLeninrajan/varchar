@@ -10,7 +10,7 @@ use crate::sql::{
     Assignment, ColumnModifier, CreateElement, CreateTable, Predicate, PredicateOperator,
     Projection, TableConstraint,
 };
-use crate::storage::{Catalog, ForeignKey, TableSchema};
+use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
@@ -22,7 +22,22 @@ pub(crate) enum ResolvedPredicate<'a> {
     IsNotNull { column: usize },
 }
 
-pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<TableSchema> {
+pub(crate) struct ResolvedCreate {
+    pub(crate) schema: TableSchema,
+    pub(crate) auto_increment: Option<usize>,
+}
+
+pub(crate) struct ResolvedInsert {
+    pub(crate) values: Vec<Value>,
+    pub(crate) next_auto_increment: Option<i64>,
+}
+
+pub(crate) struct ResolvedAssignments {
+    pub(crate) values: Vec<(usize, Value)>,
+    pub(crate) next_auto_increment: Option<i64>,
+}
+
+pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<ResolvedCreate> {
     let CreateTable { table, elements } = statement;
     if catalog.table(&table).is_some() {
         return Err(Error::Schema(format!("table {table:?} already exists")));
@@ -56,12 +71,13 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
 
     let mut primary_key = None;
     let mut foreign_keys = Vec::new();
+    let mut auto_increment = None;
     let mut saw_not_null = vec![false; columns.len()];
     let mut saw_foreign_key = vec![false; columns.len()];
     let mut column_index = 0;
 
-    // Fold local declarations in source order. Cross-table checks wait until
-    // the complete local primary key is available for self references.
+    // Fold local declarations in source order. Cross-table and AUTO checks
+    // wait until the complete local primary key is available.
     for element in elements {
         match element {
             CreateElement::Column(column) => {
@@ -94,6 +110,12 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             reference.column,
                             &mut saw_foreign_key,
                             &mut foreign_keys,
+                        )?,
+                        ColumnModifier::AutoIncrement => declare_auto_increment(
+                            &table,
+                            &column.name,
+                            index,
+                            &mut auto_increment,
                         )?,
                     }
                 }
@@ -130,7 +152,13 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     }
     foreign_keys.sort_by_key(|foreign_key| foreign_key.column);
     schema.foreign_keys = foreign_keys;
-    Ok(schema)
+    if let Some(column) = auto_increment {
+        validate_auto_increment(&schema, column)?;
+    }
+    Ok(ResolvedCreate {
+        schema,
+        auto_increment,
+    })
 }
 
 fn declare_primary_key(
@@ -176,6 +204,26 @@ fn declare_foreign_key(
     Ok(())
 }
 
+fn declare_auto_increment(
+    table: &str,
+    column: &str,
+    index: usize,
+    auto_increment: &mut Option<usize>,
+) -> Result<()> {
+    match *auto_increment {
+        Some(existing) if existing == index => Err(Error::Schema(format!(
+            "duplicate AUTOINCREMENT declaration for column {column:?}"
+        ))),
+        Some(_) => Err(Error::Schema(format!(
+            "table {table:?} may have only one auto-increment column"
+        ))),
+        None => {
+            *auto_increment = Some(index);
+            Ok(())
+        }
+    }
+}
+
 fn validate_foreign_key(
     catalog: &Catalog,
     schema: &TableSchema,
@@ -211,6 +259,17 @@ fn validate_foreign_key(
             schema.columns[foreign_key.column].name,
             foreign_key.referenced_table,
             foreign_key.referenced_column
+        )));
+    }
+    Ok(())
+}
+
+fn validate_auto_increment(schema: &TableSchema, column: usize) -> Result<()> {
+    let definition = &schema.columns[column];
+    if schema.primary_key != Some(column) || definition.data_type != DataType::Integer {
+        return Err(Error::Schema(format!(
+            "auto-increment column {:?}.{:?} must be its INTEGER primary key",
+            schema.name, definition.name
         )));
     }
     Ok(())
@@ -256,10 +315,11 @@ pub(crate) fn projection(schema: &TableSchema, projection: &Projection) -> Resul
 
 pub(crate) fn insert_values(
     schema: &TableSchema,
+    auto_increment: Option<AutoIncrement>,
     columns: Option<Vec<String>>,
     supplied: Vec<Value>,
-) -> Result<Vec<Value>> {
-    let values = if let Some(columns) = columns {
+) -> Result<ResolvedInsert> {
+    let mut values = if let Some(columns) = columns {
         if columns.len() != supplied.len() {
             return Err(Error::Type(format!(
                 "INSERT names {} columns but supplies {} values",
@@ -289,16 +349,42 @@ pub(crate) fn insert_values(
         supplied
     };
 
+    let next_auto_increment = if let Some(auto_increment) = auto_increment {
+        let value = values
+            .get_mut(auto_increment.column)
+            .expect("validated auto-increment column is in the schema");
+        match value {
+            Value::Null => {
+                let next = auto_increment.last.checked_add(1).ok_or_else(|| {
+                    Error::Constraint(format!(
+                        "auto-increment sequence for table {:?} is exhausted",
+                        schema.name
+                    ))
+                })?;
+                *value = Value::Integer(next);
+                Some(next)
+            }
+            Value::Integer(value) if *value > auto_increment.last => Some(*value),
+            Value::Integer(_) | Value::Text(_) | Value::Boolean(_) => None,
+        }
+    } else {
+        None
+    };
+
     for (value, column) in values.iter().zip(&schema.columns) {
         validate_value(value, column)?;
     }
-    Ok(values)
+    Ok(ResolvedInsert {
+        values,
+        next_auto_increment,
+    })
 }
 
 pub(crate) fn assignments(
     schema: &TableSchema,
+    auto_increment: Option<AutoIncrement>,
     assignments: &[Assignment],
-) -> Result<Vec<(usize, Value)>> {
+) -> Result<ResolvedAssignments> {
     let mut resolved = Vec::with_capacity(assignments.len());
     let mut seen = BTreeSet::new();
     for assignment in assignments {
@@ -312,7 +398,19 @@ pub(crate) fn assignments(
         validate_value(&assignment.value, &schema.columns[index])?;
         resolved.push((index, assignment.value.clone()));
     }
-    Ok(resolved)
+    let next_auto_increment = auto_increment.and_then(|auto_increment| {
+        resolved
+            .iter()
+            .find(|(column, _)| *column == auto_increment.column)
+            .and_then(|(_, value)| match value {
+                Value::Integer(value) if *value > auto_increment.last => Some(*value),
+                Value::Integer(_) | Value::Text(_) | Value::Boolean(_) | Value::Null => None,
+            })
+    });
+    Ok(ResolvedAssignments {
+        values: resolved,
+        next_auto_increment,
+    })
 }
 
 pub(crate) fn predicate<'a>(
@@ -366,7 +464,7 @@ fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
 mod tests {
     use super::{assignments, create_schema, insert_values, predicate};
     use crate::sql::{self, Assignment, Predicate, PredicateOperator, Statement};
-    use crate::storage::{Catalog, ForeignKey, TableSchema, validate_and_catalog};
+    use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema, validate_and_catalog};
     use crate::{Column, DataType, Error, Value};
 
     fn people_schema() -> TableSchema {
@@ -413,8 +511,10 @@ mod tests {
             "CREATE TABLE children (id INTEGER, parent_id INTEGER, PRIMARY KEY (id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
             "CREATE TABLE children (PRIMARY KEY (id), FOREIGN KEY (parent_id) REFERENCES parents(id), id INTEGER, parent_id INTEGER)",
         ] {
-            let schema =
+            let resolved =
                 create_schema(&keyed_parent_catalog(), create_table(sql)).expect("schema resolves");
+            assert_eq!(resolved.auto_increment, None);
+            let schema = resolved.schema;
             assert_eq!(schema.primary_key, Some(0));
             assert!(!schema.columns[0].nullable);
             assert_eq!(
@@ -556,13 +656,15 @@ mod tests {
 
     #[test]
     fn self_referential_foreign_keys_use_the_finished_local_primary_key() {
-        let schema = create_schema(
+        let resolved = create_schema(
             &Catalog::empty(),
             create_table(
                 "CREATE TABLE nodes (parent_id INTEGER REFERENCES nodes(id), id INTEGER, PRIMARY KEY (id))",
             ),
         )
         .expect("self reference resolves against the final local schema");
+        assert_eq!(resolved.auto_increment, None);
+        let schema = resolved.schema;
 
         assert_eq!(schema.primary_key, Some(1));
         assert_eq!(
@@ -576,11 +678,144 @@ mod tests {
     }
 
     #[test]
+    fn auto_increment_uses_the_finished_primary_key() {
+        for sql in [
+            "CREATE TABLE ids (id INTEGER AUTOINCREMENT PRIMARY KEY)",
+            "CREATE TABLE ids (id INTEGER AUTOINCREMENT, PRIMARY KEY (id))",
+            "CREATE TABLE ids (PRIMARY KEY (id), id INTEGER AUTO_INCREMENT)",
+        ] {
+            let resolved =
+                create_schema(&Catalog::empty(), create_table(sql)).expect("schema resolves");
+            assert_eq!(resolved.auto_increment, Some(0));
+            assert_eq!(resolved.schema.primary_key, Some(0));
+            assert!(!resolved.schema.columns[0].nullable);
+        }
+    }
+
+    #[test]
+    fn auto_increment_duplicates_and_applicability_are_resolver_owned() {
+        for (sql, expected) in [
+            (
+                "CREATE TABLE ids (id INTEGER PRIMARY KEY AUTOINCREMENT AUTO_INCREMENT)",
+                "duplicate AUTOINCREMENT declaration for column \"id\"",
+            ),
+            (
+                "CREATE TABLE ids (a INTEGER PRIMARY KEY AUTOINCREMENT, b INTEGER AUTOINCREMENT)",
+                "table \"ids\" may have only one auto-increment column",
+            ),
+            (
+                "CREATE TABLE ids (id TEXT PRIMARY KEY AUTOINCREMENT)",
+                "auto-increment column \"ids\".\"id\" must be its INTEGER primary key",
+            ),
+            (
+                "CREATE TABLE ids (id INTEGER AUTOINCREMENT)",
+                "auto-increment column \"ids\".\"id\" must be its INTEGER primary key",
+            ),
+        ] {
+            assert!(matches!(
+                create_schema(&Catalog::empty(), create_table(sql)),
+                Err(Error::Schema(ref message)) if message == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn auto_increment_declaration_and_applicability_errors_have_stable_precedence() {
+        let duplicate_auto = create_table(
+            "CREATE TABLE ids (id INTEGER AUTOINCREMENT AUTO_INCREMENT PRIMARY KEY PRIMARY KEY)",
+        );
+        assert!(matches!(
+            create_schema(&Catalog::empty(), duplicate_auto),
+            Err(Error::Schema(ref message))
+                if message == "duplicate AUTOINCREMENT declaration for column \"id\""
+        ));
+
+        let duplicate_primary = create_table(
+            "CREATE TABLE ids (id INTEGER PRIMARY KEY PRIMARY KEY AUTOINCREMENT AUTO_INCREMENT)",
+        );
+        assert!(matches!(
+            create_schema(&Catalog::empty(), duplicate_primary),
+            Err(Error::Schema(ref message))
+                if message == "duplicate PRIMARY KEY declaration for column \"id\""
+        ));
+
+        let invalid_foreign_key_before_applicability = create_table(
+            "CREATE TABLE ids (id TEXT PRIMARY KEY AUTOINCREMENT, parent TEXT REFERENCES missing(id))",
+        );
+        assert!(matches!(
+            create_schema(&Catalog::empty(), invalid_foreign_key_before_applicability),
+            Err(Error::Schema(ref message))
+                if message == "foreign key references unknown or later table \"missing\""
+        ));
+    }
+
+    #[test]
+    fn auto_increment_resolution_generates_and_tracks_only_new_high_water_marks() {
+        let schema = TableSchema {
+            name: String::from("ids"),
+            columns: vec![Column {
+                name: String::from("id"),
+                data_type: DataType::Integer,
+                nullable: false,
+            }],
+            primary_key: Some(0),
+            foreign_keys: Vec::new(),
+        };
+        let auto_increment = Some(AutoIncrement { column: 0, last: 4 });
+
+        let generated = insert_values(&schema, auto_increment, None, vec![Value::Null])
+            .expect("NULL generates a value");
+        assert_eq!(generated.values, vec![Value::Integer(5)]);
+        assert_eq!(generated.next_auto_increment, Some(5));
+
+        let explicit_lower = insert_values(&schema, auto_increment, None, vec![Value::Integer(-1)])
+            .expect("an explicit lower value is retained");
+        assert_eq!(explicit_lower.values, vec![Value::Integer(-1)]);
+        assert_eq!(explicit_lower.next_auto_increment, None);
+    }
+
+    #[test]
+    fn sequence_exhaustion_precedes_remaining_value_validation() {
+        let schema = TableSchema {
+            name: String::from("ids"),
+            columns: vec![
+                Column {
+                    name: String::from("id"),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                },
+                Column {
+                    name: String::from("required"),
+                    data_type: DataType::Text,
+                    nullable: false,
+                },
+            ],
+            primary_key: Some(0),
+            foreign_keys: Vec::new(),
+        };
+
+        assert!(matches!(
+            insert_values(
+                &schema,
+                Some(AutoIncrement {
+                    column: 0,
+                    last: i64::MAX,
+                }),
+                None,
+                vec![Value::Null, Value::Null],
+            ),
+            Err(Error::Constraint(ref message))
+                if message == "auto-increment sequence for table \"ids\" is exhausted"
+        ));
+    }
+
+    #[test]
     fn named_insert_resolves_names_before_validating_the_row() {
         let schema = people_schema();
         assert!(matches!(
             insert_values(
                 &schema,
+                None,
                 Some(vec![String::from("id"), String::from("missing")]),
                 vec![Value::Text(String::from("wrong")), Value::Integer(1)],
             ),
@@ -591,6 +826,7 @@ mod tests {
         assert_eq!(
             insert_values(
                 &schema,
+                None,
                 Some(vec![
                     String::from("active"),
                     String::from("id"),
@@ -602,7 +838,8 @@ mod tests {
                     Value::Text(String::from("ready")),
                 ],
             )
-            .expect("named values resolve"),
+            .expect("named values resolve")
+            .values,
             vec![
                 Value::Integer(7),
                 Value::Text(String::from("ready")),
@@ -625,7 +862,7 @@ mod tests {
             },
         ];
         assert!(matches!(
-            assignments(&schema, &assignments_to_resolve),
+            assignments(&schema, None, &assignments_to_resolve),
             Err(Error::Type(ref message))
                 if message == "column \"id\" expects INTEGER, got TEXT"
         ));
@@ -637,6 +874,7 @@ mod tests {
         assert!(matches!(
             insert_values(
                 &schema,
+                None,
                 Some(vec![String::from("id"), String::from("id")]),
                 vec![Value::Integer(1), Value::Integer(2)],
             ),
@@ -654,7 +892,7 @@ mod tests {
             },
         ];
         assert!(matches!(
-            assignments(&schema, &duplicate_assignments),
+            assignments(&schema, None, &duplicate_assignments),
             Err(Error::Schema(ref message))
                 if message == "duplicate UPDATE assignment for column \"id\""
         ));

@@ -1,14 +1,16 @@
 //! Whole-blob validation and reconstruction of the derived schema catalog.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use super::decode::{
-    ForeignKeyMetadata, PrimaryKeyMetadata, decode_foreign_key_record, decode_primary_key_record,
-    decode_schema_record, validate_row_record,
+    AutoIncrementMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, decode_auto_increment_record,
+    decode_foreign_key_record, decode_primary_key_record, decode_schema_record,
+    validate_row_record,
 };
 use super::format::{HEADER, RecordKind, corrupt, records};
-use super::{Catalog, ForeignKey, TableSchema, integrity};
-use crate::{Error, Result};
+use super::{AutoIncrementState, Catalog, ForeignKey, TableSchema, integrity};
+use crate::{DataType, Error, Result};
 
 #[derive(Clone, Copy)]
 enum ValidationMode {
@@ -21,6 +23,7 @@ enum MetadataPhase {
     None,
     PrimaryOrForeignKey,
     ForeignKeys,
+    Complete,
 }
 
 struct MetadataState {
@@ -66,6 +69,7 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
     }
 
     let mut tables = BTreeMap::<String, TableSchema>::new();
+    let mut auto_increments = BTreeMap::<String, AutoIncrementState>::new();
     let mut metadata = MetadataState::none();
     let mut row_start = blob.len();
     let mut saw_row = false;
@@ -109,6 +113,23 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
                 apply_foreign_key(&mut tables, &mut metadata, foreign_key, record.range.start)
                     .map_err(|violation| map_schema_violation(violation, mode))?;
             }
+            RecordKind::AutoIncrement => {
+                if saw_row {
+                    return Err(corrupt(
+                        record.range.start,
+                        "auto-increment metadata appears after a row record",
+                    ));
+                }
+                let auto_increment = decode_auto_increment_record(record.text, record.range.start)?;
+                apply_auto_increment(
+                    &tables,
+                    &mut auto_increments,
+                    &mut metadata,
+                    auto_increment,
+                    record.range.clone(),
+                )
+                .map_err(|violation| map_schema_violation(violation, mode))?;
+            }
             RecordKind::Row => {
                 if !saw_row {
                     row_start = record.range.start;
@@ -122,7 +143,11 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
         }
     }
 
-    let catalog = Catalog { tables, row_start };
+    let catalog = Catalog {
+        tables,
+        auto_increments,
+        row_start,
+    };
     integrity::validate_rows(blob, &catalog)
         .map_err(|violation| map_constraint_violation(violation, mode))?;
     Ok(catalog)
@@ -176,7 +201,11 @@ fn apply_foreign_key(
     metadata: ForeignKeyMetadata<'_>,
     offset: usize,
 ) -> std::result::Result<(), Violation> {
-    if state.phase == MetadataPhase::None || metadata.table != state.table {
+    if !matches!(
+        state.phase,
+        MetadataPhase::PrimaryOrForeignKey | MetadataPhase::ForeignKeys
+    ) || metadata.table != state.table
+    {
         return Err(Violation::new(
             offset,
             "foreign-key metadata must immediately follow its table schema or another key",
@@ -260,6 +289,59 @@ fn apply_foreign_key(
         });
     state.phase = MetadataPhase::ForeignKeys;
     state.next_foreign_key_column = column + 1;
+    Ok(())
+}
+
+fn apply_auto_increment(
+    tables: &BTreeMap<String, TableSchema>,
+    auto_increments: &mut BTreeMap<String, AutoIncrementState>,
+    state: &mut MetadataState,
+    metadata: AutoIncrementMetadata<'_>,
+    record_range: Range<usize>,
+) -> std::result::Result<(), Violation> {
+    let offset = record_range.start;
+    if state.phase != MetadataPhase::ForeignKeys || metadata.table != state.table {
+        return Err(Violation::new(
+            offset,
+            "auto-increment metadata must follow its table's primary and foreign keys",
+        ));
+    }
+    if metadata.last < 0 {
+        return Err(Violation::new(
+            offset,
+            "auto-increment high-water mark must be nonnegative",
+        ));
+    }
+
+    let schema = tables
+        .get(&state.table)
+        .expect("metadata state always names the most recent schema");
+    let Some(primary_key) = schema.primary_key else {
+        return Err(Violation::new(
+            offset,
+            "auto-increment column must be the table's INTEGER primary key",
+        ));
+    };
+    let column = &schema.columns[primary_key];
+    if column.name != metadata.column || column.data_type != DataType::Integer {
+        return Err(Violation::new(
+            offset,
+            format!(
+                "auto-increment column {:?}.{:?} must be its INTEGER primary key",
+                metadata.table, metadata.column
+            ),
+        ));
+    }
+
+    auto_increments.insert(
+        metadata.table.to_owned(),
+        AutoIncrementState {
+            column: primary_key,
+            last: metadata.last,
+            record_range,
+        },
+    );
+    state.phase = MetadataPhase::Complete;
     Ok(())
 }
 

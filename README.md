@@ -24,9 +24,9 @@ cargo build --workspace
 
 cargo run -p varchar-cli -- init ./demo.varchar
 cargo run -p varchar-cli -- exec ./demo.varchar \
-  "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active BOOLEAN)"
+  "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)"
 cargo run -p varchar-cli -- exec ./demo.varchar \
-  "INSERT INTO users VALUES (1, 'Ada', TRUE)"
+  "INSERT INTO users (name, active) VALUES ('Ada', TRUE)"
 cargo run -p varchar-cli -- exec ./demo.varchar \
   "SELECT name, active FROM users WHERE id = 1 AND name LIKE 'A%'"
 cargo run -p varchar-cli -- exec ./demo.varchar \
@@ -50,9 +50,9 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 
 | Operation | Supported shape |
 | --- | --- |
-| Create | `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, active BOOLEAN)` |
+| Create | `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)` |
 | Insert | `INSERT INTO users VALUES (1, 'Ada', TRUE)` |
-| Insert by column | `INSERT INTO users (name, id) VALUES ('Grace', 2)` |
+| Insert by column | `INSERT INTO users (name) VALUES ('Grace')` |
 | Select | `SELECT * FROM users` or a named, ordered projection |
 | Update | `UPDATE users SET active = FALSE WHERE id = 1` |
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
@@ -79,6 +79,20 @@ The equivalent table-level forms are `PRIMARY KEY (id)` and `FOREIGN KEY (user_i
 
 Key constraints are checked when data is inserted or updated and when a persisted database is loaded. Parent-key changes and parent-row deletions use `RESTRICT`: they fail while a child row contains that key. Like every failed mutation, a key violation leaves the authoritative string unchanged.
 
+An `INTEGER PRIMARY KEY` can use `AUTOINCREMENT` or `AUTO_INCREMENT` in its inline column definition:
+
+```sql
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  body TEXT NOT NULL
+);
+
+INSERT INTO messages (body) VALUES ('first');
+INSERT INTO messages VALUES (NULL, 'second');
+```
+
+Omitting the generated column from a named-column insert, or explicitly inserting `NULL`, generates the next positive integer. The persisted high-water mark starts at `1`, advances for larger explicit inserts and updates, never falls after deletion, and survives reloads. Zero and negative explicit values do not advance it. Overflow and every other failed mutation leave both rows and the high-water mark unchanged.
+
 `WHERE` supports terms joined with `AND`:
 
 - `=`, `!=`
@@ -96,10 +110,10 @@ The intentionally small dialect does not include joins, aggregation, ordering, a
 The storage format is deterministic, versioned, printable, and one line long. A representative database looks like this:
 
 ```text
-V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~R|users|I1|TAda|B1;
+V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~A|users|id|I1;~R|users|I1|TAda|B1;
 ```
 
-Schema and row records carry explicit tags. Key constraints are metadata records before the row records: `~P|users|id;` declares a primary key, while `~F|posts|user_id|users|id;` declares a foreign key. V2 is a strict format bump: V1 blobs are rejected rather than migrated implicitly.
+Schema and row records carry explicit tags. Key constraints are metadata records before the row records: `~P|users|id;` declares a primary key, while `~F|posts|user_id|users|id;` declares a foreign key. An auto-incrementing key also has a record such as `~A|users|id|I42;` that persists its typed high-water mark. V2 is a strict format bump: V1 blobs are rejected rather than migrated implicitly.
 
 Cell prefixes distinguish text, integers, booleans, and nulls, while structural and line-breaking characters are escaped reversibly. Loading validates the complete header, schemas, constraint metadata, key integrity, escapes, row widths, types, and canonical encoding; malformed records are never silently skipped.
 
@@ -143,7 +157,7 @@ There is no public JavaScript/WASM package in v1. A future browser adapter can p
 The punchline is also the performance model:
 
 - Queries scan the database string, so they are **O(n)** in the size of the database.
-- Inserts append a row after validation; updates and deletes rebuild the string and are **O(n)**.
+- Plain inserts append a row after validation. Inserts or updates that advance an auto-increment key also rewrite its persisted high-water record and are **O(n)**; updates and deletes rebuild the string and are **O(n)**.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
 - Inputs, generated regexes, materialized results, and regex backtracking are bounded. Limit failures return no partial result or mutation.
 

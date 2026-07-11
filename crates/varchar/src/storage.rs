@@ -8,6 +8,7 @@ mod format;
 mod integrity;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use crate::{Column, Error, Result};
 
@@ -27,6 +28,7 @@ pub(crate) const EMPTY_BLOB: &str = format::HEADER;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Catalog {
     tables: BTreeMap<String, TableSchema>,
+    auto_increments: BTreeMap<String, AutoIncrementState>,
     /// Byte offset at which another schema record can be inserted.
     row_start: usize,
 }
@@ -35,6 +37,7 @@ impl Catalog {
     pub(crate) fn empty() -> Self {
         Self {
             tables: BTreeMap::new(),
+            auto_increments: BTreeMap::new(),
             row_start: EMPTY_BLOB.len(),
         }
     }
@@ -42,6 +45,32 @@ impl Catalog {
     pub(crate) fn table(&self, name: &str) -> Option<&TableSchema> {
         self.tables.get(name)
     }
+
+    pub(crate) fn auto_increment(&self, table: &str) -> Option<AutoIncrement> {
+        self.auto_increments.get(table).map(|state| AutoIncrement {
+            column: state.column,
+            last: state.last,
+        })
+    }
+
+    fn auto_increment_state(&self, table: &str) -> Option<&AutoIncrementState> {
+        self.auto_increments.get(table)
+    }
+}
+
+/// The logical portion of a table's persisted auto-increment state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AutoIncrement {
+    pub(crate) column: usize,
+    pub(crate) last: i64,
+}
+
+/// Storage-owned auto-increment state, including its physical edit range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutoIncrementState {
+    column: usize,
+    last: i64,
+    record_range: Range<usize>,
 }
 
 /// The physical shape required to encode, decode, or scan one table's rows.

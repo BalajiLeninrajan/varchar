@@ -127,34 +127,56 @@ impl Database {
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let schema = resolve::create_schema(&self.catalog, statement)?;
-        let table = schema.name.clone();
+        let resolved = resolve::create_schema(&self.catalog, statement)?;
+        let table = resolved.schema.name.clone();
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
-        candidate.insert_schema(&self.catalog, &schema)?;
+        candidate.insert_schema_with_auto_increment(
+            &self.catalog,
+            &resolved.schema,
+            resolved.auto_increment,
+        )?;
         self.commit_candidate(candidate.finish()?)?;
         Ok(Outcome::Created { table })
     }
 
     fn execute_insert(&mut self, statement: Insert) -> Result<Outcome> {
         let schema = resolve::require_table(&self.catalog, &statement.table)?;
-        let values = resolve::insert_values(schema, statement.columns, statement.values)?;
+        let auto_increment = self.catalog.auto_increment(&statement.table);
+        let resolved =
+            resolve::insert_values(schema, auto_increment, statement.columns, statement.values)?;
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
-        candidate.append_row(schema.row_layout(), &values)?;
+        if let Some(last) = resolved.next_auto_increment {
+            candidate.advance_auto_increment(&self.catalog, &statement.table, last)?;
+        }
+        candidate.append_row(schema.row_layout(), &resolved.values)?;
         self.commit_candidate(candidate.finish()?)?;
         Ok(Outcome::Affected { rows: 1 })
     }
 
     fn execute_update(&mut self, statement: Update) -> Result<Outcome> {
         let schema = resolve::require_table(&self.catalog, &statement.table)?;
-        let assignments = resolve::assignments(schema, &statement.assignments)?;
+        let auto_increment = self.catalog.auto_increment(&statement.table);
+        let assignments = resolve::assignments(schema, auto_increment, &statement.assignments)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
         let (candidate, affected) =
             query::rewrite_matching_rows(&self.blob, &plan, &self.limits, |mut values| {
-                for (index, value) in &assignments {
+                for (index, value) in &assignments.values {
                     values[*index] = value.clone();
                 }
                 Ok(Some(values))
             })?;
+        let candidate = if affected > 0 {
+            if let Some(last) = assignments.next_auto_increment {
+                let mut sequence_candidate =
+                    storage::Candidate::new(&candidate, self.limits.max_database_bytes)?;
+                sequence_candidate.advance_auto_increment(&self.catalog, &statement.table, last)?;
+                sequence_candidate.finish()?
+            } else {
+                candidate
+            }
+        } else {
+            candidate
+        };
         self.commit_candidate(candidate)?;
         Ok(Outcome::Affected { rows: affected })
     }
@@ -243,6 +265,29 @@ mod tests {
 
         assert!(matches!(
             database.execute("INSERT INTO t VALUES (1)"),
+            Err(Error::Constraint(_))
+        ));
+        assert_eq!(database.blob, before_blob);
+        assert_eq!(database.catalog, before_catalog);
+    }
+
+    #[test]
+    fn auto_increment_commits_keep_the_catalog_current_and_fail_atomically() {
+        let mut database = Database::new();
+        for sql in [
+            "CREATE TABLE ids (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+            "INSERT INTO ids VALUES (NULL)",
+            "UPDATE ids SET id = 10 WHERE id = 1",
+            "INSERT INTO ids VALUES (NULL)",
+        ] {
+            database.execute(sql).expect("statement succeeds");
+            assert_catalog_current(&database);
+        }
+
+        let before_blob = database.blob.clone();
+        let before_catalog = database.catalog.clone();
+        assert!(matches!(
+            database.execute("UPDATE ids SET id = 10 WHERE id = 11"),
             Err(Error::Constraint(_))
         ));
         assert_eq!(database.blob, before_blob);

@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::format::{
-    FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, SCHEMA_PREFIX, allocation_limit,
-    complete_record_body, corrupt, is_valid_identifier, scan_text,
+    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, SCHEMA_PREFIX,
+    allocation_limit, complete_record_body, corrupt, is_valid_identifier, scan_text,
 };
 use super::{RowLayout, TableSchema};
 use crate::{Column, DataType, Error, Result, Value};
@@ -19,6 +19,12 @@ pub(super) struct ForeignKeyMetadata<'a> {
     pub(super) column: &'a str,
     pub(super) referenced_table: &'a str,
     pub(super) referenced_column: &'a str,
+}
+
+pub(super) struct AutoIncrementMetadata<'a> {
+    pub(super) table: &'a str,
+    pub(super) column: &'a str,
+    pub(super) last: i64,
 }
 
 /// Decode a complete canonical row record for `schema`.
@@ -122,6 +128,30 @@ pub(super) fn decode_foreign_key_record(
         column,
         referenced_table,
         referenced_column,
+    })
+}
+
+pub(super) fn decode_auto_increment_record(
+    record: &str,
+    offset: usize,
+) -> Result<AutoIncrementMetadata<'_>> {
+    let body = complete_record_body(record, AUTO_INCREMENT_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    let encoded_last = fields.next().unwrap_or_default();
+    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
+        return Err(corrupt(offset, "malformed auto-increment metadata"));
+    }
+    let payload = encoded_last
+        .strip_prefix('I')
+        .ok_or_else(|| corrupt(offset, "auto-increment high-water mark must be an INTEGER"))?;
+    let payload_offset = offset + AUTO_INCREMENT_PREFIX.len() + table.len() + 1 + column.len() + 2;
+    let last = decode_integer(payload, payload_offset)?;
+    Ok(AutoIncrementMetadata {
+        table,
+        column,
+        last,
     })
 }
 

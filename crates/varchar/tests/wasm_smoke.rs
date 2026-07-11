@@ -147,3 +147,29 @@ fn primary_and_foreign_keys_survive_reload_in_wasm() {
         vec![vec![Value::Integer(10), Value::Integer(1)]]
     );
 }
+
+#[wasm_bindgen_test]
+fn auto_increment_high_water_survives_reload_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)")
+        .unwrap();
+    database
+        .execute("INSERT INTO messages (body) VALUES ('first')")
+        .unwrap();
+    database
+        .execute("INSERT INTO messages VALUES (NULL, 'second')")
+        .unwrap();
+    database
+        .execute("DELETE FROM messages WHERE id = 2")
+        .unwrap();
+
+    let mut reloaded = Database::from_string(database.into_string()).unwrap();
+    reloaded
+        .execute("INSERT INTO messages (body) VALUES ('third')")
+        .unwrap();
+    assert_eq!(
+        rows(reloaded.execute("SELECT id FROM messages").unwrap()),
+        vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]
+    );
+}
