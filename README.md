@@ -115,6 +115,8 @@ An `ON` clause contains column-to-column equality terms joined by `AND`. Additio
 
 Join equality uses SQL null semantics: `NULL` never equals any value, including another `NULL`. Duplicate and many-to-many matches are preserved. Results use deterministic nested-loop order: physical row order from the `FROM` table, followed by physical row order from each joined table left to right.
 
+Each library result column includes its display label and the table/column it originated from. When a joined result contains the same label from different sources, the CLI qualifies those headers with their table names.
+
 Unconstrained tables retain duplicate rows. Projection order, duplicate projected columns, and physical insertion order are preserved.
 
 The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, ordering, subqueries, `OR`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
@@ -145,11 +147,12 @@ fn main() -> Result<(), varchar::Error> {
     db.execute("CREATE TABLE messages (body TEXT NOT NULL)")?;
     db.execute("INSERT INTO messages VALUES ('hello')")?;
 
-    let plan = db.compile_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
+    let plan = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
     println!("{}", plan.pattern());
+    assert_eq!(plan.sources(), &["messages"]);
 
     if let Outcome::Rows(rows) = db.execute("SELECT body FROM messages")? {
-        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows().len(), 1);
     }
 
     let persisted: String = db.into_string();

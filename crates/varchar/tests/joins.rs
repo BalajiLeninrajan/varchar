@@ -1,6 +1,8 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Column, DataType, Database, Error, Limits, Outcome, RowSet, Value};
+use varchar::{
+    ColumnOrigin, DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value,
+};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -15,12 +17,13 @@ fn rows(database: &mut Database, sql: &str) -> RowSet {
     }
 }
 
-fn column(name: &str, data_type: DataType, nullable: bool) -> Column {
-    Column {
-        name: name.to_owned(),
+fn column(table: &str, name: &str, data_type: DataType, nullable: bool) -> ResultColumn {
+    ResultColumn::new(
+        name.to_owned(),
+        ColumnOrigin::new(table.to_owned(), name.to_owned()),
         data_type,
         nullable,
-    }
+    )
 }
 
 fn schema_error(database: &mut Database, sql: &str) -> String {
@@ -74,12 +77,12 @@ fn join_and_inner_join_support_qualified_projection() {
         execute(&mut database, sql);
     }
 
-    let expected = RowSet {
-        columns: vec![
-            column("name", DataType::Text, false),
-            column("title", DataType::Text, false),
+    let expected = RowSet::new(
+        vec![
+            column("authors", "name", DataType::Text, false),
+            column("books", "title", DataType::Text, false),
         ],
-        rows: vec![
+        vec![
             vec![
                 Value::Text("Ada".to_owned()),
                 Value::Text("Notes".to_owned()),
@@ -89,7 +92,7 @@ fn join_and_inner_join_support_qualified_projection() {
                 Value::Text("Compiler".to_owned()),
             ],
         ],
-    };
+    );
 
     assert_eq!(
         rows(
@@ -124,13 +127,13 @@ fn inner_and_on_remain_contextual_identifiers() {
             &mut database,
             "SELECT inner.on, value FROM inner WHERE inner.on = 1",
         ),
-        RowSet {
-            columns: vec![
-                column("on", DataType::Integer, false),
-                column("value", DataType::Text, false),
+        RowSet::new(
+            vec![
+                column("inner", "on", DataType::Integer, false),
+                column("inner", "value", DataType::Text, false),
             ],
-            rows: vec![vec![Value::Integer(1), Value::Text("kept".to_owned()),]],
-        }
+            vec![vec![Value::Integer(1), Value::Text("kept".to_owned()),]],
+        )
     );
 }
 
@@ -156,7 +159,7 @@ fn qualified_update_and_delete_predicates_remain_supported() {
         Outcome::Affected { rows: 1 }
     );
     assert_eq!(
-        rows(&mut database, "SELECT id, active FROM users").rows,
+        rows(&mut database, "SELECT id, active FROM users").rows(),
         vec![vec![Value::Integer(1), Value::Boolean(true)]]
     );
 }
@@ -199,22 +202,22 @@ fn stars_expand_in_source_then_schema_order() {
             "SELECT * FROM customers JOIN invoices \
              ON customers.id = invoices.customer_id",
         ),
-        RowSet {
-            columns: vec![
-                column("id", DataType::Integer, false),
-                column("name", DataType::Text, false),
-                column("id", DataType::Integer, false),
-                column("customer_id", DataType::Integer, false),
-                column("paid", DataType::Boolean, true),
+        RowSet::new(
+            vec![
+                column("customers", "id", DataType::Integer, false),
+                column("customers", "name", DataType::Text, false),
+                column("invoices", "id", DataType::Integer, false),
+                column("invoices", "customer_id", DataType::Integer, false),
+                column("invoices", "paid", DataType::Boolean, true),
             ],
-            rows: vec![vec![
+            vec![vec![
                 Value::Integer(7),
                 Value::Text("Ada".to_owned()),
                 Value::Integer(20),
                 Value::Integer(7),
                 Value::Boolean(true),
             ]],
-        }
+        )
     );
 
     assert_eq!(
@@ -224,16 +227,16 @@ fn stars_expand_in_source_then_schema_order() {
              FROM customers JOIN invoices \
              ON customers.id = invoices.customer_id",
         ),
-        RowSet {
-            columns: vec![
-                column("id", DataType::Integer, false),
-                column("customer_id", DataType::Integer, false),
-                column("paid", DataType::Boolean, true),
-                column("name", DataType::Text, false),
-                column("id", DataType::Integer, false),
-                column("name", DataType::Text, false),
+        RowSet::new(
+            vec![
+                column("invoices", "id", DataType::Integer, false),
+                column("invoices", "customer_id", DataType::Integer, false),
+                column("invoices", "paid", DataType::Boolean, true),
+                column("customers", "name", DataType::Text, false),
+                column("customers", "id", DataType::Integer, false),
+                column("customers", "name", DataType::Text, false),
             ],
-            rows: vec![vec![
+            vec![vec![
                 Value::Integer(20),
                 Value::Integer(7),
                 Value::Boolean(true),
@@ -241,7 +244,7 @@ fn stars_expand_in_source_then_schema_order() {
                 Value::Integer(7),
                 Value::Text("Ada".to_owned()),
             ]],
-        }
+        )
     );
 }
 
@@ -275,7 +278,7 @@ fn many_to_many_matches_preserve_duplicate_multiplicity_and_storage_order() {
              FROM left_rows JOIN right_rows \
              ON left_rows.join_key = right_rows.join_key",
         )
-        .rows,
+        .rows(),
         vec![
             vec![Value::Text("L1".to_owned()), Value::Text("R1".to_owned())],
             vec![Value::Text("L1".to_owned()), Value::Text("R2".to_owned())],
@@ -315,7 +318,7 @@ fn null_join_keys_never_match() {
              FROM nullable_left JOIN nullable_right \
              ON nullable_left.join_key = nullable_right.join_key",
         )
-        .rows,
+        .rows(),
         vec![vec![
             Value::Text("left one".to_owned()),
             Value::Text("right one".to_owned()),
@@ -352,7 +355,7 @@ fn where_predicates_resolve_against_each_join_source() {
              ON members.id = memberships.member_id \
              WHERE members.active = TRUE AND memberships.role = 'owner'",
         )
-        .rows,
+        .rows(),
         vec![vec![Value::Integer(1), Value::Integer(10)]]
     );
 }
@@ -395,7 +398,7 @@ fn chained_joins_can_reference_any_prior_source_and_conjoin_conditions() {
                           AND people.id = courses.student_id \
                           AND people.id = enrollments.person_id",
         )
-        .rows,
+        .rows(),
         vec![
             vec![
                 Value::Text("Ada".to_owned()),
@@ -433,7 +436,7 @@ fn unqualified_columns_must_resolve_uniquely() {
             "SELECT name, total FROM customers JOIN invoices \
              ON customers.id = customer_id WHERE total = 50",
         )
-        .rows,
+        .rows(),
         vec![vec![Value::Text("Ada".to_owned()), Value::Integer(50)]]
     );
 
@@ -505,7 +508,6 @@ fn aliases_self_joins_and_non_inner_join_types_are_rejected() {
     for sql in [
         "SELECT * FROM nodes AS n JOIN labels ON n.id = labels.node_id",
         "SELECT * FROM nodes JOIN labels AS l ON nodes.id = l.node_id",
-        "SELECT * FROM nodes JOIN nodes ON nodes.parent_id = nodes.id",
         "SELECT * FROM nodes LEFT JOIN labels ON nodes.id = labels.node_id",
         "SELECT * FROM nodes LEFT OUTER JOIN labels ON nodes.id = labels.node_id",
         "SELECT * FROM nodes RIGHT JOIN labels ON nodes.id = labels.node_id",
@@ -515,6 +517,14 @@ fn aliases_self_joins_and_non_inner_join_types_are_rejected() {
     ] {
         unsupported_error(&mut database, sql);
     }
+
+    assert_eq!(
+        schema_error(
+            &mut database,
+            "SELECT * FROM nodes JOIN nodes ON nodes.parent_id = nodes.id",
+        ),
+        "table \"nodes\" appears more than once in a SELECT"
+    );
 
     for sql in [
         "SELECT nodes.id AS node_id FROM nodes",
@@ -531,7 +541,7 @@ fn aliases_self_joins_and_non_inner_join_types_are_rejected() {
 }
 
 #[test]
-fn compile_select_and_explain_share_one_join_plan_without_mutating() {
+fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
     let mut database = Database::new();
     execute(
         &mut database,
@@ -548,13 +558,14 @@ fn compile_select_and_explain_share_one_join_plan_without_mutating() {
                WHERE children.name LIKE 'chi%'";
     let before = database.as_str().to_owned();
 
-    let plan = database.compile_select(sql).expect("JOIN SELECT compiles");
+    let plan = database.explain_select(sql).expect("JOIN SELECT explains");
     assert!(!plan.pattern().is_empty());
+    assert_eq!(plan.sources(), &["parents", "children"]);
     assert_eq!(
         plan.columns(),
-        vec![
-            column("name", DataType::Text, false),
-            column("name", DataType::Text, false),
+        &[
+            column("parents", "name", DataType::Text, false),
+            column("children", "name", DataType::Text, false),
         ]
     );
     assert_eq!(database.as_str(), before);
@@ -564,7 +575,7 @@ fn compile_select_and_explain_share_one_join_plan_without_mutating() {
         Outcome::Explain(plan)
     );
     assert_eq!(database.as_str(), before);
-    assert_eq!(rows(&mut database, sql).rows.len(), 1);
+    assert_eq!(rows(&mut database, sql).rows().len(), 1);
     assert_eq!(database.as_str(), before);
 }
 
@@ -594,7 +605,7 @@ fn joins_work_after_reloading_the_authoritative_string() {
             "SELECT parents.name, children.name \
              FROM parents JOIN children ON parents.id = children.parent_id",
         )
-        .rows,
+        .rows(),
         vec![vec![
             Value::Text("parent".to_owned()),
             Value::Text("child".to_owned()),

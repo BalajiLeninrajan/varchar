@@ -9,37 +9,33 @@ use crate::limits::{Limits, check_limit};
 use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Catalog, TableSchema};
-use crate::{Column, Result, RowSet, Value};
+use crate::{Column, ColumnOrigin, Result, ResultColumn, RowSet, Value};
 
-/// The exact regular expression and projection produced for a `SELECT`.
+/// An explanation of the source-row scan produced for a `SELECT`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegexPlan {
+pub struct ExplainPlan {
     pattern: String,
-    table: String,
-    schema: Vec<Column>,
-    projection: Vec<usize>,
+    sources: Vec<String>,
+    columns: Vec<ResultColumn>,
 }
 
-impl RegexPlan {
+impl ExplainPlan {
     /// The generated pattern used to select complete encoded rows.
     #[must_use]
     pub fn pattern(&self) -> &str {
         &self.pattern
     }
 
-    /// The selected table name.
+    /// Source tables in `FROM`/`JOIN` order.
     #[must_use]
-    pub fn table(&self) -> &str {
-        &self.table
+    pub fn sources(&self) -> &[String] {
+        &self.sources
     }
 
     /// Projected columns, in query order and including duplicates.
     #[must_use]
-    pub fn columns(&self) -> Vec<Column> {
-        self.projection
-            .iter()
-            .map(|&index| self.schema[index].clone())
-            .collect()
+    pub fn columns(&self) -> &[ResultColumn] {
+        &self.columns
     }
 }
 
@@ -63,7 +59,7 @@ pub(crate) struct SelectPlan {
 }
 
 impl SelectPlan {
-    pub(crate) fn into_regex_plan(self) -> RegexPlan {
+    pub(crate) fn into_explain_plan(self) -> ExplainPlan {
         let Self {
             pattern,
             regex: _,
@@ -71,27 +67,25 @@ impl SelectPlan {
             projection,
             joins: _,
         } = self;
-        let table = sources
-            .first()
-            .expect("a SELECT plan always has a root source")
-            .table
-            .clone();
-        let mut source_offsets = Vec::with_capacity(sources.len());
-        let mut schema = Vec::new();
-        for source in sources {
-            source_offsets.push(schema.len());
-            schema.extend(source.schema);
-        }
-        let projection = projection
+        let columns = projection
             .into_iter()
-            .map(|location| source_offsets[location.source] + location.column)
+            .map(|location| {
+                let source = &sources[location.source];
+                let column = &source.schema[location.column];
+                ResultColumn::new(
+                    column.name.clone(),
+                    ColumnOrigin::new(source.table.clone(), column.name.clone()),
+                    column.data_type,
+                    column.nullable,
+                )
+            })
             .collect();
+        let sources = sources.into_iter().map(|source| source.table).collect();
 
-        RegexPlan {
+        ExplainPlan {
             pattern,
-            table,
-            schema,
-            projection,
+            sources,
+            columns,
         }
     }
 }

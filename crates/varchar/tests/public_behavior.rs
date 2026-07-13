@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Column, DataType, Database, Error, Limits, Outcome, RowSet, Value};
+use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -12,11 +12,14 @@ fn sql_text(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn column(name: &str, data_type: DataType, nullable: bool) -> Column {
-    Column {
-        name: name.to_owned(),
-        data_type,
-        nullable,
+fn assert_columns(actual: &[ResultColumn], expected: &[(&str, &str, DataType, bool)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, &(table, name, data_type, nullable)) in actual.iter().zip(expected) {
+        assert_eq!(actual.label(), name);
+        assert_eq!(actual.origin().table(), table);
+        assert_eq!(actual.origin().column(), name);
+        assert_eq!(actual.data_type(), data_type);
+        assert_eq!(actual.nullable(), nullable);
     }
 }
 
@@ -29,8 +32,8 @@ fn row_set(outcome: Outcome) -> RowSet {
 
 fn single_text_column(database: &mut Database, sql: &str) -> Vec<Value> {
     let rows = row_set(execute(database, sql));
-    assert_eq!(rows.columns.len(), 1);
-    rows.rows
+    assert_eq!(rows.columns().len(), 1);
+    rows.into_rows()
         .into_iter()
         .map(|row| {
             assert_eq!(row.len(), 1);
@@ -68,26 +71,28 @@ fn typed_crud_and_optional_insert_columns() {
         Outcome::Affected { rows: 1 }
     );
 
+    let selected = row_set(execute(
+        &mut database,
+        "SELECT id, note, active FROM things",
+    ));
+    assert_columns(
+        selected.columns(),
+        &[
+            ("things", "id", DataType::Integer, false),
+            ("things", "note", DataType::Text, true),
+            ("things", "active", DataType::Boolean, false),
+        ],
+    );
     assert_eq!(
-        row_set(execute(
-            &mut database,
-            "SELECT id, note, active FROM things",
-        )),
-        RowSet {
-            columns: vec![
-                column("id", DataType::Integer, false),
-                column("note", DataType::Text, true),
-                column("active", DataType::Boolean, false),
+        selected.rows(),
+        &[
+            vec![
+                Value::Integer(1),
+                Value::Text("first".to_owned()),
+                Value::Boolean(true),
             ],
-            rows: vec![
-                vec![
-                    Value::Integer(1),
-                    Value::Text("first".to_owned()),
-                    Value::Boolean(true),
-                ],
-                vec![Value::Integer(2), Value::Null, Value::Boolean(false)],
-            ],
-        }
+            vec![Value::Integer(2), Value::Null, Value::Boolean(false)],
+        ]
     );
 
     assert_eq!(
@@ -116,20 +121,22 @@ fn typed_crud_and_optional_insert_columns() {
         Outcome::Affected { rows: 0 }
     );
 
+    let selected = row_set(execute(&mut database, "SELECT * FROM things"));
+    assert_columns(
+        selected.columns(),
+        &[
+            ("things", "id", DataType::Integer, false),
+            ("things", "note", DataType::Text, true),
+            ("things", "active", DataType::Boolean, false),
+        ],
+    );
     assert_eq!(
-        row_set(execute(&mut database, "SELECT * FROM things")),
-        RowSet {
-            columns: vec![
-                column("id", DataType::Integer, false),
-                column("note", DataType::Text, true),
-                column("active", DataType::Boolean, false),
-            ],
-            rows: vec![vec![
-                Value::Integer(2),
-                Value::Text("filled".to_owned()),
-                Value::Boolean(true),
-            ]],
-        }
+        selected.rows(),
+        &[vec![
+            Value::Integer(2),
+            Value::Text("filled".to_owned()),
+            Value::Boolean(true),
+        ]]
     );
 
     assert_eq!(
@@ -137,8 +144,8 @@ fn typed_crud_and_optional_insert_columns() {
         Outcome::Affected { rows: 1 }
     );
     let empty = row_set(execute(&mut database, "SELECT * FROM things"));
-    assert!(empty.rows.is_empty());
-    assert_eq!(empty.columns.len(), 3);
+    assert!(empty.rows().is_empty());
+    assert_eq!(empty.columns().len(), 3);
 }
 
 #[test]
@@ -156,32 +163,34 @@ fn preserves_duplicate_rows_and_projection_order() {
         assert_eq!(execute(&mut database, sql), Outcome::Affected { rows: 1 });
     }
 
+    let selected = row_set(execute(&mut database, "SELECT name, id, name FROM entries"));
+    assert_columns(
+        selected.columns(),
+        &[
+            ("entries", "name", DataType::Text, false),
+            ("entries", "id", DataType::Integer, false),
+            ("entries", "name", DataType::Text, false),
+        ],
+    );
     assert_eq!(
-        row_set(execute(&mut database, "SELECT name, id, name FROM entries",)),
-        RowSet {
-            columns: vec![
-                column("name", DataType::Text, false),
-                column("id", DataType::Integer, false),
-                column("name", DataType::Text, false),
+        selected.rows(),
+        &[
+            vec![
+                Value::Text("same".to_owned()),
+                Value::Integer(1),
+                Value::Text("same".to_owned()),
             ],
-            rows: vec![
-                vec![
-                    Value::Text("same".to_owned()),
-                    Value::Integer(1),
-                    Value::Text("same".to_owned()),
-                ],
-                vec![
-                    Value::Text("same".to_owned()),
-                    Value::Integer(1),
-                    Value::Text("same".to_owned()),
-                ],
-                vec![
-                    Value::Text("later".to_owned()),
-                    Value::Integer(2),
-                    Value::Text("later".to_owned()),
-                ],
+            vec![
+                Value::Text("same".to_owned()),
+                Value::Integer(1),
+                Value::Text("same".to_owned()),
             ],
-        }
+            vec![
+                Value::Text("later".to_owned()),
+                Value::Integer(2),
+                Value::Text("later".to_owned()),
+            ],
+        ]
     );
 
     assert_eq!(
@@ -198,7 +207,7 @@ fn preserves_duplicate_rows_and_projection_order() {
 }
 
 #[test]
-fn compile_and_explain_expose_the_same_regex_plan_without_mutating() {
+fn explain_select_and_sql_explain_share_one_plan_without_mutating() {
     let mut database = Database::new();
     execute(
         &mut database,
@@ -208,16 +217,16 @@ fn compile_and_explain_expose_the_same_regex_plan_without_mutating() {
     let select = "SELECT name, id, name FROM users WHERE active = TRUE AND name LIKE 'A%'";
     let before = database.as_str().to_owned();
 
-    let plan = database.compile_select(select).expect("SELECT compiles");
-    assert_eq!(plan.table(), "users");
+    let plan = database.explain_select(select).expect("SELECT explains");
+    assert_eq!(plan.sources(), &["users"]);
     assert!(!plan.pattern().is_empty());
-    assert_eq!(
+    assert_columns(
         plan.columns(),
-        vec![
-            column("name", DataType::Text, true),
-            column("id", DataType::Integer, false),
-            column("name", DataType::Text, true),
-        ]
+        &[
+            ("users", "name", DataType::Text, true),
+            ("users", "id", DataType::Integer, false),
+            ("users", "name", DataType::Text, true),
+        ],
     );
     assert_eq!(database.as_str(), before);
 
@@ -229,7 +238,7 @@ fn compile_and_explain_expose_the_same_regex_plan_without_mutating() {
 
     let selected = row_set(execute(&mut database, select));
     assert_eq!(
-        selected.rows,
+        selected.rows(),
         vec![vec![
             Value::Text("Ada".to_owned()),
             Value::Integer(7),
@@ -252,14 +261,14 @@ fn select_compilation_preserves_error_precedence() {
     );
 
     assert!(matches!(
-        database.compile_select(
+        database.explain_select(
             "SELECT missing_projection FROM missing_table \
              WHERE missing_predicate = 1 AND id = 'wrong'",
         ),
         Err(Error::Schema(ref message)) if message == "unknown table \"missing_table\""
     ));
     assert!(matches!(
-        database.compile_select(
+        database.explain_select(
             "SELECT missing_projection FROM t \
              WHERE missing_predicate = 1 AND id = 'wrong'",
         ),
@@ -267,7 +276,7 @@ fn select_compilation_preserves_error_precedence() {
             if message == "unknown column \"missing_projection\" in table \"t\""
     ));
     assert!(matches!(
-        database.compile_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
+        database.explain_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
         Err(Error::ResourceLimit {
             resource: "WHERE predicates",
             limit: 1,
@@ -280,7 +289,7 @@ fn select_compilation_preserves_error_precedence() {
         "CREATE TABLE t (id INTEGER NOT NULL, note TEXT NOT NULL)",
     );
     assert!(matches!(
-        database.compile_select(
+        database.explain_select(
             r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing_predicate = 1",
         ),
         Err(Error::Type(ref message))
@@ -304,7 +313,7 @@ fn null_predicates_and_comparison_semantics_are_sql_like() {
             &mut database,
             "SELECT id FROM values_ WHERE note IS NULL",
         ))
-        .rows,
+        .rows(),
         vec![vec![Value::Integer(1)]]
     );
     assert_eq!(
@@ -312,7 +321,7 @@ fn null_predicates_and_comparison_semantics_are_sql_like() {
             &mut database,
             "SELECT id FROM values_ WHERE note IS NOT NULL",
         ))
-        .rows,
+        .rows(),
         vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]
     );
     assert_eq!(
@@ -320,7 +329,7 @@ fn null_predicates_and_comparison_semantics_are_sql_like() {
             &mut database,
             "SELECT id FROM values_ WHERE note != 'x'",
         ))
-        .rows,
+        .rows(),
         vec![vec![Value::Integer(3)]]
     );
     assert_eq!(
@@ -328,7 +337,7 @@ fn null_predicates_and_comparison_semantics_are_sql_like() {
             &mut database,
             "SELECT id FROM values_ WHERE note LIKE '%'",
         ))
-        .rows,
+        .rows(),
         vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]
     );
 
@@ -361,7 +370,7 @@ fn integer_boundaries_and_boolean_literals_round_trip() {
     );
 
     assert_eq!(
-        row_set(execute(&mut database, "SELECT * FROM bounds")).rows,
+        row_set(execute(&mut database, "SELECT * FROM bounds")).rows(),
         vec![
             vec![Value::Integer(i64::MIN), Value::Boolean(true)],
             vec![Value::Integer(i64::MAX), Value::Boolean(false)],
@@ -615,7 +624,7 @@ fn every_failed_mutation_is_byte_for_byte_atomic() {
     }
 
     assert_eq!(
-        row_set(execute(&mut database, "SELECT * FROM t")).rows,
+        row_set(execute(&mut database, "SELECT * FROM t")).rows(),
         vec![vec![Value::Integer(1), Value::Text("kept".to_owned()),]]
     );
 }
@@ -671,23 +680,25 @@ fn known_v2_storage_fixture_is_canonical() {
         "V2;~S|people|id:I:!|note:T:?|active:B:!;~R|people|I-7|Tsemi%00003Bline%002028break|B1;";
     let mut database = Database::from_string(blob.to_owned()).expect("known V2 fixture loads");
 
+    let selected = row_set(execute(
+        &mut database,
+        "SELECT id, note, active FROM people",
+    ));
+    assert_columns(
+        selected.columns(),
+        &[
+            ("people", "id", DataType::Integer, false),
+            ("people", "note", DataType::Text, true),
+            ("people", "active", DataType::Boolean, false),
+        ],
+    );
     assert_eq!(
-        row_set(execute(
-            &mut database,
-            "SELECT id, note, active FROM people",
-        )),
-        RowSet {
-            columns: vec![
-                column("id", DataType::Integer, false),
-                column("note", DataType::Text, true),
-                column("active", DataType::Boolean, false),
-            ],
-            rows: vec![vec![
-                Value::Integer(-7),
-                Value::Text("semi;line\u{2028}break".to_owned()),
-                Value::Boolean(true),
-            ]],
-        }
+        selected.rows(),
+        &[vec![
+            Value::Integer(-7),
+            Value::Text("semi;line\u{2028}break".to_owned()),
+            Value::Boolean(true),
+        ]]
     );
     assert_eq!(
         execute(&mut database, "INSERT INTO people VALUES (0, NULL, FALSE)",),
@@ -756,7 +767,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     let database = Database::from_string_with_limits(blob.clone(), predicate_limits)
         .expect("blob fits predicate limits");
     assert!(matches!(
-        database.compile_select("SELECT * FROM t WHERE id = 1 AND name = 'x'"),
+        database.explain_select("SELECT * FROM t WHERE id = 1 AND name = 'x'"),
         Err(Error::ResourceLimit { limit: 1, .. })
     ));
 
@@ -767,7 +778,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     let database = Database::from_string_with_limits(blob.clone(), pattern_limits)
         .expect("blob fits pattern limits");
     assert!(matches!(
-        database.compile_select("SELECT * FROM t"),
+        database.explain_select("SELECT * FROM t"),
         Err(Error::ResourceLimit { limit: 1, .. })
     ));
 

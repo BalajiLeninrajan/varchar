@@ -7,7 +7,7 @@ use crate::query::{self, SelectPlan};
 use crate::resolve;
 use crate::sql::{self, CreateTable, Delete, Insert, Select, Statement, Update};
 use crate::storage;
-use crate::{Error, Outcome, RegexPlan, Result, Span};
+use crate::{Error, ExplainPlan, Outcome, Result, Span};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
@@ -99,19 +99,19 @@ impl Database {
             Statement::Delete(statement) => self.execute_delete(statement),
             Statement::ExplainRegex(statement) => self
                 .compile_select_ast(&statement)
-                .map(|plan| Outcome::Explain(plan.into_regex_plan())),
+                .map(|plan| Outcome::Explain(plan.into_explain_plan())),
         }
     }
 
     /// Parse, resolve, and compile a `SELECT` into its exact source-row scan regex.
-    pub fn compile_select(&self, sql: &str) -> Result<RegexPlan> {
+    pub fn explain_select(&self, sql: &str) -> Result<ExplainPlan> {
         self.check_request(sql)?;
         match sql::parse(sql)? {
             Statement::Select(statement) => self
                 .compile_select_ast(&statement)
-                .map(SelectPlan::into_regex_plan),
+                .map(SelectPlan::into_explain_plan),
             _ => Err(Error::parse(
-                "compile_select expects a SELECT statement",
+                "explain_select expects a SELECT statement",
                 Span::new(0, sql.len()),
             )),
         }

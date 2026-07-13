@@ -231,7 +231,7 @@ impl Parser {
         let projection = self.parse_projection()?;
         self.expect_keyword("FROM")?;
         let table = self.expect_identifier()?;
-        let joins = self.parse_joins(&table)?;
+        let joins = self.parse_joins()?;
         let predicates = self.parse_optional_where()?;
         Ok(Select {
             table,
@@ -273,7 +273,7 @@ impl Parser {
         }))
     }
 
-    fn parse_joins(&mut self, base_table: &str) -> Result<Vec<Join>> {
+    fn parse_joins(&mut self) -> Result<Vec<Join>> {
         let mut joins = Vec::new();
         loop {
             if self.current_word() == Some("INNER") && self.peek_word() == Some("JOIN") {
@@ -285,11 +285,7 @@ impl Parser {
                 break;
             }
 
-            let table_span = self.current().span;
             let table = self.expect_identifier()?;
-            if table == base_table || joins.iter().any(|join: &Join| join.table == table) {
-                return Err(Error::unsupported("self joins", table_span));
-            }
             if self.current_word() == Some("AS") {
                 return Err(Error::unsupported("aliases", self.current().span));
             }
@@ -684,6 +680,16 @@ mod tests {
                 }],
             }
         );
+    }
+
+    #[test]
+    fn preserves_repeated_join_sources_for_semantic_resolution() {
+        let statement =
+            select("SELECT nodes.id FROM nodes JOIN nodes ON nodes.parent_id = nodes.id");
+
+        assert_eq!(statement.table, "nodes");
+        assert_eq!(statement.joins.len(), 1);
+        assert_eq!(statement.joins[0].table, "nodes");
     }
 
     #[test]

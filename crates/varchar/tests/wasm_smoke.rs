@@ -5,7 +5,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 fn rows(outcome: Outcome) -> Vec<Vec<Value>> {
     match outcome {
-        Outcome::Rows(row_set) => row_set.rows,
+        Outcome::Rows(row_set) => row_set.into_rows(),
         other => panic!("expected rows, got {other:?}"),
     }
 }
@@ -29,7 +29,7 @@ fn typed_crud_and_regex_planning_execute_inside_wasm() {
         .unwrap();
 
     let sql = "SELECT value, id FROM t WHERE active = TRUE AND value LIKE '💾%'";
-    let plan = database.compile_select(sql).unwrap();
+    let plan = database.explain_select(sql).unwrap();
     assert!(!plan.pattern().is_empty());
     assert_eq!(
         database.execute(&format!("EXPLAIN REGEX {sql}")).unwrap(),

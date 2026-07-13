@@ -1,7 +1,7 @@
 #![cfg(not(target_family = "wasm"))]
 
 use proptest::prelude::*;
-use varchar::{Column, DataType, Database, Error, Outcome, RowSet, Value};
+use varchar::{ColumnOrigin, DataType, Database, Error, Outcome, ResultColumn, RowSet, Value};
 
 #[derive(Clone, Copy, Debug)]
 enum SelectedColumn {
@@ -141,24 +141,21 @@ fn selected_column_name(column: SelectedColumn) -> &'static str {
     }
 }
 
-fn selected_column_metadata(column: SelectedColumn) -> Column {
+fn selected_column_metadata(column: SelectedColumn) -> ResultColumn {
     match column {
-        SelectedColumn::Text => Column {
-            name: "txt".to_owned(),
-            data_type: DataType::Text,
-            nullable: true,
-        },
-        SelectedColumn::Number => Column {
-            name: "n".to_owned(),
-            data_type: DataType::Integer,
-            nullable: false,
-        },
-        SelectedColumn::Flag => Column {
-            name: "flag".to_owned(),
-            data_type: DataType::Boolean,
-            nullable: false,
-        },
+        SelectedColumn::Text => result_column("txt", DataType::Text, true),
+        SelectedColumn::Number => result_column("n", DataType::Integer, false),
+        SelectedColumn::Flag => result_column("flag", DataType::Boolean, false),
     }
+}
+
+fn result_column(name: &str, data_type: DataType, nullable: bool) -> ResultColumn {
+    ResultColumn::new(
+        name.to_owned(),
+        ColumnOrigin::new("t".to_owned(), name.to_owned()),
+        data_type,
+        nullable,
+    )
 }
 
 fn selected_value(row: &ModelRow, column: SelectedColumn) -> Value {
@@ -335,10 +332,10 @@ proptest! {
             .collect::<Vec<_>>();
 
         let before = database.as_str().to_owned();
-        let plan = database.compile_select(&sql).unwrap();
-        prop_assert_eq!(plan.table(), "t");
+        let plan = database.explain_select(&sql).unwrap();
+        prop_assert_eq!(plan.sources(), &["t"]);
         prop_assert!(!plan.pattern().is_empty());
-        prop_assert_eq!(plan.columns(), expected_columns.clone());
+        prop_assert_eq!(plan.columns(), expected_columns.as_slice());
         prop_assert_eq!(database.as_str(), &before);
 
         prop_assert_eq!(
@@ -349,10 +346,7 @@ proptest! {
 
         prop_assert_eq!(
             database.execute(&sql).unwrap(),
-            Outcome::Rows(RowSet {
-                columns: expected_columns,
-                rows: expected_rows,
-            }),
+            Outcome::Rows(RowSet::new(expected_columns, expected_rows)),
         );
         prop_assert_eq!(database.as_str(), &before);
     }
@@ -375,7 +369,7 @@ proptest! {
         let mut reloaded = Database::from_string(blob.clone()).unwrap();
         prop_assert_eq!(reloaded.as_str(), &blob);
         prop_assert_eq!(
-            rows_from_outcome(reloaded.execute("SELECT value FROM strings").unwrap()).rows,
+            rows_from_outcome(reloaded.execute("SELECT value FROM strings").unwrap()).into_rows(),
             vec![vec![Value::Text(value)]],
         );
 
@@ -402,7 +396,7 @@ proptest! {
         }
 
         let before_compile = database.as_str().to_owned();
-        let _ = database.compile_select(&sql);
+        let _ = database.explain_select(&sql);
         prop_assert_eq!(database.as_str(), &before_compile);
     }
 
@@ -462,7 +456,7 @@ proptest! {
             })
             .collect::<Vec<_>>();
         prop_assert_eq!(
-            rows_from_outcome(database.execute("SELECT * FROM items").unwrap()).rows,
+            rows_from_outcome(database.execute("SELECT * FROM items").unwrap()).into_rows(),
             expected,
         );
     }

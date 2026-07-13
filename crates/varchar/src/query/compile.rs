@@ -4,7 +4,7 @@ use fancy_regex::{Regex, RegexBuilder};
 
 use super::{ScanPlan, SelectPlan, SelectSource};
 use crate::limits::{Limits, check_limit};
-use crate::resolve::{self, ResolvedPredicate, ResolvedSelect};
+use crate::resolve::{LikeAtom, ResolvedPredicate, ResolvedSelect};
 use crate::storage::{self, TableSchema};
 use crate::{Column, Error, Result};
 
@@ -27,8 +27,7 @@ pub(super) fn select(resolved: ResolvedSelect<'_, '_>, limits: &Limits) -> Resul
 
     let mut predicates_by_source = Vec::with_capacity(sources.len());
     predicates_by_source.resize_with(sources.len(), Vec::new);
-    for predicate in predicates {
-        let resolved = resolve::select_predicate(&sources, predicate)?;
+    for resolved in predicates {
         let compiled = compile_predicate(sources[resolved.source], resolved.predicate, limits)?;
         predicates_by_source[resolved.source].push(compiled);
     }
@@ -116,9 +115,9 @@ fn compile_predicate(
             let encoded = storage::encode_cell(value, &schema.columns[column])?;
             Ok(CompiledPredicate::NotEqual { column, encoded })
         }
-        ResolvedPredicate::Like { column, pattern } => Ok(CompiledPredicate::Like {
+        ResolvedPredicate::Like { column, atoms } => Ok(CompiledPredicate::Like {
             column,
-            pattern: compile_like_pattern(pattern, limits)?,
+            pattern: compile_like_pattern(&atoms, limits)?,
         }),
         ResolvedPredicate::IsNull { column } => Ok(CompiledPredicate::IsNull { column }),
         ResolvedPredicate::IsNotNull { column } => Ok(CompiledPredicate::IsNotNull { column }),
@@ -231,40 +230,25 @@ impl CompiledPredicate {
     }
 }
 
-fn compile_like_pattern(value: &str, limits: &Limits) -> Result<String> {
+fn compile_like_pattern(atoms: &[LikeAtom], limits: &Limits) -> Result<String> {
     let mut result = PatternBuilder::new(limits.max_pattern_bytes);
     result.push_str("T")?;
-    let mut characters = value.chars().peekable();
     let mut previous_was_many = false;
-    while let Some(character) = characters.next() {
-        match character {
-            '%' => {
+    for atom in atoms {
+        match atom {
+            LikeAtom::AnySequence => {
                 if !previous_was_many {
                     result.push_str(storage::text_unit_pattern())?;
                     result.push_char('*')?;
                     previous_was_many = true;
                 }
             }
-            '_' => {
+            LikeAtom::AnyScalar => {
                 result.push_str(storage::text_unit_pattern())?;
                 previous_was_many = false;
             }
-            '\\' => {
-                let Some(escaped) = characters.next() else {
-                    return Err(Error::Type(String::from(
-                        "LIKE pattern ends with an incomplete escape",
-                    )));
-                };
-                if !matches!(escaped, '%' | '_' | '\\') {
-                    return Err(Error::Type(format!(
-                        "LIKE pattern contains unsupported escape \\{escaped}"
-                    )));
-                }
-                push_encoded_text_literal(&mut result, escaped)?;
-                previous_was_many = false;
-            }
-            literal => {
-                push_encoded_text_literal(&mut result, literal)?;
+            LikeAtom::Literal(literal) => {
+                push_encoded_text_literal(&mut result, *literal)?;
                 previous_was_many = false;
             }
         }

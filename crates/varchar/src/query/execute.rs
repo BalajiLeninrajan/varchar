@@ -6,7 +6,7 @@ use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::ResolvedJoinCondition;
 use crate::storage::{self, RowLayout};
-use crate::{Column, Error, Result, RowSet, Value};
+use crate::{ColumnOrigin, Error, Result, ResultColumn, RowSet, Value};
 
 pub(super) fn select(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
     if plan.sources.len() == 1 {
@@ -65,7 +65,7 @@ fn select_single_table(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result
         rows.push(row);
     }
 
-    Ok(RowSet { columns, rows })
+    Ok(RowSet::new(columns, rows))
 }
 
 fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
@@ -139,7 +139,7 @@ fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet>
     };
     emit_join_rows(0, &mut chosen, &source_rows, &mut output)?;
 
-    Ok(RowSet { columns, rows })
+    Ok(RowSet::new(columns, rows))
 }
 
 struct JoinOutput<'a> {
@@ -252,11 +252,11 @@ fn materialize_result_columns(
     plan: &SelectPlan,
     result_bytes: &mut usize,
     limits: &Limits,
-) -> Result<Vec<Column>> {
+) -> Result<Vec<ResultColumn>> {
     let column_slots = plan
         .projection
         .len()
-        .checked_mul(std::mem::size_of::<Column>())
+        .checked_mul(std::mem::size_of::<ResultColumn>())
         .ok_or_else(|| result_limit_error(limits))?;
     charge_result(result_bytes, column_slots, limits)?;
 
@@ -265,17 +265,17 @@ fn materialize_result_columns(
         .try_reserve_exact(plan.projection.len())
         .map_err(|_| result_limit_error(limits))?;
     for location in &plan.projection {
-        let column = &plan.sources[location.source].schema[location.column];
-        charge_result(result_bytes, column.name.len(), limits)?;
-        let mut name = String::new();
-        name.try_reserve_exact(column.name.len())
-            .map_err(|_| result_limit_error(limits))?;
-        name.push_str(&column.name);
-        columns.push(Column {
-            name,
-            data_type: column.data_type,
-            nullable: column.nullable,
-        });
+        let source = &plan.sources[location.source];
+        let column = &source.schema[location.column];
+        let label = clone_result_string(&column.name, result_bytes, limits)?;
+        let table = clone_result_string(&source.table, result_bytes, limits)?;
+        let source_column = clone_result_string(&column.name, result_bytes, limits)?;
+        columns.push(ResultColumn::new(
+            label,
+            ColumnOrigin::new(table, source_column),
+            column.data_type,
+            column.nullable,
+        ));
     }
     Ok(columns)
 }
@@ -355,6 +355,16 @@ fn clone_result_value(value: &Value, limits: &Limits) -> Result<Value> {
         Value::Boolean(value) => Ok(Value::Boolean(*value)),
         Value::Null => Ok(Value::Null),
     }
+}
+
+fn clone_result_string(value: &str, result_bytes: &mut usize, limits: &Limits) -> Result<String> {
+    charge_result(result_bytes, value.len(), limits)?;
+    let mut cloned = String::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| result_limit_error(limits))?;
+    cloned.push_str(value);
+    Ok(cloned)
 }
 
 fn charge_result(total: &mut usize, amount: usize, limits: &Limits) -> Result<()> {

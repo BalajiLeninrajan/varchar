@@ -177,7 +177,8 @@ fn inner_joins_execute_across_persisted_cli_commands() {
     )
     .success()
     .stdout(
-        predicate::str::contains("parent")
+        predicate::str::contains("| parents.name | children.name |")
+            .and(predicate::str::contains("parent"))
             .and(predicate::str::contains("child"))
             .and(predicate::str::contains("1 row")),
     );

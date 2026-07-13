@@ -15,13 +15,20 @@ use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedPredicate<'a> {
     Equal { column: usize, value: &'a Value },
     NotEqual { column: usize, value: &'a Value },
-    Like { column: usize, pattern: &'a str },
+    Like { column: usize, atoms: Vec<LikeAtom> },
     IsNull { column: usize },
     IsNotNull { column: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LikeAtom {
+    AnySequence,
+    AnyScalar,
+    Literal(char),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +56,7 @@ pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) sources: Vec<&'catalog TableSchema>,
     pub(crate) projection: Vec<ColumnLocation>,
     pub(crate) joins: Vec<ResolvedJoin>,
-    pub(crate) predicates: &'statement [Predicate],
+    pub(crate) predicates: Vec<ResolvedSourcePredicate<'statement>>,
 }
 
 pub(crate) struct ResolvedCreate {
@@ -368,16 +375,21 @@ pub(crate) fn select<'catalog, 'statement>(
         max_predicates,
         "WHERE predicates",
     )?;
+    let predicates = statement
+        .predicates
+        .iter()
+        .map(|predicate| resolve_select_predicate(&sources, predicate))
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(ResolvedSelect {
         sources,
         projection,
         joins,
-        predicates: &statement.predicates,
+        predicates,
     })
 }
 
-pub(crate) fn select_predicate<'a>(
+fn resolve_select_predicate<'a>(
     sources: &[&TableSchema],
     predicate: &'a Predicate,
 ) -> Result<ResolvedSourcePredicate<'a>> {
@@ -641,11 +653,40 @@ fn predicate_at<'a>(
                     definition.name, definition.data_type
                 )));
             }
-            Ok(ResolvedPredicate::Like { column, pattern })
+            Ok(ResolvedPredicate::Like {
+                column,
+                atoms: resolve_like_pattern(pattern)?,
+            })
         }
         PredicateOperator::IsNull => Ok(ResolvedPredicate::IsNull { column }),
         PredicateOperator::IsNotNull => Ok(ResolvedPredicate::IsNotNull { column }),
     }
+}
+
+fn resolve_like_pattern(pattern: &str) -> Result<Vec<LikeAtom>> {
+    let mut atoms = Vec::new();
+    let mut characters = pattern.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '%' => atoms.push(LikeAtom::AnySequence),
+            '_' => atoms.push(LikeAtom::AnyScalar),
+            '\\' => {
+                let Some(escaped) = characters.next() else {
+                    return Err(Error::Type(String::from(
+                        "LIKE pattern ends with an incomplete escape",
+                    )));
+                };
+                if !matches!(escaped, '%' | '_' | '\\') {
+                    return Err(Error::Type(format!(
+                        "LIKE pattern contains unsupported escape \\{escaped}"
+                    )));
+                }
+                atoms.push(LikeAtom::Literal(escaped));
+            }
+            literal => atoms.push(LikeAtom::Literal(literal)),
+        }
+    }
+    Ok(atoms)
 }
 
 fn require_local_column(schema: &TableSchema, reference: &ColumnRef) -> Result<usize> {
@@ -676,8 +717,7 @@ fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResolvedPredicate, assignments, create_schema, insert_values, predicate, select,
-        select_predicate,
+        LikeAtom, ResolvedPredicate, assignments, create_schema, insert_values, predicate, select,
     };
     use crate::sql::{self, Assignment, ColumnRef, Predicate, PredicateOperator, Statement};
     use crate::storage::{
@@ -1056,25 +1096,70 @@ mod tests {
         assert_eq!(resolved.joins[0].source, 1);
         assert_eq!(resolved.joins[0].conditions[0].left.source, 0);
         assert_eq!(resolved.joins[0].conditions[0].right.source, 1);
-        let first = select_predicate(&resolved.sources, &resolved.predicates[0])
-            .expect("first predicate resolves");
+        let first = &resolved.predicates[0];
         assert_eq!(first.source, 1);
         assert!(matches!(
-            first.predicate,
+            &first.predicate,
             ResolvedPredicate::Like {
                 column: 1,
-                pattern: "N%"
-            }
+                atoms
+            } if atoms == &[LikeAtom::Literal('N'), LikeAtom::AnySequence]
         ));
-        let second = select_predicate(&resolved.sources, &resolved.predicates[1])
-            .expect("second predicate resolves");
+        let second = &resolved.predicates[1];
         assert_eq!(second.source, 0);
         assert!(matches!(
-            second.predicate,
+            &second.predicate,
             ResolvedPredicate::Equal {
                 column: 1,
                 value: Value::Text(value)
             } if value == "Ada"
+        ));
+    }
+
+    #[test]
+    fn repeated_select_sources_are_rejected_during_resolution() {
+        let catalog = storage::validate_and_catalog("V2;~S|nodes|id:I:!|parent_id:I:?;")
+            .expect("fixture catalog is valid");
+        let Statement::Select(statement) =
+            sql::parse("SELECT nodes.id FROM nodes JOIN nodes ON nodes.parent_id = nodes.id")
+                .expect("repeated sources are valid syntax")
+        else {
+            panic!("expected SELECT");
+        };
+
+        assert!(matches!(
+            select(&catalog, &statement, 4, 4),
+            Err(Error::Schema(ref message))
+                if message == "table \"nodes\" appears more than once in a SELECT"
+        ));
+    }
+
+    #[test]
+    fn select_predicates_resolve_in_statement_order() {
+        let catalog = storage::validate_and_catalog("V2;~S|t|id:I:!|note:T:!;")
+            .expect("fixture catalog is valid");
+        let Statement::Select(invalid_like_first) =
+            sql::parse(r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing = 1")
+                .expect("statement parses")
+        else {
+            panic!("expected SELECT");
+        };
+        assert!(matches!(
+            select(&catalog, &invalid_like_first, 4, 4),
+            Err(Error::Type(ref message))
+                if message == "LIKE pattern contains unsupported escape \\q"
+        ));
+
+        let Statement::Select(missing_first) =
+            sql::parse(r"SELECT id FROM t WHERE missing = 1 AND note LIKE 'bad\q'")
+                .expect("statement parses")
+        else {
+            panic!("expected SELECT");
+        };
+        assert!(matches!(
+            select(&catalog, &missing_first, 4, 4),
+            Err(Error::Schema(ref message))
+                if message == "unknown column \"missing\" in table \"t\""
         ));
     }
 
