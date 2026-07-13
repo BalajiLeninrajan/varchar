@@ -14,7 +14,7 @@ use crate::{Column, Error, Result};
 
 pub(crate) use candidate::Candidate;
 pub(crate) use catalog::{validate_and_catalog, validate_candidate};
-pub(crate) use decode::{decode_row, row_table};
+pub(crate) use decode::{RowRecordRef, decode_row, row_record};
 pub(crate) use encode::{encode_cell, encode_row, encode_schema};
 pub(crate) use format::{
     cell_boundary_pattern, cell_pattern, encoded_text_literal_pattern, row_prefix_pattern,

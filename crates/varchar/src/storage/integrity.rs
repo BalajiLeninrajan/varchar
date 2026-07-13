@@ -2,8 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::format::ROW_PREFIX;
-use super::{Catalog, TableSchema};
+use super::format::{RecordKind, records};
+use super::{Catalog, RowRecordRef, TableSchema, row_record};
+use crate::Error;
 
 pub(super) struct Violation {
     pub(super) offset: usize,
@@ -45,15 +46,13 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
         })
         .collect::<BTreeMap<_, _>>();
 
-    for_each_row(blob, catalog, |record, schema, offset| {
+    for_each_row(blob, catalog, |row, schema, offset| {
         let Some(primary_key) = schema.primary_key else {
             return Ok(());
         };
-        let value = row_cells(record)
-            .and_then(|mut cells| cells.nth(primary_key))
-            .ok_or_else(|| {
-                Violation::new(offset, "primary-key cell is missing from a validated row")
-            })?;
+        let value = row.cells().nth(primary_key).ok_or_else(|| {
+            Violation::new(offset, "primary-key cell is missing from a validated row")
+        })?;
         if value == "N" {
             return Err(Violation::new(
                 offset,
@@ -94,14 +93,12 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
         return Ok(());
     }
 
-    for_each_row(blob, catalog, |record, schema, offset| {
+    for_each_row(blob, catalog, |row, schema, offset| {
         if schema.foreign_keys.is_empty() {
             return Ok(());
         }
         let mut foreign_keys = schema.foreign_keys.iter().peekable();
-        let cells = row_cells(record)
-            .ok_or_else(|| Violation::new(offset, "validated row has no cell list"))?;
-        for (column, value) in cells.enumerate() {
+        for (column, value) in row.cells().enumerate() {
             let Some(foreign_key) = foreign_keys.peek() else {
                 break;
             };
@@ -143,30 +140,35 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
 fn for_each_row<'a>(
     blob: &'a str,
     catalog: &Catalog,
-    mut visit: impl FnMut(&'a str, &TableSchema, usize) -> IntegrityResult<()>,
+    mut visit: impl FnMut(&RowRecordRef<'a>, &TableSchema, usize) -> IntegrityResult<()>,
 ) -> IntegrityResult<()> {
-    let mut offset = catalog.row_start;
-    while offset < blob.len() {
-        let relative_end = blob[offset..].find(';').ok_or_else(|| {
-            Violation::new(offset, "unterminated row during integrity validation")
+    for record in records(blob) {
+        let record = record.map_err(map_storage_error)?;
+        if record.range.start < catalog.row_start {
+            continue;
+        }
+        if record.kind != RecordKind::Row {
+            return Err(Violation::new(
+                record.range.start,
+                "non-row record during integrity validation",
+            ));
+        }
+        let row = row_record(record.text, record.range.start).map_err(map_storage_error)?;
+        let row_range = row.range();
+        let schema = catalog.tables.get(row.table()).ok_or_else(|| {
+            Violation::new(
+                row_range.start,
+                "row table disappeared during integrity validation",
+            )
         })?;
-        let end = offset + relative_end + 1;
-        let record = &blob[offset..end];
-        let body = record
-            .strip_prefix(ROW_PREFIX)
-            .ok_or_else(|| Violation::new(offset, "non-row record during integrity validation"))?;
-        let table = body.split('|').next().unwrap_or_default();
-        let schema = catalog.tables.get(table).ok_or_else(|| {
-            Violation::new(offset, "row table disappeared during integrity validation")
-        })?;
-        visit(record, schema, offset)?;
-        offset = end;
+        visit(&row, schema, row_range.start)?;
     }
     Ok(())
 }
 
-fn row_cells(record: &str) -> Option<std::str::Split<'_, char>> {
-    let body = record.strip_prefix(ROW_PREFIX)?.strip_suffix(';')?;
-    let (_, cells) = body.split_once('|')?;
-    Some(cells.split('|'))
+fn map_storage_error(error: Error) -> Violation {
+    match error {
+        Error::CorruptStorage { offset, message } => Violation::new(offset, message),
+        error => Violation::new(0, error.to_string()),
+    }
 }

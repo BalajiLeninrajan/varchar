@@ -1,6 +1,7 @@
 //! Canonical decoding and validation of individual storage records.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use super::format::{
     AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, SCHEMA_PREFIX,
@@ -27,27 +28,53 @@ pub(super) struct AutoIncrementMetadata<'a> {
     pub(super) last: i64,
 }
 
-/// Decode a complete canonical row record for `schema`.
-pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Value>> {
-    decode_row_at(record, layout, 0)
+/// A zero-copy view over one complete canonical V2 row record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RowRecordRef<'a> {
+    range: Range<usize>,
+    table: &'a str,
+    cells: &'a str,
 }
 
-/// Return the canonical table name carried by a complete row record.
-///
-/// Query execution uses this to route a row selected by a multi-table regex
-/// without depending on the persisted record grammar.
-pub(crate) fn row_table(record: &str) -> Result<&str> {
-    let body = complete_record_body(record, ROW_PREFIX, 0)?;
-    let (table, _) = body
+impl<'a> RowRecordRef<'a> {
+    pub(crate) fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    pub(crate) fn table(&self) -> &'a str {
+        self.table
+    }
+
+    pub(crate) fn cells(&self) -> std::str::Split<'a, char> {
+        self.cells.split('|')
+    }
+}
+
+/// Parse one complete row envelope at its byte offset in the authoritative blob.
+pub(crate) fn row_record(record: &str, offset: usize) -> Result<RowRecordRef<'_>> {
+    let body = complete_record_body(record, ROW_PREFIX, offset)?;
+    let (table, cells) = body
         .split_once('|')
-        .ok_or_else(|| corrupt(0, "row is missing its cell list"))?;
+        .ok_or_else(|| corrupt(offset, "row is missing its cell list"))?;
     if !is_valid_identifier(table) {
         return Err(corrupt(
-            ROW_PREFIX.len(),
+            offset + ROW_PREFIX.len(),
             "invalid or noncanonical table name",
         ));
     }
-    Ok(table)
+    let end = offset
+        .checked_add(record.len())
+        .ok_or_else(|| corrupt(offset, "row range exceeds the database"))?;
+    Ok(RowRecordRef {
+        range: offset..end,
+        table,
+        cells,
+    })
+}
+
+/// Decode a complete canonical row view for `schema`.
+pub(crate) fn decode_row(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<Vec<Value>> {
+    decode_row_view(row, layout)
 }
 
 pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableSchema> {
@@ -178,26 +205,20 @@ pub(super) fn validate_row_record(
     offset: usize,
     tables: &BTreeMap<String, TableSchema>,
 ) -> Result<()> {
-    let body = complete_record_body(record, ROW_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    if !is_valid_identifier(table) {
-        return Err(corrupt(offset + 3, "invalid or noncanonical table name"));
-    }
+    let row = row_record(record, offset)?;
     let schema = tables
-        .get(table)
+        .get(row.table())
         .ok_or_else(|| corrupt(offset, "row references an unknown table"))?;
-    validate_row_at(record, schema.row_layout(), offset)
+    validate_row_view(&row, schema.row_layout())
 }
 
-fn validate_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result<()> {
-    let body = complete_record_body(record, ROW_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    if table != layout.table {
+fn validate_row_view(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<()> {
+    let offset = row.range.start;
+    if row.table() != layout.table {
         return Err(corrupt(offset, "row table does not match its schema"));
     }
-    let mut cell_offset = offset + ROW_PREFIX.len() + table.len() + 1;
+    let mut fields = row.cells();
+    let mut cell_offset = offset + ROW_PREFIX.len() + row.table().len() + 1;
     let mut cell_count = 0;
     for column in layout.columns {
         let Some(cell) = fields.next() else {
@@ -214,19 +235,18 @@ fn validate_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result
     Ok(())
 }
 
-fn decode_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result<Vec<Value>> {
-    let body = complete_record_body(record, ROW_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    if table != layout.table {
+fn decode_row_view(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<Vec<Value>> {
+    let offset = row.range.start;
+    if row.table() != layout.table {
         return Err(corrupt(offset, "row table does not match its schema"));
     }
+    let mut fields = row.cells();
 
     let mut values = Vec::new();
     values
         .try_reserve_exact(layout.columns.len())
         .map_err(|_| allocation_limit("decoded row cells", layout.columns.len()))?;
-    let mut cell_offset = offset + ROW_PREFIX.len() + table.len() + 1;
+    let mut cell_offset = offset + ROW_PREFIX.len() + row.table().len() + 1;
     for column in layout.columns {
         let Some(cell) = fields.next() else {
             return Err(row_width_error(offset, layout, values.len()));
@@ -345,11 +365,56 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::row_table;
+    use super::{decode_row, row_record};
+    use crate::storage::RowLayout;
+    use crate::{Column, DataType, Value};
 
     #[test]
-    fn row_table_validates_the_complete_record_envelope() {
-        assert_eq!(row_table("~R|people|I1;").expect("valid row"), "people");
+    fn row_view_owns_the_complete_envelope_and_absolute_range() {
+        let encoded = "~R|people|I1|Tleft%00007Cright%00003Bdone;";
+        let row = row_record(encoded, 17).expect("valid row");
+
+        assert_eq!(row.range(), 17..17 + encoded.len());
+        assert_eq!(row.table(), "people");
+        assert_eq!(
+            row.cells().collect::<Vec<_>>(),
+            vec!["I1", "Tleft%00007Cright%00003Bdone"]
+        );
+
+        let columns = [
+            Column {
+                name: String::from("id"),
+                data_type: DataType::Integer,
+                nullable: false,
+            },
+            Column {
+                name: String::from("body"),
+                data_type: DataType::Text,
+                nullable: false,
+            },
+        ];
+        assert_eq!(
+            decode_row(
+                &row,
+                RowLayout {
+                    table: "people",
+                    columns: &columns,
+                },
+            )
+            .expect("escaped row decodes"),
+            vec![
+                Value::Integer(1),
+                Value::Text(String::from("left|right;done")),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_view_validates_the_complete_record_envelope() {
+        assert_eq!(
+            row_record("~R|people|I1;", 0).expect("valid row").table(),
+            "people"
+        );
 
         for malformed in [
             "~S|people|id:I:!;",
@@ -357,7 +422,16 @@ mod tests {
             "~R|people;",
             "~R|people|I1",
         ] {
-            assert!(row_table(malformed).is_err(), "accepted {malformed:?}");
+            assert!(row_record(malformed, 0).is_err(), "accepted {malformed:?}");
         }
+    }
+
+    #[test]
+    fn row_view_routes_prefix_like_table_names_exactly() {
+        let user = row_record("~R|user|I1;", 0).expect("user row");
+        let users = row_record("~R|users|I2;", 12).expect("users row");
+
+        assert_eq!(user.table(), "user");
+        assert_eq!(users.table(), "users");
     }
 }

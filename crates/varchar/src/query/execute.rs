@@ -34,12 +34,13 @@ fn select_single_table(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
+        let row_record = storage::row_record(matched.as_str(), matched.start())?;
         let structural_total = result_bytes
             .checked_add(row_structure)
             .ok_or_else(|| result_limit_error(limits))?;
         check_limit(structural_total, limits.max_result_bytes, "result bytes")?;
 
-        let decoded = storage::decode_row(matched.as_str(), layout)?;
+        let decoded = storage::decode_row(&row_record, layout)?;
         let payload_bytes = plan
             .projection
             .iter()
@@ -87,7 +88,8 @@ fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet>
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
-        let table = storage::row_table(matched.as_str())?;
+        let row_record = storage::row_record(matched.as_str(), matched.start())?;
+        let table = row_record.table();
         let source_index = plan
             .sources
             .iter()
@@ -95,7 +97,7 @@ fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet>
             .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
         let source = &plan.sources[source_index];
         let decoded = storage::decode_row(
-            matched.as_str(),
+            &row_record,
             RowLayout {
                 table: &source.table,
                 columns: &source.schema,
@@ -312,7 +314,8 @@ where
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
-        let values = storage::decode_row(matched.as_str(), layout)?;
+        let row_record = storage::row_record(matched.as_str(), matched.start())?;
+        let values = storage::decode_row(&row_record, layout)?;
         let replacement = rewrite(values)?;
         candidate.rewrite_row(
             matched.start()..matched.end(),
