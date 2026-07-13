@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use super::format::{
-    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, SCHEMA_PREFIX,
-    allocation_limit, complete_record_body, corrupt, is_valid_identifier, scan_text,
+    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, RecordIter,
+    RecordKind, SCHEMA_PREFIX, allocation_limit, complete_record_body, corrupt,
+    is_valid_identifier, records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
 use crate::{Column, DataType, Error, Result, Value};
@@ -28,7 +29,10 @@ pub(super) struct AutoIncrementMetadata<'a> {
     pub(super) last: i64,
 }
 
-/// A zero-copy view over one complete canonical V2 row record.
+/// A zero-copy view over a parsed V2 row envelope and validated table name.
+///
+/// Cell slices remain encoded; schema-aware decoding validates their width,
+/// types, nullability, and canonical representation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RowRecordRef<'a> {
     range: Range<usize>,
@@ -72,7 +76,31 @@ pub(crate) fn row_record(record: &str, offset: usize) -> Result<RowRecordRef<'_>
     })
 }
 
-/// Decode a complete canonical row view for `schema`.
+pub(super) struct RowRecordIter<'a> {
+    records: RecordIter<'a>,
+}
+
+pub(super) fn row_records(blob: &str, row_start: usize) -> RowRecordIter<'_> {
+    RowRecordIter {
+        records: records_from(blob, row_start),
+    }
+}
+
+impl<'a> Iterator for RowRecordIter<'a> {
+    type Item = Result<RowRecordRef<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let record = self.records.next()?;
+        Some(record.and_then(|record| {
+            if record.kind != RecordKind::Row {
+                return Err(corrupt(record.range.start, "expected a row record"));
+            }
+            row_record(record.text, record.range.start)
+        }))
+    }
+}
+
+/// Decode a parsed row view for `schema`, validating every encoded cell.
 pub(crate) fn decode_row(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<Vec<Value>> {
     decode_row_view(row, layout)
 }
@@ -206,14 +234,15 @@ pub(super) fn validate_row_record(
     tables: &BTreeMap<String, TableSchema>,
 ) -> Result<()> {
     let row = row_record(record, offset)?;
+    let row_offset = row.range().start;
     let schema = tables
         .get(row.table())
-        .ok_or_else(|| corrupt(offset, "row references an unknown table"))?;
+        .ok_or_else(|| corrupt(row_offset, "row references an unknown table"))?;
     validate_row_view(&row, schema.row_layout())
 }
 
 fn validate_row_view(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<()> {
-    let offset = row.range.start;
+    let offset = row.range().start;
     if row.table() != layout.table {
         return Err(corrupt(offset, "row table does not match its schema"));
     }
@@ -236,7 +265,7 @@ fn validate_row_view(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<()
 }
 
 fn decode_row_view(row: &RowRecordRef<'_>, layout: RowLayout<'_>) -> Result<Vec<Value>> {
-    let offset = row.range.start;
+    let offset = row.range().start;
     if row.table() != layout.table {
         return Err(corrupt(offset, "row table does not match its schema"));
     }
@@ -365,9 +394,9 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_row, row_record};
+    use super::{decode_row, row_record, row_records};
     use crate::storage::RowLayout;
-    use crate::{Column, DataType, Value};
+    use crate::{Column, DataType, Error, Value};
 
     #[test]
     fn row_view_owns_the_complete_envelope_and_absolute_range() {
@@ -433,5 +462,46 @@ mod tests {
 
         assert_eq!(user.table(), "user");
         assert_eq!(users.table(), "users");
+    }
+
+    #[test]
+    fn row_iterator_starts_at_the_catalog_row_offset() {
+        let schema = "~S|items|id:I:!;";
+        let first = "~R|items|I1;";
+        let second = "~R|items|I2;";
+        let blob = format!("V2;{schema}{first}{second}");
+        let row_start = "V2;".len() + schema.len();
+        let rows = row_records(&blob, row_start)
+            .collect::<crate::Result<Vec<_>>>()
+            .expect("row suffix parses");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].range(), row_start..row_start + first.len());
+        assert_eq!(
+            rows[1].range(),
+            row_start + first.len()..row_start + first.len() + second.len()
+        );
+    }
+
+    #[test]
+    fn row_iterator_is_empty_when_the_row_suffix_is_empty() {
+        let blob = "V2;~S|items|id:I:!;";
+
+        assert!(row_records(blob, blob.len()).next().is_none());
+    }
+
+    #[test]
+    fn row_iterator_rejects_a_non_row_at_its_start_offset() {
+        let blob = "V2;~S|items|id:I:!;";
+        let error = row_records(blob, 3)
+            .next()
+            .expect("schema record is present")
+            .expect_err("schema is not a row");
+
+        assert!(matches!(
+            error,
+            Error::CorruptStorage { offset: 3, message }
+                if message == "expected a row record"
+        ));
     }
 }

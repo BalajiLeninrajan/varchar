@@ -148,8 +148,14 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
         auto_increments,
         row_start,
     };
-    integrity::validate_rows(blob, &catalog)
-        .map_err(|violation| map_constraint_violation(violation, mode))?;
+    if let Err(error) = integrity::validate_rows(blob, &catalog) {
+        return Err(match error {
+            integrity::ValidationError::Storage(error) => error,
+            integrity::ValidationError::Constraint(violation) => {
+                map_constraint_violation(violation, mode)
+            }
+        });
+    }
     Ok(catalog)
 }
 

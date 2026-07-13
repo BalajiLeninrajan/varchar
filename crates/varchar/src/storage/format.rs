@@ -37,9 +37,13 @@ pub(super) struct RecordIter<'a> {
 }
 
 pub(super) fn records(blob: &str) -> RecordIter<'_> {
+    records_from(blob, HEADER.len())
+}
+
+pub(super) fn records_from(blob: &str, offset: usize) -> RecordIter<'_> {
     RecordIter {
         blob,
-        offset: HEADER.len(),
+        offset,
         failed: false,
     }
 }
@@ -48,19 +52,23 @@ impl<'a> Iterator for RecordIter<'a> {
     type Item = Result<RecordRef<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.failed || self.offset >= self.blob.len() {
+        if self.failed || self.offset == self.blob.len() {
             return None;
         }
 
         let start = self.offset;
-        if !self.blob[start..].starts_with('~') {
+        let Some(remaining) = self.blob.get(start..) else {
+            self.failed = true;
+            return Some(Err(corrupt(start, "record offset is outside the database")));
+        };
+        if !remaining.starts_with('~') {
             self.failed = true;
             return Some(Err(corrupt(
                 start,
                 "expected a schema, key metadata, or row record",
             )));
         }
-        let Some(relative_end) = self.blob[start..].find(';') else {
+        let Some(relative_end) = remaining.find(';') else {
             self.failed = true;
             return Some(Err(corrupt(start, "unterminated record")));
         };

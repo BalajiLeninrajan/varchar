@@ -2,9 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::format::{RecordKind, records};
-use super::{Catalog, RowRecordRef, TableSchema, row_record};
+use super::decode::row_records;
+use super::{Catalog, RowRecordRef, TableSchema};
 use crate::Error;
+
+pub(super) enum ValidationError {
+    Storage(Error),
+    Constraint(Violation),
+}
 
 pub(super) struct Violation {
     pub(super) offset: usize,
@@ -20,9 +25,16 @@ impl Violation {
     }
 }
 
-type IntegrityResult<T> = std::result::Result<T, Violation>;
+impl From<Violation> for ValidationError {
+    fn from(violation: Violation) -> Self {
+        Self::Constraint(violation)
+    }
+}
 
-pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityResult<()> {
+type ConstraintResult<T> = std::result::Result<T, Violation>;
+type ValidationResult<T> = std::result::Result<T, ValidationError>;
+
+pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> ValidationResult<()> {
     let has_primary_keys = catalog
         .tables
         .values()
@@ -46,7 +58,8 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
         })
         .collect::<BTreeMap<_, _>>();
 
-    for_each_row(blob, catalog, |row, schema, offset| {
+    for_each_row(blob, catalog, |row, schema| {
+        let offset = row.range().start;
         let Some(primary_key) = schema.primary_key else {
             return Ok(());
         };
@@ -93,7 +106,8 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
         return Ok(());
     }
 
-    for_each_row(blob, catalog, |row, schema, offset| {
+    for_each_row(blob, catalog, |row, schema| {
+        let offset = row.range().start;
         if schema.foreign_keys.is_empty() {
             return Ok(());
         }
@@ -140,20 +154,10 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> IntegrityRe
 fn for_each_row<'a>(
     blob: &'a str,
     catalog: &Catalog,
-    mut visit: impl FnMut(&RowRecordRef<'a>, &TableSchema, usize) -> IntegrityResult<()>,
-) -> IntegrityResult<()> {
-    for record in records(blob) {
-        let record = record.map_err(map_storage_error)?;
-        if record.range.start < catalog.row_start {
-            continue;
-        }
-        if record.kind != RecordKind::Row {
-            return Err(Violation::new(
-                record.range.start,
-                "non-row record during integrity validation",
-            ));
-        }
-        let row = row_record(record.text, record.range.start).map_err(map_storage_error)?;
+    mut visit: impl FnMut(&RowRecordRef<'a>, &TableSchema) -> ConstraintResult<()>,
+) -> ValidationResult<()> {
+    for row in row_records(blob, catalog.row_start) {
+        let row = row.map_err(ValidationError::Storage)?;
         let row_range = row.range();
         let schema = catalog.tables.get(row.table()).ok_or_else(|| {
             Violation::new(
@@ -161,14 +165,7 @@ fn for_each_row<'a>(
                 "row table disappeared during integrity validation",
             )
         })?;
-        visit(&row, schema, row_range.start)?;
+        visit(&row, schema)?;
     }
     Ok(())
-}
-
-fn map_storage_error(error: Error) -> Violation {
-    match error {
-        Error::CorruptStorage { offset, message } => Violation::new(offset, message),
-        error => Violation::new(0, error.to_string()),
-    }
 }

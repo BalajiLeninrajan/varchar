@@ -317,11 +317,7 @@ where
         let row_record = storage::row_record(matched.as_str(), matched.start())?;
         let values = storage::decode_row(&row_record, layout)?;
         let replacement = rewrite(values)?;
-        candidate.rewrite_row(
-            matched.start()..matched.end(),
-            layout,
-            replacement.as_deref(),
-        )?;
+        candidate.rewrite_row(row_record.range(), layout, replacement.as_deref())?;
         affected = affected.checked_add(1).ok_or(Error::ResourceLimit {
             resource: "affected rows",
             limit: usize::MAX,
