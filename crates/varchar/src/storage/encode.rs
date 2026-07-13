@@ -109,7 +109,7 @@ pub(crate) fn encode_row(values: &[Value], layout: RowLayout<'_>) -> Result<Stri
 }
 
 /// Encode one typed cell in its canonical storage representation.
-pub(crate) fn encode_cell(value: &Value, column: &Column) -> Result<String> {
+pub(super) fn encode_cell(value: &Value, column: &Column) -> Result<String> {
     validate_value(value, column)?;
     match (value, column.data_type) {
         (Value::Null, _) => Ok(String::from("N")),

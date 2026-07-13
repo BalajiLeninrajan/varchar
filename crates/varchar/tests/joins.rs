@@ -560,6 +560,9 @@ fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
 
     let plan = database.explain_select(sql).expect("JOIN SELECT explains");
     assert!(!plan.pattern().is_empty());
+    assert!(plan.pattern().starts_with(r"(?:~R\|parents\|"));
+    assert!(plan.pattern().contains(r";|~R\|children\|"));
+    assert!(plan.pattern().ends_with(";)"));
     assert_eq!(plan.sources(), &["parents", "children"]);
     assert_eq!(
         plan.columns(),

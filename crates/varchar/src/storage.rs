@@ -6,6 +6,7 @@ mod decode;
 mod encode;
 mod format;
 mod integrity;
+mod pattern;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -15,11 +16,8 @@ use crate::{Column, Error, Result};
 pub(crate) use candidate::Candidate;
 pub(crate) use catalog::{validate_and_catalog, validate_candidate};
 pub(crate) use decode::{RowRecordRef, decode_row, row_record};
-pub(crate) use encode::{encode_cell, encode_row, encode_schema};
-pub(crate) use format::{
-    cell_boundary_pattern, cell_pattern, encoded_text_literal_pattern, row_prefix_pattern,
-    text_unit_pattern,
-};
+pub(crate) use encode::{encode_row, encode_schema};
+pub(crate) use pattern::{RowPredicatePattern, TextPatternAtom, row_scan_pattern};
 
 /// The canonical empty database.
 pub(crate) const EMPTY_BLOB: &str = format::HEADER;

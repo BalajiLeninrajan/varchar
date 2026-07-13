@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use crate::{Column, DataType, Error, Result};
+use crate::{DataType, Error, Result};
 
 pub(super) const HEADER: &str = "V2;";
 pub(super) const SCHEMA_PREFIX: &str = "~S|";
@@ -11,7 +11,6 @@ pub(super) const PRIMARY_KEY_PREFIX: &str = "~P|";
 pub(super) const FOREIGN_KEY_PREFIX: &str = "~F|";
 pub(super) const AUTO_INCREMENT_PREFIX: &str = "~A|";
 pub(super) const ROW_PREFIX: &str = "~R|";
-const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecordKind {
@@ -185,42 +184,6 @@ pub(super) fn type_tag(data_type: DataType) -> char {
         DataType::Integer => 'I',
         DataType::Boolean => 'B',
     }
-}
-
-pub(crate) const fn text_unit_pattern() -> &'static str {
-    TEXT_UNIT_PATTERN
-}
-
-pub(crate) fn row_prefix_pattern(table: &str) -> String {
-    format!(r"~R\|{}\|", regex::escape(table))
-}
-
-pub(crate) fn cell_boundary_pattern(column: usize, column_count: usize) -> &'static str {
-    if column + 1 == column_count {
-        ";"
-    } else {
-        r"\|"
-    }
-}
-
-pub(crate) fn cell_pattern(column: &Column, include_null: bool) -> String {
-    let typed = match column.data_type {
-        DataType::Text => format!("T{TEXT_UNIT_PATTERN}*"),
-        DataType::Integer => String::from(r"I(?:0|-?[1-9][0-9]*)"),
-        DataType::Boolean => String::from(r"B[01]"),
-    };
-    if include_null && column.nullable {
-        format!("(?:N|{typed})")
-    } else {
-        typed
-    }
-}
-
-/// Encode one text scalar as a regex literal, excluding the cell's `T` tag.
-pub(crate) fn encoded_text_literal_pattern(character: char) -> String {
-    let mut encoded = String::new();
-    encode_text_into(&character.to_string(), &mut encoded);
-    regex::escape(&encoded)
 }
 
 fn must_escape(character: char) -> bool {
