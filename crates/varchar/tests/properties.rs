@@ -1,7 +1,7 @@
 #![cfg(not(target_family = "wasm"))]
 
 use proptest::prelude::*;
-use varchar::{ColumnOrigin, DataType, Database, Error, Outcome, ResultColumn, RowSet, Value};
+use varchar::{DataType, Database, Error, Outcome, RowSet, Value};
 
 #[derive(Clone, Copy, Debug)]
 enum SelectedColumn {
@@ -141,21 +141,12 @@ fn selected_column_name(column: SelectedColumn) -> &'static str {
     }
 }
 
-fn selected_column_metadata(column: SelectedColumn) -> ResultColumn {
+fn selected_column_metadata(column: SelectedColumn) -> (&'static str, DataType, bool) {
     match column {
-        SelectedColumn::Text => result_column("txt", DataType::Text, true),
-        SelectedColumn::Number => result_column("n", DataType::Integer, false),
-        SelectedColumn::Flag => result_column("flag", DataType::Boolean, false),
+        SelectedColumn::Text => ("txt", DataType::Text, true),
+        SelectedColumn::Number => ("n", DataType::Integer, false),
+        SelectedColumn::Flag => ("flag", DataType::Boolean, false),
     }
-}
-
-fn result_column(name: &str, data_type: DataType, nullable: bool) -> ResultColumn {
-    ResultColumn::new(
-        name.to_owned(),
-        ColumnOrigin::new("t".to_owned(), name.to_owned()),
-        data_type,
-        nullable,
-    )
 }
 
 fn selected_value(row: &ModelRow, column: SelectedColumn) -> Value {
@@ -335,19 +326,27 @@ proptest! {
         let plan = database.explain_select(&sql).unwrap();
         prop_assert_eq!(plan.sources(), &["t"]);
         prop_assert!(!plan.pattern().is_empty());
-        prop_assert_eq!(plan.columns(), expected_columns.as_slice());
+        prop_assert_eq!(plan.columns().len(), expected_columns.len());
+        for (actual, &(name, data_type, nullable)) in
+            plan.columns().iter().zip(&expected_columns)
+        {
+            prop_assert_eq!(actual.label(), name);
+            prop_assert_eq!(actual.origin().table(), "t");
+            prop_assert_eq!(actual.origin().column(), name);
+            prop_assert_eq!(actual.data_type(), data_type);
+            prop_assert_eq!(actual.nullable(), nullable);
+        }
         prop_assert_eq!(database.as_str(), &before);
 
         prop_assert_eq!(
             database.execute(&format!("EXPLAIN REGEX {sql}")).unwrap(),
-            Outcome::Explain(plan),
+            Outcome::Explain(plan.clone()),
         );
         prop_assert_eq!(database.as_str(), &before);
 
-        prop_assert_eq!(
-            database.execute(&sql).unwrap(),
-            Outcome::Rows(RowSet::new(expected_columns, expected_rows)),
-        );
+        let actual = rows_from_outcome(database.execute(&sql).unwrap());
+        prop_assert_eq!(actual.columns(), plan.columns());
+        prop_assert_eq!(actual.rows(), expected_rows.as_slice());
         prop_assert_eq!(database.as_str(), &before);
     }
 

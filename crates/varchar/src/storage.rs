@@ -11,7 +11,8 @@ mod pattern;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use crate::{Column, Error, Result};
+use crate::value::SchemaColumn;
+use crate::{Error, Result};
 
 pub(crate) use candidate::Candidate;
 pub(crate) use catalog::{validate_and_catalog, validate_candidate};
@@ -120,14 +121,14 @@ struct AutoIncrementState {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RowLayout<'a> {
     pub(crate) table: &'a str,
-    pub(crate) columns: &'a [Column],
+    pub(crate) columns: &'a [SchemaColumn],
 }
 
 /// A table definition reconstructed from its schema and key metadata records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TableSchema {
     pub(crate) name: String,
-    pub(crate) columns: Vec<Column>,
+    pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) primary_key: Option<usize>,
     pub(crate) foreign_keys: Vec<ForeignKey>,
 }
@@ -227,7 +228,8 @@ pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{StorageState, TableSchema, validate_and_catalog};
-    use crate::{Column, DataType, Value};
+    use crate::value::SchemaColumn;
+    use crate::{DataType, Value};
 
     #[test]
     fn empty_state_owns_the_catalog_derived_from_its_blob() {
@@ -243,7 +245,7 @@ mod tests {
         let state = StorageState::empty();
         let schema = TableSchema {
             name: String::from("items"),
-            columns: vec![Column {
+            columns: vec![SchemaColumn {
                 name: String::from("id"),
                 data_type: DataType::Integer,
                 nullable: false,

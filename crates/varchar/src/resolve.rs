@@ -12,8 +12,8 @@ use crate::sql::{
     PredicateOperator, Projection, ProjectionItem, Select, TableConstraint,
 };
 use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema};
-use crate::value::validate_value;
-use crate::{Column, DataType, Error, Result, Value};
+use crate::value::{SchemaColumn, validate_value};
+use crate::{DataType, Error, Result, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedPredicate<'a> {
@@ -94,7 +94,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                 column.name
             )));
         }
-        columns.push(Column {
+        columns.push(SchemaColumn {
             name: column.name.clone(),
             data_type: column.data_type,
             nullable: true,
@@ -203,7 +203,7 @@ fn declare_primary_key(
     column: &str,
     index: usize,
     primary_key: &mut Option<usize>,
-    columns: &mut [Column],
+    columns: &mut [SchemaColumn],
 ) -> Result<()> {
     match *primary_key {
         Some(existing) if existing == index => {
@@ -313,7 +313,7 @@ fn validate_auto_increment(schema: &TableSchema, column: usize) -> Result<()> {
 }
 
 fn local_constraint_column(
-    columns: &[Column],
+    columns: &[SchemaColumn],
     table: &str,
     column: &str,
     constraint: &str,
@@ -728,23 +728,24 @@ mod tests {
     use crate::storage::{
         self, AutoIncrement, Catalog, ForeignKey, TableSchema, validate_and_catalog,
     };
-    use crate::{Column, DataType, Error, Value};
+    use crate::value::SchemaColumn;
+    use crate::{DataType, Error, Value};
 
     fn people_schema() -> TableSchema {
         TableSchema {
             name: String::from("people"),
             columns: vec![
-                Column {
+                SchemaColumn {
                     name: String::from("id"),
                     data_type: DataType::Integer,
                     nullable: false,
                 },
-                Column {
+                SchemaColumn {
                     name: String::from("note"),
                     data_type: DataType::Text,
                     nullable: true,
                 },
-                Column {
+                SchemaColumn {
                     name: String::from("active"),
                     data_type: DataType::Boolean,
                     nullable: false,
@@ -1016,7 +1017,7 @@ mod tests {
     fn auto_increment_resolution_generates_and_tracks_only_new_high_water_marks() {
         let schema = TableSchema {
             name: String::from("ids"),
-            columns: vec![Column {
+            columns: vec![SchemaColumn {
                 name: String::from("id"),
                 data_type: DataType::Integer,
                 nullable: false,
@@ -1042,12 +1043,12 @@ mod tests {
         let schema = TableSchema {
             name: String::from("ids"),
             columns: vec![
-                Column {
+                SchemaColumn {
                     name: String::from("id"),
                     data_type: DataType::Integer,
                     nullable: false,
                 },
-                Column {
+                SchemaColumn {
                     name: String::from("required"),
                     data_type: DataType::Text,
                     nullable: false,

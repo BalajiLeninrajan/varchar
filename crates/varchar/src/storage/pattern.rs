@@ -4,7 +4,8 @@ use super::RowLayout;
 use super::encode::encode_cell;
 use super::format::{ROW_PREFIX, encode_text_into};
 use crate::limits::check_limit;
-use crate::{Column, DataType, Error, Resource, Result, Value};
+use crate::value::SchemaColumn;
+use crate::{DataType, Error, Resource, Result, Value};
 
 const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
@@ -27,14 +28,18 @@ pub(crate) enum RowPredicatePattern {
 }
 
 impl RowPredicatePattern {
-    pub(crate) fn equal(column: usize, value: &Value, definition: &Column) -> Result<Self> {
+    pub(crate) fn equal(column: usize, value: &Value, definition: &SchemaColumn) -> Result<Self> {
         Ok(Self::Equal {
             column,
             encoded: encode_cell(value, definition)?,
         })
     }
 
-    pub(crate) fn not_equal(column: usize, value: &Value, definition: &Column) -> Result<Self> {
+    pub(crate) fn not_equal(
+        column: usize,
+        value: &Value,
+        definition: &SchemaColumn,
+    ) -> Result<Self> {
         Ok(Self::NotEqual {
             column,
             encoded: encode_cell(value, definition)?,
@@ -155,7 +160,7 @@ fn cell_boundary_pattern(column: usize, column_count: usize) -> &'static str {
     }
 }
 
-fn cell_pattern(column: &Column, include_null: bool) -> String {
+fn cell_pattern(column: &SchemaColumn, include_null: bool) -> String {
     let typed = match column.data_type {
         DataType::Text => format!("T{TEXT_UNIT_PATTERN}*"),
         DataType::Integer => String::from(r"I(?:0|-?[1-9][0-9]*)"),
@@ -222,7 +227,8 @@ mod tests {
 
     use super::{RowPredicatePattern, TextPatternAtom, row_scan_pattern};
     use crate::storage::RowLayout;
-    use crate::{Column, DataType, Value};
+    use crate::value::SchemaColumn;
+    use crate::{DataType, Value};
 
     const MAX_PATTERN_BYTES: usize = 16 * 1024;
 
@@ -233,8 +239,8 @@ mod tests {
             .expect("test pattern executes")
     }
 
-    fn integer_column(name: &str) -> Column {
-        Column {
+    fn integer_column(name: &str) -> SchemaColumn {
+        SchemaColumn {
             name: name.to_owned(),
             data_type: DataType::Integer,
             nullable: false,
@@ -261,7 +267,7 @@ mod tests {
 
     #[test]
     fn escaped_like_atoms_are_lowered_inside_storage() {
-        let columns = [Column {
+        let columns = [SchemaColumn {
             name: String::from("body"),
             data_type: DataType::Text,
             nullable: true,
@@ -295,7 +301,7 @@ mod tests {
     fn null_and_typed_value_predicates_use_complete_cell_boundaries() {
         let columns = [
             integer_column("id"),
-            Column {
+            SchemaColumn {
                 name: String::from("note"),
                 data_type: DataType::Text,
                 nullable: true,

@@ -3,11 +3,12 @@
 use std::fmt;
 
 use crate::limits::{Limits, check_limit};
+use crate::output::{Outcome, SelectExplanation};
 use crate::query::{self, SelectPlan};
 use crate::resolve;
 use crate::sql::{self, CreateTable, Delete, Insert, Select, Statement, Update};
 use crate::storage;
-use crate::{Error, ExplainPlan, Outcome, Resource, Result, Span};
+use crate::{Error, Resource, Result, Span};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
@@ -20,7 +21,7 @@ impl fmt::Debug for Database {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Database")
-            .field("blob", &self.storage.as_str())
+            .field("blob_len", &self.storage.as_str().len())
             .field("limits", &self.limits)
             .finish()
     }
@@ -97,17 +98,17 @@ impl Database {
             Statement::Delete(statement) => self.execute_delete(statement),
             Statement::ExplainRegex(statement) => self
                 .compile_select_ast(&statement)
-                .map(|plan| Outcome::Explain(plan.into_explain_plan())),
+                .map(|plan| Outcome::Explain(plan.into_explanation())),
         }
     }
 
     /// Parse, resolve, and compile a `SELECT` into its exact source-row scan regex.
-    pub fn explain_select(&self, sql: &str) -> Result<ExplainPlan> {
+    pub fn explain_select(&self, sql: &str) -> Result<SelectExplanation> {
         self.check_request(sql)?;
         match sql::parse(sql)? {
             Statement::Select(statement) => self
                 .compile_select_ast(&statement)
-                .map(SelectPlan::into_explain_plan),
+                .map(SelectPlan::into_explanation),
             _ => Err(Error::parse(
                 "explain_select expects a SELECT statement",
                 Span::new(0, sql.len()),
@@ -270,8 +271,29 @@ mod tests {
     }
 
     #[test]
-    fn debug_output_omits_the_derived_catalog() {
-        let database = Database::new();
-        assert!(!format!("{database:?}").contains("catalog"));
+    fn debug_output_reports_shape_without_disclosing_user_data() {
+        let secret = "debug-output-must-not-leak-this";
+        let mut database = Database::new();
+        database
+            .execute("CREATE TABLE notes (body TEXT NOT NULL)")
+            .expect("fixture schema succeeds");
+        database
+            .execute(&format!("INSERT INTO notes VALUES ('{secret}')"))
+            .expect("fixture row succeeds");
+
+        let debug = format!("{database:?}");
+        assert_eq!(
+            debug,
+            format!(
+                "Database {{ blob_len: {}, limits: {:?} }}",
+                database.as_str().len(),
+                database.limits()
+            )
+        );
+        assert!(!debug.contains("blob:"));
+        assert!(!debug.contains("catalog"));
+        assert!(!debug.contains("notes"));
+        assert!(!debug.contains("body"));
+        assert!(!debug.contains(secret));
     }
 }

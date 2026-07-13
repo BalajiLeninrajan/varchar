@@ -147,9 +147,9 @@ fn main() -> Result<(), varchar::Error> {
     db.execute("CREATE TABLE messages (body TEXT NOT NULL)")?;
     db.execute("INSERT INTO messages VALUES ('hello')")?;
 
-    let plan = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
-    println!("{}", plan.pattern());
-    assert_eq!(plan.sources(), &["messages"]);
+    let explanation = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
+    println!("{}", explanation.pattern());
+    assert_eq!(explanation.sources(), &["messages"]);
 
     if let Outcome::Rows(rows) = db.execute("SELECT body FROM messages")? {
         assert_eq!(rows.rows().len(), 1);
@@ -162,6 +162,8 @@ fn main() -> Result<(), varchar::Error> {
 ```
 
 Use `Database::from_string` to validate and reopen a persisted blob. Errors distinguish malformed SQL, unsupported features, schema, type, and constraint failures, corrupt storage, regex failures, and resource-limit exhaustion. A failed mutation leaves the original string byte-for-byte unchanged.
+
+Query rows, projected-column metadata, provenance, and `SelectExplanation` values are immutable snapshots produced by the engine. Inspect them through their accessors; a `RowSet` can also be consumed with `into_rows` or `into_parts` when the caller needs owned values.
 
 ## WebAssembly
 

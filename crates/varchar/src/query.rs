@@ -6,38 +6,12 @@ mod execute;
 use fancy_regex::Regex;
 
 use crate::limits::{Limits, check_limit};
+use crate::output::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation};
 use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Candidate, Catalog, TableSchema};
-use crate::{ColumnOrigin, Resource, Result, ResultColumn, RowSet, Value};
-
-/// An explanation of the source-row scan produced for a `SELECT`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExplainPlan {
-    pattern: String,
-    sources: Vec<String>,
-    columns: Vec<ResultColumn>,
-}
-
-impl ExplainPlan {
-    /// The generated pattern used to select complete encoded rows.
-    #[must_use]
-    pub fn pattern(&self) -> &str {
-        &self.pattern
-    }
-
-    /// Source tables in `FROM`/`JOIN` order.
-    #[must_use]
-    pub fn sources(&self) -> &[String] {
-        &self.sources
-    }
-
-    /// Projected columns, in query order and including duplicates.
-    #[must_use]
-    pub fn columns(&self) -> &[ResultColumn] {
-        &self.columns
-    }
-}
+use crate::value::Value;
+use crate::{Resource, Result};
 
 pub(crate) struct ScanPlan<'catalog> {
     regex: Regex,
@@ -53,7 +27,7 @@ pub(crate) struct SelectPlan<'catalog> {
 }
 
 impl SelectPlan<'_> {
-    pub(crate) fn into_explain_plan(self) -> ExplainPlan {
+    pub(crate) fn into_explanation(self) -> SelectExplanation {
         let Self {
             pattern,
             regex: _,
@@ -79,11 +53,7 @@ impl SelectPlan<'_> {
             .map(|source| source.name.clone())
             .collect();
 
-        ExplainPlan {
-            pattern,
-            sources,
-            columns,
-        }
+        SelectExplanation::new(pattern, sources, columns)
     }
 }
 

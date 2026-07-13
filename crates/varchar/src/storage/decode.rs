@@ -9,7 +9,8 @@ use super::format::{
     is_valid_identifier, records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
-use crate::{Column, DataType, Error, Result, Value};
+use crate::value::SchemaColumn;
+use crate::{DataType, Error, Result, Value};
 
 pub(super) struct PrimaryKeyMetadata<'a> {
     pub(super) table: &'a str,
@@ -146,7 +147,7 @@ pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableS
             "!" => false,
             _ => return Err(corrupt(offset, "invalid column nullability tag")),
         };
-        columns.push(Column {
+        columns.push(SchemaColumn {
             name: name.to_owned(),
             data_type,
             nullable,
@@ -302,7 +303,7 @@ fn row_width_error(offset: usize, layout: RowLayout<'_>, actual: usize) -> Error
     )
 }
 
-fn validate_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<()> {
+fn validate_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<()> {
     if encoded == "N" {
         return if column.nullable {
             Ok(())
@@ -331,7 +332,7 @@ fn validate_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<()>
     }
 }
 
-fn decode_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<Value> {
+fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<Value> {
     if encoded == "N" {
         return if column.nullable {
             Ok(Value::Null)
@@ -396,7 +397,8 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
 mod tests {
     use super::{decode_row, row_record, row_records};
     use crate::storage::RowLayout;
-    use crate::{Column, DataType, Error, Value};
+    use crate::value::SchemaColumn;
+    use crate::{DataType, Error, Value};
 
     #[test]
     fn row_view_owns_the_complete_envelope_and_absolute_range() {
@@ -411,12 +413,12 @@ mod tests {
         );
 
         let columns = [
-            Column {
+            SchemaColumn {
                 name: String::from("id"),
                 data_type: DataType::Integer,
                 nullable: false,
             },
-            Column {
+            SchemaColumn {
                 name: String::from("body"),
                 data_type: DataType::Text,
                 nullable: false,

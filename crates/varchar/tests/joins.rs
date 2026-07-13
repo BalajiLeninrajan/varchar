@@ -1,8 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{
-    ColumnOrigin, DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value,
-};
+use varchar::{DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -17,13 +15,24 @@ fn rows(database: &mut Database, sql: &str) -> RowSet {
     }
 }
 
-fn column(table: &str, name: &str, data_type: DataType, nullable: bool) -> ResultColumn {
-    ResultColumn::new(
-        name.to_owned(),
-        ColumnOrigin::new(table.to_owned(), name.to_owned()),
-        data_type,
-        nullable,
-    )
+fn assert_columns(actual: &[ResultColumn], expected: &[(&str, &str, DataType, bool)]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, &(table, column, data_type, nullable)) in actual.iter().zip(expected) {
+        assert_eq!(actual.label(), column);
+        assert_eq!(actual.origin().table(), table);
+        assert_eq!(actual.origin().column(), column);
+        assert_eq!(actual.data_type(), data_type);
+        assert_eq!(actual.nullable(), nullable);
+    }
+}
+
+fn assert_row_set(
+    actual: &RowSet,
+    expected_columns: &[(&str, &str, DataType, bool)],
+    expected_rows: &[Vec<Value>],
+) {
+    assert_columns(actual.columns(), expected_columns);
+    assert_eq!(actual.rows(), expected_rows);
 }
 
 fn schema_error(database: &mut Database, sql: &str) -> String {
@@ -77,39 +86,30 @@ fn join_and_inner_join_support_qualified_projection() {
         execute(&mut database, sql);
     }
 
-    let expected = RowSet::new(
+    let expected_columns = [
+        ("authors", "name", DataType::Text, false),
+        ("books", "title", DataType::Text, false),
+    ];
+    let expected_rows = [
         vec![
-            column("authors", "name", DataType::Text, false),
-            column("books", "title", DataType::Text, false),
+            Value::Text("Ada".to_owned()),
+            Value::Text("Notes".to_owned()),
         ],
         vec![
-            vec![
-                Value::Text("Ada".to_owned()),
-                Value::Text("Notes".to_owned()),
-            ],
-            vec![
-                Value::Text("Grace".to_owned()),
-                Value::Text("Compiler".to_owned()),
-            ],
+            Value::Text("Grace".to_owned()),
+            Value::Text("Compiler".to_owned()),
         ],
-    );
+    ];
 
-    assert_eq!(
-        rows(
-            &mut database,
-            "SELECT authors.name, books.title FROM authors \
-             JOIN books ON authors.id = books.author_id",
-        ),
-        expected
-    );
-    assert_eq!(
-        rows(
-            &mut database,
-            "SELECT authors.name, books.title FROM authors \
-             INNER JOIN books ON authors.id = books.author_id",
-        ),
-        expected
-    );
+    for sql in [
+        "SELECT authors.name, books.title FROM authors \
+         JOIN books ON authors.id = books.author_id",
+        "SELECT authors.name, books.title FROM authors \
+         INNER JOIN books ON authors.id = books.author_id",
+    ] {
+        let actual = rows(&mut database, sql);
+        assert_row_set(&actual, &expected_columns, &expected_rows);
+    }
 }
 
 #[test]
@@ -122,18 +122,17 @@ fn inner_and_on_remain_contextual_identifiers() {
     execute(&mut database, "INSERT INTO inner VALUES (1, 'kept')");
     execute(&mut database, "INSERT INTO inner VALUES (2, 'filtered')");
 
-    assert_eq!(
-        rows(
-            &mut database,
-            "SELECT inner.on, value FROM inner WHERE inner.on = 1",
-        ),
-        RowSet::new(
-            vec![
-                column("inner", "on", DataType::Integer, false),
-                column("inner", "value", DataType::Text, false),
-            ],
-            vec![vec![Value::Integer(1), Value::Text("kept".to_owned()),]],
-        )
+    let actual = rows(
+        &mut database,
+        "SELECT inner.on, value FROM inner WHERE inner.on = 1",
+    );
+    assert_row_set(
+        &actual,
+        &[
+            ("inner", "on", DataType::Integer, false),
+            ("inner", "value", DataType::Text, false),
+        ],
+        &[vec![Value::Integer(1), Value::Text("kept".to_owned())]],
     );
 }
 
@@ -196,55 +195,53 @@ fn stars_expand_in_source_then_schema_order() {
     execute(&mut database, "INSERT INTO customers VALUES (7, 'Ada')");
     execute(&mut database, "INSERT INTO invoices VALUES (20, 7, TRUE)");
 
-    assert_eq!(
-        rows(
-            &mut database,
-            "SELECT * FROM customers JOIN invoices \
-             ON customers.id = invoices.customer_id",
-        ),
-        RowSet::new(
-            vec![
-                column("customers", "id", DataType::Integer, false),
-                column("customers", "name", DataType::Text, false),
-                column("invoices", "id", DataType::Integer, false),
-                column("invoices", "customer_id", DataType::Integer, false),
-                column("invoices", "paid", DataType::Boolean, true),
-            ],
-            vec![vec![
-                Value::Integer(7),
-                Value::Text("Ada".to_owned()),
-                Value::Integer(20),
-                Value::Integer(7),
-                Value::Boolean(true),
-            ]],
-        )
+    let actual = rows(
+        &mut database,
+        "SELECT * FROM customers JOIN invoices \
+         ON customers.id = invoices.customer_id",
+    );
+    assert_row_set(
+        &actual,
+        &[
+            ("customers", "id", DataType::Integer, false),
+            ("customers", "name", DataType::Text, false),
+            ("invoices", "id", DataType::Integer, false),
+            ("invoices", "customer_id", DataType::Integer, false),
+            ("invoices", "paid", DataType::Boolean, true),
+        ],
+        &[vec![
+            Value::Integer(7),
+            Value::Text("Ada".to_owned()),
+            Value::Integer(20),
+            Value::Integer(7),
+            Value::Boolean(true),
+        ]],
     );
 
-    assert_eq!(
-        rows(
-            &mut database,
-            "SELECT invoices.*, customers.name, customers.* \
-             FROM customers JOIN invoices \
-             ON customers.id = invoices.customer_id",
-        ),
-        RowSet::new(
-            vec![
-                column("invoices", "id", DataType::Integer, false),
-                column("invoices", "customer_id", DataType::Integer, false),
-                column("invoices", "paid", DataType::Boolean, true),
-                column("customers", "name", DataType::Text, false),
-                column("customers", "id", DataType::Integer, false),
-                column("customers", "name", DataType::Text, false),
-            ],
-            vec![vec![
-                Value::Integer(20),
-                Value::Integer(7),
-                Value::Boolean(true),
-                Value::Text("Ada".to_owned()),
-                Value::Integer(7),
-                Value::Text("Ada".to_owned()),
-            ]],
-        )
+    let actual = rows(
+        &mut database,
+        "SELECT invoices.*, customers.name, customers.* \
+         FROM customers JOIN invoices \
+         ON customers.id = invoices.customer_id",
+    );
+    assert_row_set(
+        &actual,
+        &[
+            ("invoices", "id", DataType::Integer, false),
+            ("invoices", "customer_id", DataType::Integer, false),
+            ("invoices", "paid", DataType::Boolean, true),
+            ("customers", "name", DataType::Text, false),
+            ("customers", "id", DataType::Integer, false),
+            ("customers", "name", DataType::Text, false),
+        ],
+        &[vec![
+            Value::Integer(20),
+            Value::Integer(7),
+            Value::Boolean(true),
+            Value::Text("Ada".to_owned()),
+            Value::Integer(7),
+            Value::Text("Ada".to_owned()),
+        ]],
     );
 }
 
@@ -564,12 +561,12 @@ fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
     assert!(plan.pattern().contains(r";|~R\|children\|"));
     assert!(plan.pattern().ends_with(";)"));
     assert_eq!(plan.sources(), &["parents", "children"]);
-    assert_eq!(
+    assert_columns(
         plan.columns(),
         &[
-            column("parents", "name", DataType::Text, false),
-            column("children", "name", DataType::Text, false),
-        ]
+            ("parents", "name", DataType::Text, false),
+            ("children", "name", DataType::Text, false),
+        ],
     );
     assert_eq!(database.as_str(), before);
 

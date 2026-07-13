@@ -5,8 +5,8 @@ use super::format::{
     type_tag,
 };
 use super::{RowLayout, TableSchema, validate_row_layout, validate_schema_for_write};
-use crate::value::validate_value;
-use crate::{Column, DataType, Error, Result, Value};
+use crate::value::{SchemaColumn, validate_value};
+use crate::{DataType, Error, Result, Value};
 
 /// Encode a complete schema record, including its terminator.
 pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
@@ -109,7 +109,7 @@ pub(crate) fn encode_row(values: &[Value], layout: RowLayout<'_>) -> Result<Stri
 }
 
 /// Encode one typed cell in its canonical storage representation.
-pub(super) fn encode_cell(value: &Value, column: &Column) -> Result<String> {
+pub(super) fn encode_cell(value: &Value, column: &SchemaColumn) -> Result<String> {
     validate_value(value, column)?;
     match (value, column.data_type) {
         (Value::Null, _) => Ok(String::from("N")),
