@@ -5,7 +5,7 @@ use fancy_regex::{Error as FancyError, RuntimeError};
 use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::ResolvedJoinCondition;
-use crate::storage::{self, RowLayout};
+use crate::storage::{self, Candidate, RowLayout};
 use crate::{ColumnOrigin, Error, Result, ResultColumn, RowSet, Value};
 
 pub(super) fn select(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
@@ -295,11 +295,11 @@ fn row_structure_charge(column_count: usize, limits: &Limits) -> Result<usize> {
 }
 
 pub(super) fn rewrite_matching_rows<F>(
-    blob: &str,
+    candidate: &mut Candidate<'_>,
     plan: &ScanPlan,
     limits: &Limits,
     mut rewrite: F,
-) -> Result<(String, usize)>
+) -> Result<usize>
 where
     F: FnMut(Vec<Value>) -> Result<Option<Vec<Value>>>,
 {
@@ -307,8 +307,8 @@ where
         table: &plan.table,
         columns: &plan.schema,
     };
-    let mut candidate = storage::Candidate::new(blob, limits.max_database_bytes)?;
     let mut affected = 0_usize;
+    let blob = candidate.source();
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
@@ -324,7 +324,7 @@ where
             limit: usize::MAX,
         })?;
     }
-    Ok((candidate.finish()?, affected))
+    Ok(affected)
 }
 
 fn value_payload_size(value: &Value) -> usize {

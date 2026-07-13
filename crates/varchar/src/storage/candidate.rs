@@ -7,26 +7,27 @@
 use std::ops::Range;
 
 use super::encode::encode_auto_increment_record;
-use super::{Catalog, RowLayout, TableSchema, encode_row, encode_schema};
+use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
 use crate::{Error, Result, Value};
 
 /// A bounded, ordered edit of one validated authoritative database string.
 pub(crate) struct Candidate<'a> {
-    source: &'a str,
+    state: &'a StorageState,
     cursor: usize,
     output: String,
     max_bytes: usize,
 }
 
 impl<'a> Candidate<'a> {
-    pub(crate) fn new(source: &'a str, max_bytes: usize) -> Result<Self> {
+    pub(super) fn new(state: &'a StorageState, max_bytes: usize) -> Result<Self> {
+        let source = state.as_str();
         check_size(source.len(), max_bytes)?;
         let mut output = String::new();
         output
             .try_reserve(source.len())
             .map_err(|_| limit_error(max_bytes))?;
         Ok(Self {
-            source,
+            state,
             cursor: 0,
             output,
             max_bytes,
@@ -35,7 +36,6 @@ impl<'a> Candidate<'a> {
 
     pub(crate) fn insert_schema_with_auto_increment(
         &mut self,
-        catalog: &Catalog,
         schema: &TableSchema,
         auto_increment: Option<usize>,
     ) -> Result<()> {
@@ -45,15 +45,12 @@ impl<'a> Candidate<'a> {
         } else {
             encoded
         };
-        self.splice(catalog.row_start..catalog.row_start, &encoded)
+        let row_start = self.state.catalog().row_start;
+        self.splice(row_start..row_start, &encoded)
     }
 
-    pub(crate) fn advance_auto_increment(
-        &mut self,
-        catalog: &Catalog,
-        table: &str,
-        last: i64,
-    ) -> Result<()> {
+    pub(crate) fn advance_auto_increment(&mut self, table: &str, last: i64) -> Result<()> {
+        let catalog = self.state.catalog();
         let state = catalog.auto_increment_state(table).ok_or_else(|| {
             Error::Schema(format!("table {table:?} has no auto-increment column"))
         })?;
@@ -71,7 +68,8 @@ impl<'a> Candidate<'a> {
 
     pub(crate) fn append_row(&mut self, layout: RowLayout<'_>, values: &[Value]) -> Result<()> {
         let encoded = encode_row(values, layout)?;
-        self.splice(self.source.len()..self.source.len(), &encoded)
+        let source_len = self.state.as_str().len();
+        self.splice(source_len..source_len, &encoded)
     }
 
     pub(crate) fn rewrite_row(
@@ -86,20 +84,26 @@ impl<'a> Candidate<'a> {
         self.splice(range, encoded.as_deref().unwrap_or_default())
     }
 
-    pub(crate) fn finish(mut self) -> Result<String> {
-        self.push_source(self.cursor..self.source.len())?;
-        Ok(self.output)
+    pub(crate) fn source(&self) -> &'a str {
+        self.state.as_str()
+    }
+
+    pub(crate) fn finish(mut self) -> Result<StorageState> {
+        self.push_source(self.cursor..self.state.as_str().len())?;
+        StorageState::from_candidate(self.output)
     }
 
     fn splice(&mut self, range: Range<usize>, replacement: &str) -> Result<()> {
         if range.start < self.cursor || range.start > range.end {
             return Err(invalid_range(range.start));
         }
-        self.source
+        self.state
+            .as_str()
             .get(range.clone())
             .ok_or_else(|| invalid_range(range.start))?;
         let gap = self
-            .source
+            .state
+            .as_str()
             .get(self.cursor..range.start)
             .ok_or_else(|| invalid_range(range.start))?;
         let additional = gap
@@ -123,7 +127,8 @@ impl<'a> Candidate<'a> {
 
     fn push_source(&mut self, range: Range<usize>) -> Result<()> {
         let fragment = self
-            .source
+            .state
+            .as_str()
             .get(range.clone())
             .ok_or_else(|| invalid_range(range.start))?;
         self.push(fragment)
@@ -168,12 +173,13 @@ fn invalid_range(offset: usize) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Candidate;
+    use super::StorageState;
 
     #[test]
     fn failed_splice_leaves_the_candidate_reusable() {
-        let source = "V2;~R|t|I1;";
-        let mut candidate = Candidate::new(source, source.len()).expect("source fits");
+        let source = "V2;~S|t|id:I:!;~R|t|I1;";
+        let state = StorageState::load(source.to_owned()).expect("source is valid");
+        let mut candidate = state.candidate(source.len()).expect("source fits");
 
         assert!(
             candidate
@@ -181,7 +187,10 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            candidate.finish().expect("unchanged candidate fits"),
+            candidate
+                .finish()
+                .expect("unchanged candidate fits")
+                .as_str(),
             source
         );
     }

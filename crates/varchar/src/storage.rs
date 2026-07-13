@@ -24,6 +24,51 @@ pub(crate) use format::{
 /// The canonical empty database.
 pub(crate) const EMPTY_BLOB: &str = format::HEADER;
 
+/// One validated authoritative blob and the catalog derived from that exact blob.
+///
+/// Keeping the pair behind one owner makes it impossible for database execution
+/// to accidentally combine physical offsets from one blob with another blob.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StorageState {
+    blob: String,
+    catalog: Catalog,
+}
+
+impl StorageState {
+    pub(crate) fn empty() -> Self {
+        Self {
+            blob: EMPTY_BLOB.to_owned(),
+            catalog: Catalog::empty(),
+        }
+    }
+
+    pub(crate) fn load(blob: String) -> Result<Self> {
+        let catalog = validate_and_catalog(&blob)?;
+        Ok(Self { blob, catalog })
+    }
+
+    fn from_candidate(blob: String) -> Result<Self> {
+        let catalog = validate_candidate(&blob)?;
+        Ok(Self { blob, catalog })
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.blob
+    }
+
+    pub(crate) fn into_string(self) -> String {
+        self.blob
+    }
+
+    pub(crate) fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    pub(crate) fn candidate(&self, max_bytes: usize) -> Result<Candidate<'_>> {
+        Candidate::new(self, max_bytes)
+    }
+}
+
 /// The derived schema index reconstructed from the authoritative string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Catalog {
@@ -179,4 +224,49 @@ pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StorageState, TableSchema, validate_and_catalog};
+    use crate::{Column, DataType, Value};
+
+    #[test]
+    fn empty_state_owns_the_catalog_derived_from_its_blob() {
+        let state = StorageState::empty();
+        let reconstructed =
+            validate_and_catalog(state.as_str()).expect("empty V2 storage is valid");
+
+        assert_eq!(state.catalog(), &reconstructed);
+    }
+
+    #[test]
+    fn finishing_a_candidate_returns_a_new_matching_state() {
+        let state = StorageState::empty();
+        let schema = TableSchema {
+            name: String::from("items"),
+            columns: vec![Column {
+                name: String::from("id"),
+                data_type: DataType::Integer,
+                nullable: false,
+            }],
+            primary_key: Some(0),
+            foreign_keys: Vec::new(),
+        };
+        let mut candidate = state.candidate(1024).expect("empty state fits");
+        candidate
+            .insert_schema_with_auto_increment(&schema, None)
+            .expect("schema edit succeeds");
+        candidate
+            .append_row(schema.row_layout(), &[Value::Integer(1)])
+            .expect("row edit succeeds");
+
+        let next = candidate.finish().expect("candidate validates");
+        let reconstructed =
+            validate_and_catalog(next.as_str()).expect("finished candidate remains valid");
+
+        assert_eq!(state.as_str(), "V2;");
+        assert_eq!(next.catalog(), &reconstructed);
+        assert!(next.catalog().table("items").is_some());
+    }
 }

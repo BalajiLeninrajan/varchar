@@ -199,10 +199,12 @@ fn successful_updates_advance_but_zero_match_and_failed_updates_do_not() {
     execute(&mut database, "INSERT INTO ids VALUES (NULL)");
     execute(&mut database, "INSERT INTO ids VALUES (NULL)");
     execute(&mut database, "UPDATE ids SET id = 10 WHERE id = 2");
+    let before_zero_match = database.as_str().to_owned();
     assert_eq!(
         execute(&mut database, "UPDATE ids SET id = 20 WHERE id = 999"),
         Outcome::Affected { rows: 0 }
     );
+    assert_eq!(database.as_str(), before_zero_match);
     assert!(matches!(
         atomic_error(&mut database, "UPDATE ids SET id = 1 WHERE id = 10"),
         Error::Constraint(_)
@@ -218,6 +220,36 @@ fn successful_updates_advance_but_zero_match_and_failed_updates_do_not() {
         ]
     );
     assert!(database.as_str().contains("~A|ids|id|I11;"));
+}
+
+#[test]
+fn sequence_and_length_changing_row_updates_finish_as_one_storage_state() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE ids (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO ids VALUES (NULL, 'x')");
+    execute(
+        &mut database,
+        "UPDATE ids SET id = 100, body = 'a much longer row body' WHERE id = 1",
+    );
+
+    let blob = database.as_str().to_owned();
+    assert!(blob.contains("~A|ids|id|I100;"));
+    let mut reloaded = Database::from_string(blob).expect("updated state reloads");
+    execute(&mut reloaded, "INSERT INTO ids VALUES (NULL, 'next')");
+
+    assert_eq!(
+        values(&mut reloaded, "SELECT id, body FROM ids"),
+        vec![
+            vec![
+                Value::Integer(100),
+                Value::Text(String::from("a much longer row body")),
+            ],
+            vec![Value::Integer(101), Value::Text(String::from("next"))],
+        ]
+    );
 }
 
 #[test]
