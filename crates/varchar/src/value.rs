@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::RegexPlan;
+use crate::{Error, RegexPlan, Result};
 
 /// A column's SQL type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +45,30 @@ impl fmt::Display for Value {
             Self::Boolean(value) => write!(f, "{value}"),
             Self::Null => f.write_str("NULL"),
         }
+    }
+}
+
+pub(crate) fn validate_value(value: &Value, column: &Column) -> Result<()> {
+    match (value, column.data_type) {
+        (Value::Null, _) if column.nullable => Ok(()),
+        (Value::Null, _) => Err(Error::Type(format!("column {:?} is NOT NULL", column.name))),
+        (Value::Text(_), DataType::Text)
+        | (Value::Integer(_), DataType::Integer)
+        | (Value::Boolean(_), DataType::Boolean) => Ok(()),
+        (actual, expected) => Err(Error::Type(format!(
+            "column {:?} expects {expected}, got {}",
+            column.name,
+            value_kind(actual)
+        ))),
+    }
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Text(_) => "TEXT",
+        Value::Integer(_) => "INTEGER",
+        Value::Boolean(_) => "BOOLEAN",
+        Value::Null => "NULL",
     }
 }
 

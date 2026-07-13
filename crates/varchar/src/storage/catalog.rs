@@ -1,3 +1,5 @@
+//! Whole-blob validation and reconstruction of the derived schema catalog.
+
 use std::collections::BTreeMap;
 
 use super::decode::{decode_schema_record, validate_row_record};

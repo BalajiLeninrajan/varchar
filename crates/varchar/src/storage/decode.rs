@@ -1,15 +1,17 @@
+//! Canonical decoding and validation of individual storage records.
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::TableSchema;
 use super::format::{
     ROW_PREFIX, SCHEMA_PREFIX, allocation_limit, complete_record_body, corrupt,
     is_valid_identifier, scan_text,
 };
+use super::{RowLayout, TableSchema};
 use crate::{Column, DataType, Error, Result, Value};
 
 /// Decode a complete canonical row record for `schema`.
-pub(crate) fn decode_row(record: &str, schema: &TableSchema) -> Result<Vec<Value>> {
-    decode_row_at(record, schema, 0)
+pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Value>> {
+    decode_row_at(record, layout, 0)
 }
 
 pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableSchema> {
@@ -83,12 +85,21 @@ pub(super) fn validate_row_record(
     let schema = tables
         .get(table)
         .ok_or_else(|| corrupt(offset, "row references an unknown table"))?;
+    validate_row_at(record, schema.row_layout(), offset)
+}
 
+fn validate_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result<()> {
+    let body = complete_record_body(record, ROW_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    if table != layout.table {
+        return Err(corrupt(offset, "row table does not match its schema"));
+    }
     let mut cell_offset = offset + ROW_PREFIX.len() + table.len() + 1;
     let mut cell_count = 0;
-    for column in &schema.columns {
+    for column in layout.columns {
         let Some(cell) = fields.next() else {
-            return Err(row_width_error(offset, schema, cell_count));
+            return Err(row_width_error(offset, layout, cell_count));
         };
         validate_cell_at(cell, column, cell_offset)?;
         cell_count += 1;
@@ -96,46 +107,46 @@ pub(super) fn validate_row_record(
     }
     if fields.next().is_some() {
         cell_count += 1 + fields.count();
-        return Err(row_width_error(offset, schema, cell_count));
+        return Err(row_width_error(offset, layout, cell_count));
     }
     Ok(())
 }
 
-fn decode_row_at(record: &str, schema: &TableSchema, offset: usize) -> Result<Vec<Value>> {
+fn decode_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result<Vec<Value>> {
     let body = complete_record_body(record, ROW_PREFIX, offset)?;
     let mut fields = body.split('|');
     let table = fields.next().unwrap_or_default();
-    if table != schema.name {
+    if table != layout.table {
         return Err(corrupt(offset, "row table does not match its schema"));
     }
 
     let mut values = Vec::new();
     values
-        .try_reserve_exact(schema.columns.len())
-        .map_err(|_| allocation_limit("decoded row cells", schema.columns.len()))?;
+        .try_reserve_exact(layout.columns.len())
+        .map_err(|_| allocation_limit("decoded row cells", layout.columns.len()))?;
     let mut cell_offset = offset + ROW_PREFIX.len() + table.len() + 1;
-    for column in &schema.columns {
+    for column in layout.columns {
         let Some(cell) = fields.next() else {
-            return Err(row_width_error(offset, schema, values.len()));
+            return Err(row_width_error(offset, layout, values.len()));
         };
         values.push(decode_cell_at(cell, column, cell_offset)?);
         cell_offset += cell.len() + 1;
     }
     if fields.next().is_some() {
         let cell_count = values.len() + 1 + fields.count();
-        return Err(row_width_error(offset, schema, cell_count));
+        return Err(row_width_error(offset, layout, cell_count));
     }
     Ok(values)
 }
 
-fn row_width_error(offset: usize, schema: &TableSchema, actual: usize) -> Error {
+fn row_width_error(offset: usize, layout: RowLayout<'_>, actual: usize) -> Error {
     corrupt(
         offset,
         format!(
             "row for {:?} has {} cells, expected {}",
-            schema.name,
+            layout.table,
             actual,
-            schema.columns.len()
+            layout.columns.len()
         ),
     )
 }
