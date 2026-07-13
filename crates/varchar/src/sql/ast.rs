@@ -16,6 +16,7 @@ pub(crate) enum Statement {
 pub(crate) struct CreateTable {
     pub(crate) table: String,
     pub(crate) columns: Vec<ColumnDef>,
+    pub(crate) constraints: Vec<TableConstraint>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +32,15 @@ pub(crate) struct ColumnDef {
 pub(crate) struct ForeignKeyReference {
     pub(crate) table: String,
     pub(crate) column: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TableConstraint {
+    PrimaryKey(String),
+    ForeignKey {
+        column: String,
+        reference: ForeignKeyReference,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -2,7 +2,7 @@
 
 use super::ast::{
     Assignment, ColumnDef, CreateTable, Delete, ForeignKeyReference, Insert, Predicate,
-    PredicateOperator, Projection, Select, Statement, Update,
+    PredicateOperator, Projection, Select, Statement, TableConstraint, Update,
 };
 use super::lexer::{Token, TokenKind, lex};
 use crate::{DataType, Error, Result, Value};
@@ -74,13 +74,12 @@ impl Parser {
         let table = self.expect_identifier()?;
         self.expect(TokenKind::LeftParen, "expected `(` after table name")?;
         let mut columns = Vec::new();
-        let mut table_primary_keys = Vec::new();
-        let mut table_foreign_keys = Vec::new();
+        let mut constraints = Vec::new();
         loop {
             if self.current_word() == Some("PRIMARY") && self.peek_word() == Some("KEY") {
-                table_primary_keys.push(self.parse_table_primary_key()?);
+                constraints.push(self.parse_table_primary_key()?);
             } else if self.current_word() == Some("FOREIGN") && self.peek_word() == Some("KEY") {
-                table_foreign_keys.push(self.parse_table_foreign_key()?);
+                constraints.push(self.parse_table_foreign_key()?);
             } else {
                 columns.push(self.parse_column_definition()?);
             }
@@ -90,50 +89,11 @@ impl Parser {
             self.expect(TokenKind::RightParen, "expected `,` or `)`")?;
             break;
         }
-
-        for name in table_primary_keys {
-            let column = columns
-                .iter_mut()
-                .find(|column| column.name == name)
-                .ok_or_else(|| {
-                    Error::Schema(format!(
-                        "PRIMARY KEY references unknown column {name:?} in table {table:?}"
-                    ))
-                })?;
-            if column.primary_key {
-                return Err(Error::Schema(format!(
-                    "duplicate PRIMARY KEY declaration for column {name:?}"
-                )));
-            }
-            column.primary_key = true;
-            column.nullable = false;
-        }
-
-        for (name, reference) in table_foreign_keys {
-            let column = columns
-                .iter_mut()
-                .find(|column| column.name == name)
-                .ok_or_else(|| {
-                    Error::Schema(format!(
-                        "FOREIGN KEY references unknown column {name:?} in table {table:?}"
-                    ))
-                })?;
-            if column.references.is_some() {
-                return Err(Error::Schema(format!(
-                    "duplicate FOREIGN KEY declaration for column {name:?}"
-                )));
-            }
-            column.references = Some(reference);
-        }
-
-        let primary_key_count = columns.iter().filter(|column| column.primary_key).count();
-        if primary_key_count > 1 {
-            return Err(Error::Schema(format!(
-                "table {table:?} may have only one PRIMARY KEY column"
-            )));
-        }
-
-        Ok(CreateTable { table, columns })
+        Ok(CreateTable {
+            table,
+            columns,
+            constraints,
+        })
     }
 
     fn parse_column_definition(&mut self) -> Result<ColumnDef> {
@@ -183,7 +143,6 @@ impl Parser {
                     self.advance();
                     self.advance();
                     primary_key = true;
-                    nullable = false;
                 }
                 Some("REFERENCES") => {
                     if references.is_some() {
@@ -206,7 +165,7 @@ impl Parser {
         })
     }
 
-    fn parse_table_primary_key(&mut self) -> Result<String> {
+    fn parse_table_primary_key(&mut self) -> Result<TableConstraint> {
         self.expect_keyword("PRIMARY")?;
         self.expect_keyword("KEY")?;
         self.expect(TokenKind::LeftParen, "expected `(` after PRIMARY KEY")?;
@@ -216,10 +175,10 @@ impl Parser {
             TokenKind::RightParen,
             "expected `)` after PRIMARY KEY column",
         )?;
-        Ok(column)
+        Ok(TableConstraint::PrimaryKey(column))
     }
 
-    fn parse_table_foreign_key(&mut self) -> Result<(String, ForeignKeyReference)> {
+    fn parse_table_foreign_key(&mut self) -> Result<TableConstraint> {
         self.expect_keyword("FOREIGN")?;
         self.expect_keyword("KEY")?;
         self.expect(TokenKind::LeftParen, "expected `(` after FOREIGN KEY")?;
@@ -230,7 +189,7 @@ impl Parser {
             "expected `)` after FOREIGN KEY column",
         )?;
         let reference = self.parse_reference()?;
-        Ok((column, reference))
+        Ok(TableConstraint::ForeignKey { column, reference })
     }
 
     fn parse_reference(&mut self) -> Result<ForeignKeyReference> {
@@ -560,7 +519,7 @@ mod tests {
     use super::parse;
     use crate::sql::ast::{
         ColumnDef, CreateTable, ForeignKeyReference, Predicate, PredicateOperator, Projection,
-        Select, Statement,
+        Select, Statement, TableConstraint,
     };
     use crate::{DataType, Error, Value};
 
@@ -621,7 +580,7 @@ mod tests {
                 ColumnDef {
                     name: "id".to_owned(),
                     data_type: DataType::Integer,
-                    nullable: false,
+                    nullable: true,
                     primary_key: true,
                     references: Some(ForeignKeyReference {
                         table: "parents".to_owned(),
@@ -650,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_single_column_table_constraints_onto_columns() {
+    fn preserves_table_constraints_without_mutating_columns() {
         let statement = create_table(
             "CREATE TABLE children (\
                 id INTEGER, parent_id INTEGER, \
@@ -659,15 +618,36 @@ mod tests {
             )",
         );
 
-        assert!(statement.columns[0].primary_key);
-        assert!(!statement.columns[0].nullable);
+        assert!(!statement.columns[0].primary_key);
+        assert!(statement.columns[0].nullable);
+        assert!(statement.columns[1].references.is_none());
         assert_eq!(
-            statement.columns[1].references,
-            Some(ForeignKeyReference {
-                table: "parents".to_owned(),
-                column: "id".to_owned(),
-            })
+            statement.constraints,
+            vec![
+                TableConstraint::PrimaryKey("id".to_owned()),
+                TableConstraint::ForeignKey {
+                    column: "parent_id".to_owned(),
+                    reference: ForeignKeyReference {
+                        table: "parents".to_owned(),
+                        column: "id".to_owned(),
+                    },
+                },
+            ]
         );
+    }
+
+    #[test]
+    fn defers_table_constraint_name_and_cardinality_policy() {
+        let statement = create_table(
+            "CREATE TABLE items (\
+                id INTEGER, \
+                PRIMARY KEY (missing), \
+                PRIMARY KEY (id), \
+                FOREIGN KEY (missing) REFERENCES parents(id)\
+            )",
+        );
+
+        assert_eq!(statement.constraints.len(), 3);
     }
 
     #[test]

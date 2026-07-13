@@ -6,7 +6,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::sql::{Assignment, CreateTable, Predicate, PredicateOperator, Projection};
+use crate::sql::{
+    Assignment, CreateTable, Predicate, PredicateOperator, Projection, TableConstraint,
+};
 use crate::storage::{Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
@@ -33,10 +35,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
 
     for (index, column) in statement.columns.into_iter().enumerate() {
         if column.primary_key && primary_key.replace(index).is_some() {
-            return Err(Error::Schema(format!(
-                "table {:?} may have only one PRIMARY KEY column",
-                statement.table
-            )));
+            return Err(multiple_primary_keys(&statement.table));
         }
         if let Some(reference) = column.references {
             foreign_keys.push(ForeignKey {
@@ -48,8 +47,44 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         columns.push(Column {
             name: column.name,
             data_type: column.data_type,
-            nullable: column.nullable,
+            nullable: column.nullable && !column.primary_key,
         });
+    }
+
+    for constraint in statement.constraints {
+        match constraint {
+            TableConstraint::PrimaryKey(name) => {
+                let index =
+                    local_constraint_column(&columns, &statement.table, &name, "PRIMARY KEY")?;
+                match primary_key {
+                    Some(existing) if existing == index => {
+                        return Err(Error::Schema(format!(
+                            "duplicate PRIMARY KEY declaration for column {name:?}"
+                        )));
+                    }
+                    Some(_) => return Err(multiple_primary_keys(&statement.table)),
+                    None => primary_key = Some(index),
+                }
+                columns[index].nullable = false;
+            }
+            TableConstraint::ForeignKey { column, reference } => {
+                let index =
+                    local_constraint_column(&columns, &statement.table, &column, "FOREIGN KEY")?;
+                if foreign_keys
+                    .iter()
+                    .any(|foreign_key: &ForeignKey| foreign_key.column == index)
+                {
+                    return Err(Error::Schema(format!(
+                        "duplicate FOREIGN KEY declaration for column {column:?}"
+                    )));
+                }
+                foreign_keys.push(ForeignKey {
+                    column: index,
+                    referenced_table: reference.table,
+                    referenced_column: reference.column,
+                });
+            }
+        }
     }
 
     Ok(TableSchema {
@@ -58,6 +93,28 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         primary_key,
         foreign_keys,
     })
+}
+
+fn local_constraint_column(
+    columns: &[Column],
+    table: &str,
+    column: &str,
+    constraint: &str,
+) -> Result<usize> {
+    columns
+        .iter()
+        .position(|candidate| candidate.name == column)
+        .ok_or_else(|| {
+            Error::Schema(format!(
+                "{constraint} references unknown column {column:?} in table {table:?}"
+            ))
+        })
+}
+
+fn multiple_primary_keys(table: &str) -> Error {
+    Error::Schema(format!(
+        "table {table:?} may have only one PRIMARY KEY column"
+    ))
 }
 
 pub(crate) fn require_table<'a>(catalog: &'a Catalog, table: &str) -> Result<&'a TableSchema> {
@@ -216,27 +273,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_schema_retains_resolved_key_metadata() {
-        let Statement::CreateTable(statement) = sql::parse(
-            "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id))",
-        )
-        .expect("statement parses")
-        else {
+    fn create_table(sql: &str) -> crate::sql::CreateTable {
+        let Statement::CreateTable(statement) = sql::parse(sql).expect("statement parses") else {
             panic!("expected CREATE TABLE");
         };
+        statement
+    }
 
-        let schema = create_schema(&Catalog::empty(), statement).expect("schema resolves");
-        assert_eq!(schema.primary_key, Some(0));
-        assert!(!schema.columns[0].nullable);
-        assert_eq!(
-            schema.foreign_keys,
-            vec![ForeignKey {
-                column: 1,
-                referenced_table: String::from("parents"),
-                referenced_column: String::from("id"),
-            }]
-        );
+    #[test]
+    fn create_schema_normalizes_inline_and_table_key_metadata() {
+        for sql in [
+            "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id))",
+            "CREATE TABLE children (id INTEGER, parent_id INTEGER, PRIMARY KEY (id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
+        ] {
+            let schema =
+                create_schema(&Catalog::empty(), create_table(sql)).expect("schema resolves");
+            assert_eq!(schema.primary_key, Some(0));
+            assert!(!schema.columns[0].nullable);
+            assert_eq!(
+                schema.foreign_keys,
+                vec![ForeignKey {
+                    column: 1,
+                    referenced_table: String::from("parents"),
+                    referenced_column: String::from("id"),
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn create_schema_owns_table_constraint_policy() {
+        for (sql, expected) in [
+            (
+                "CREATE TABLE items (id INTEGER, PRIMARY KEY (missing))",
+                "PRIMARY KEY references unknown column \"missing\" in table \"items\"",
+            ),
+            (
+                "CREATE TABLE items (id INTEGER, FOREIGN KEY (missing) REFERENCES parents(id))",
+                "FOREIGN KEY references unknown column \"missing\" in table \"items\"",
+            ),
+            (
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, PRIMARY KEY (id))",
+                "duplicate PRIMARY KEY declaration for column \"id\"",
+            ),
+            (
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, other INTEGER, PRIMARY KEY (other))",
+                "table \"items\" may have only one PRIMARY KEY column",
+            ),
+            (
+                "CREATE TABLE items (id INTEGER, parent_id INTEGER REFERENCES parents(id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
+                "duplicate FOREIGN KEY declaration for column \"parent_id\"",
+            ),
+        ] {
+            assert!(matches!(
+                create_schema(&Catalog::empty(), create_table(sql)),
+                Err(Error::Schema(ref message)) if message == expected
+            ));
+        }
     }
 
     #[test]

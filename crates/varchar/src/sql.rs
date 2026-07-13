@@ -8,7 +8,7 @@ use crate::Result;
 
 pub(crate) use ast::{
     Assignment, CreateTable, Delete, Insert, Predicate, PredicateOperator, Projection, Select,
-    Statement, Update,
+    Statement, TableConstraint, Update,
 };
 
 pub(crate) fn parse(input: &str) -> Result<Statement> {

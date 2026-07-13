@@ -160,6 +160,8 @@ fn invalid_key_definitions_are_rejected_without_mutating() {
         "CREATE TABLE non_key_target (parent_code INTEGER REFERENCES parents(code))",
         "CREATE TABLE wrong_type (parent_id TEXT REFERENCES parents(id))",
         "CREATE TABLE missing_local (id INTEGER, PRIMARY KEY (absent))",
+        "CREATE TABLE duplicate_key (id INTEGER PRIMARY KEY, PRIMARY KEY (id))",
+        "CREATE TABLE duplicate_reference (id INTEGER, parent_id INTEGER REFERENCES parents(id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
     ] {
         assert!(
             matches!(expect_atomic_error(&mut database, sql), Error::Schema(_)),
