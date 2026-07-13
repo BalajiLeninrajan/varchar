@@ -5,8 +5,8 @@ use fancy_regex::{Error as FancyError, RuntimeError};
 use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::ResolvedJoinCondition;
-use crate::storage::{self, Candidate};
-use crate::{ColumnOrigin, Error, Result, ResultColumn, RowSet, Value};
+use crate::storage::{self, Candidate, RowRecordRef};
+use crate::{ColumnOrigin, Error, Resource, Result, ResultColumn, RowSet, Value};
 
 pub(super) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     if plan.sources.len() == 1 {
@@ -22,20 +22,26 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
         .first()
         .expect("a SELECT plan always has a root source");
     let layout = source.row_layout();
-    let mut result_bytes = std::mem::size_of::<RowSet>();
-    check_limit(result_bytes, limits.max_result_bytes, "result bytes")?;
-    let columns = materialize_result_columns(plan, &mut result_bytes, limits)?;
+    let mut output_budget =
+        ByteBudget::new(limits.max_query_output_bytes(), Resource::QueryOutputBytes);
+    output_budget.charge(std::mem::size_of::<RowSet>())?;
+    let columns = materialize_result_columns(plan, &mut output_budget)?;
+    let working_budget = ByteBudget::new(
+        limits.max_query_working_bytes(),
+        Resource::QueryWorkingBytes,
+    );
 
     let mut rows = Vec::new();
-    let row_structure = row_structure_charge(plan.projection.len(), limits)?;
+    let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
         let row_record = storage::row_record(matched.as_str(), matched.start())?;
-        let structural_total = result_bytes
-            .checked_add(row_structure)
-            .ok_or_else(|| result_limit_error(limits))?;
-        check_limit(structural_total, limits.max_result_bytes, "result bytes")?;
+        working_budget.check_transient(decoded_row_charge(
+            &row_record,
+            source.columns.len(),
+            &working_budget,
+        )?)?;
 
         let decoded = storage::decode_row(&row_record, layout)?;
         let payload_bytes = plan
@@ -45,20 +51,20 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
                 debug_assert_eq!(location.source, 0);
                 total
                     .checked_add(value_payload_size(&decoded[location.column]))
-                    .ok_or_else(|| result_limit_error(limits))
+                    .ok_or_else(|| output_budget.limit_error())
             })?;
         let row_charge = row_structure
             .checked_add(payload_bytes)
-            .ok_or_else(|| result_limit_error(limits))?;
-        charge_result(&mut result_bytes, row_charge, limits)?;
+            .ok_or_else(|| output_budget.limit_error())?;
+        output_budget.charge(row_charge)?;
 
         rows.try_reserve(1)
-            .map_err(|_| result_limit_error(limits))?;
+            .map_err(|_| allocation_error("reserving query result rows"))?;
         let mut row = Vec::new();
         row.try_reserve_exact(plan.projection.len())
-            .map_err(|_| result_limit_error(limits))?;
+            .map_err(|_| allocation_error("reserving query result values"))?;
         for location in &plan.projection {
-            row.push(clone_result_value(&decoded[location.column], limits)?);
+            row.push(clone_result_value(&decoded[location.column])?);
         }
         rows.push(row);
     }
@@ -67,20 +73,25 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
 }
 
 fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
-    let mut result_bytes = std::mem::size_of::<RowSet>();
-    check_limit(result_bytes, limits.max_result_bytes, "result bytes")?;
-    let columns = materialize_result_columns(plan, &mut result_bytes, limits)?;
+    let mut output_budget =
+        ByteBudget::new(limits.max_query_output_bytes(), Resource::QueryOutputBytes);
+    output_budget.charge(std::mem::size_of::<RowSet>())?;
+    let columns = materialize_result_columns(plan, &mut output_budget)?;
 
+    let mut working_budget = ByteBudget::new(
+        limits.max_query_working_bytes(),
+        Resource::QueryWorkingBytes,
+    );
     let source_slots = plan
         .sources
         .len()
         .checked_mul(std::mem::size_of::<Vec<Vec<Value>>>())
-        .ok_or_else(|| result_limit_error(limits))?;
-    charge_result(&mut result_bytes, source_slots, limits)?;
+        .ok_or_else(|| working_budget.limit_error())?;
+    working_budget.charge(source_slots)?;
     let mut source_rows = Vec::new();
     source_rows
         .try_reserve_exact(plan.sources.len())
-        .map_err(|_| result_limit_error(limits))?;
+        .map_err(|_| allocation_error("reserving JOIN source buckets"))?;
     source_rows.resize_with(plan.sources.len(), Vec::new);
 
     for matched in plan.regex.find_iter(blob) {
@@ -93,20 +104,13 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
             .position(|source| source.name == table)
             .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
         let source = &plan.sources[source_index];
+        let retained_row_charge =
+            decoded_row_charge(&row_record, source.columns.len(), &working_budget)?;
+        working_budget.charge(retained_row_charge)?;
         let decoded = storage::decode_row(&row_record, source.row_layout())?;
-        let structure = row_structure_charge(decoded.len(), limits)?;
-        let payload = decoded.iter().try_fold(0_usize, |total, value| {
-            total
-                .checked_add(value_allocation_size(value))
-                .ok_or_else(|| result_limit_error(limits))
-        })?;
-        let charge = structure
-            .checked_add(payload)
-            .ok_or_else(|| result_limit_error(limits))?;
-        charge_result(&mut result_bytes, charge, limits)?;
         source_rows[source_index]
             .try_reserve(1)
-            .map_err(|_| result_limit_error(limits))?;
+            .map_err(|_| allocation_error("retaining decoded JOIN rows"))?;
         source_rows[source_index].push(decoded);
     }
 
@@ -114,18 +118,18 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
         .sources
         .len()
         .checked_mul(std::mem::size_of::<&[Value]>())
-        .ok_or_else(|| result_limit_error(limits))?;
-    charge_result(&mut result_bytes, chosen_slots, limits)?;
+        .ok_or_else(|| working_budget.limit_error())?;
+    working_budget.charge(chosen_slots)?;
     let mut chosen = Vec::new();
     chosen
         .try_reserve_exact(plan.sources.len())
-        .map_err(|_| result_limit_error(limits))?;
+        .map_err(|_| allocation_error("reserving the chosen JOIN row stack"))?;
     let mut rows = Vec::new();
-    let row_structure = row_structure_charge(plan.projection.len(), limits)?;
+    let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
     let mut output = JoinOutput {
         plan,
         rows: &mut rows,
-        result_bytes: &mut result_bytes,
+        output_budget: &mut output_budget,
         join_steps: 0,
         row_structure,
         limits,
@@ -138,7 +142,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
 struct JoinOutput<'a, 'catalog> {
     plan: &'a SelectPlan<'catalog>,
     rows: &'a mut Vec<Vec<Value>>,
-    result_bytes: &'a mut usize,
+    output_budget: &'a mut ByteBudget,
     join_steps: usize,
     row_structure: usize,
     limits: &'a Limits,
@@ -160,25 +164,24 @@ fn emit_join_rows<'rows>(
                     .checked_add(value_payload_size(
                         &chosen[location.source][location.column],
                     ))
-                    .ok_or_else(|| result_limit_error(output.limits))
+                    .ok_or_else(|| output.output_budget.limit_error())
             })?;
         let charge = output
             .row_structure
             .checked_add(payload)
-            .ok_or_else(|| result_limit_error(output.limits))?;
-        charge_result(output.result_bytes, charge, output.limits)?;
+            .ok_or_else(|| output.output_budget.limit_error())?;
+        output.output_budget.charge(charge)?;
 
         output
             .rows
             .try_reserve(1)
-            .map_err(|_| result_limit_error(output.limits))?;
+            .map_err(|_| allocation_error("reserving query result rows"))?;
         let mut row = Vec::new();
         row.try_reserve_exact(output.plan.projection.len())
-            .map_err(|_| result_limit_error(output.limits))?;
+            .map_err(|_| allocation_error("reserving query result values"))?;
         for location in &output.plan.projection {
             row.push(clone_result_value(
                 &chosen[location.source][location.column],
-                output.limits,
             )?);
         }
         output.rows.push(row);
@@ -221,19 +224,13 @@ fn join_conditions_match(
                 .len()
                 .min(right.len())
                 .checked_add(1)
-                .ok_or(Error::ResourceLimit {
-                resource: "JOIN execution steps",
-                limit: limits.max_join_steps,
-            })?,
+                .ok_or_else(|| join_limit_error(limits))?,
             _ => 1,
         };
         *join_steps = join_steps
             .checked_add(comparison_cost)
-            .ok_or(Error::ResourceLimit {
-                resource: "JOIN execution steps",
-                limit: limits.max_join_steps,
-            })?;
-        check_limit(*join_steps, limits.max_join_steps, "JOIN execution steps")?;
+            .ok_or_else(|| join_limit_error(limits))?;
+        check_limit(*join_steps, limits.max_join_steps(), Resource::JoinSteps)?;
         if matches!(left, Value::Null) || matches!(right, Value::Null) || left != right {
             return Ok(false);
         }
@@ -243,26 +240,28 @@ fn join_conditions_match(
 
 fn materialize_result_columns(
     plan: &SelectPlan<'_>,
-    result_bytes: &mut usize,
-    limits: &Limits,
+    output_budget: &mut ByteBudget,
 ) -> Result<Vec<ResultColumn>> {
     let column_slots = plan
         .projection
         .len()
         .checked_mul(std::mem::size_of::<ResultColumn>())
-        .ok_or_else(|| result_limit_error(limits))?;
-    charge_result(result_bytes, column_slots, limits)?;
+        .ok_or_else(|| output_budget.limit_error())?;
+    output_budget.charge(column_slots)?;
 
     let mut columns = Vec::new();
     columns
         .try_reserve_exact(plan.projection.len())
-        .map_err(|_| result_limit_error(limits))?;
+        .map_err(|_| allocation_error("reserving query result columns"))?;
     for location in &plan.projection {
         let source = &plan.sources[location.source];
         let column = &source.columns[location.column];
-        let label = clone_result_string(&column.name, result_bytes, limits)?;
-        let table = clone_result_string(&source.name, result_bytes, limits)?;
-        let source_column = clone_result_string(&column.name, result_bytes, limits)?;
+        output_budget.charge(column.name.len())?;
+        let label = clone_result_string(&column.name)?;
+        output_budget.charge(source.name.len())?;
+        let table = clone_result_string(&source.name)?;
+        output_budget.charge(column.name.len())?;
+        let source_column = clone_result_string(&column.name)?;
         columns.push(ResultColumn::new(
             label,
             ColumnOrigin::new(table, source_column),
@@ -273,18 +272,29 @@ fn materialize_result_columns(
     Ok(columns)
 }
 
-fn row_structure_charge(column_count: usize, limits: &Limits) -> Result<usize> {
+fn row_structure_charge(column_count: usize, budget: &ByteBudget) -> Result<usize> {
     let value_slots = column_count
         .checked_mul(std::mem::size_of::<Value>())
-        .ok_or_else(|| result_limit_error(limits))?;
-    // Vec growth may reserve more outer row slots than are immediately used. Charging
-    // four row descriptors per row keeps the byte budget conservative.
+        .ok_or_else(|| budget.limit_error())?;
+    // `Vec::try_reserve(1)` may grow the outer row vector geometrically. Keep
+    // the existing four-descriptor charge so the logical byte budget remains
+    // conservative even when capacity is larger than the current row count.
     let row_descriptors = std::mem::size_of::<Vec<Value>>()
         .checked_mul(4)
-        .ok_or_else(|| result_limit_error(limits))?;
+        .ok_or_else(|| budget.limit_error())?;
     row_descriptors
         .checked_add(value_slots)
-        .ok_or_else(|| result_limit_error(limits))
+        .ok_or_else(|| budget.limit_error())
+}
+
+fn decoded_row_charge(
+    row: &RowRecordRef<'_>,
+    column_count: usize,
+    budget: &ByteBudget,
+) -> Result<usize> {
+    row_structure_charge(column_count, budget)?
+        .checked_add(row.range().len())
+        .ok_or_else(|| budget.limit_error())
 }
 
 pub(super) fn rewrite_matching_rows<F>(
@@ -306,9 +316,8 @@ where
         let values = storage::decode_row(&row_record, layout)?;
         let replacement = rewrite(values)?;
         candidate.rewrite_row(row_record.range(), layout, replacement.as_deref())?;
-        affected = affected.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "affected rows",
-            limit: usize::MAX,
+        affected = affected.checked_add(1).ok_or(Error::Capacity {
+            operation: "counting affected rows",
         })?;
     }
     Ok(affected)
@@ -321,61 +330,122 @@ fn value_payload_size(value: &Value) -> usize {
     }
 }
 
-fn value_allocation_size(value: &Value) -> usize {
+fn clone_result_value(value: &Value) -> Result<Value> {
     match value {
-        Value::Text(value) => value.capacity(),
-        Value::Integer(_) | Value::Boolean(_) | Value::Null => 0,
-    }
-}
-
-fn clone_result_value(value: &Value, limits: &Limits) -> Result<Value> {
-    match value {
-        Value::Text(value) => {
-            let mut cloned = String::new();
-            cloned
-                .try_reserve_exact(value.len())
-                .map_err(|_| result_limit_error(limits))?;
-            cloned.push_str(value);
-            Ok(Value::Text(cloned))
-        }
+        Value::Text(value) => Ok(Value::Text(clone_result_string(value)?)),
         Value::Integer(value) => Ok(Value::Integer(*value)),
         Value::Boolean(value) => Ok(Value::Boolean(*value)),
         Value::Null => Ok(Value::Null),
     }
 }
 
-fn clone_result_string(value: &str, result_bytes: &mut usize, limits: &Limits) -> Result<String> {
-    charge_result(result_bytes, value.len(), limits)?;
+fn clone_result_string(value: &str) -> Result<String> {
     let mut cloned = String::new();
     cloned
         .try_reserve_exact(value.len())
-        .map_err(|_| result_limit_error(limits))?;
+        .map_err(|_| allocation_error("cloning query output text"))?;
     cloned.push_str(value);
     Ok(cloned)
 }
 
-fn charge_result(total: &mut usize, amount: usize, limits: &Limits) -> Result<()> {
-    *total = total
-        .checked_add(amount)
-        .ok_or_else(|| result_limit_error(limits))?;
-    check_limit(*total, limits.max_result_bytes, "result bytes")
+struct ByteBudget {
+    used: usize,
+    limit: usize,
+    resource: Resource,
 }
 
-fn result_limit_error(limits: &Limits) -> Error {
+impl ByteBudget {
+    const fn new(limit: usize, resource: Resource) -> Self {
+        Self {
+            used: 0,
+            limit,
+            resource,
+        }
+    }
+
+    fn charge(&mut self, amount: usize) -> Result<()> {
+        let next = self
+            .used
+            .checked_add(amount)
+            .ok_or_else(|| self.limit_error())?;
+        check_limit(next, self.limit, self.resource)?;
+        self.used = next;
+        Ok(())
+    }
+
+    fn check_transient(&self, amount: usize) -> Result<()> {
+        let peak = self
+            .used
+            .checked_add(amount)
+            .ok_or_else(|| self.limit_error())?;
+        check_limit(peak, self.limit, self.resource)
+    }
+
+    const fn limit_error(&self) -> Error {
+        Error::ResourceLimit {
+            resource: self.resource,
+            limit: self.limit,
+        }
+    }
+}
+
+const fn allocation_error(operation: &'static str) -> Error {
+    Error::Allocation { operation }
+}
+
+const fn join_limit_error(limits: &Limits) -> Error {
     Error::ResourceLimit {
-        resource: "result bytes",
-        limit: limits.max_result_bytes,
+        resource: Resource::JoinSteps,
+        limit: limits.max_join_steps(),
     }
 }
 
 fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
     match error {
-        FancyError::RuntimeError(
-            RuntimeError::BacktrackLimitExceeded | RuntimeError::StackOverflow,
-        ) => Error::ResourceLimit {
-            resource: "regex execution steps",
-            limit: limits.regex_backtrack_limit,
+        FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded) => Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: limits.regex_backtrack_limit(),
         },
         other => Error::RegexRuntime(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ByteBudget;
+    use crate::{Error, Resource};
+
+    #[test]
+    fn byte_budget_accepts_its_exact_bound_and_rejects_one_more_byte() {
+        let mut budget = ByteBudget::new(10, Resource::QueryOutputBytes);
+
+        budget.charge(4).expect("partial charge fits");
+        budget.charge(6).expect("exact bound fits");
+        assert!(matches!(
+            budget.charge(1),
+            Err(Error::ResourceLimit {
+                resource: Resource::QueryOutputBytes,
+                limit: 10,
+            })
+        ));
+        assert_eq!(budget.used, 10, "a rejected charge is not committed");
+    }
+
+    #[test]
+    fn transient_budget_checks_use_the_same_exact_boundary() {
+        let mut budget = ByteBudget::new(10, Resource::QueryWorkingBytes);
+        budget.charge(4).expect("retained working bytes fit");
+
+        budget
+            .check_transient(6)
+            .expect("an exact transient peak fits");
+        assert!(matches!(
+            budget.check_transient(7),
+            Err(Error::ResourceLimit {
+                resource: Resource::QueryWorkingBytes,
+                limit: 10,
+            })
+        ));
+        assert_eq!(budget.used, 4, "transient checks do not retain a charge");
     }
 }

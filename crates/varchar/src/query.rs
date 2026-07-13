@@ -9,7 +9,7 @@ use crate::limits::{Limits, check_limit};
 use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Candidate, Catalog, TableSchema};
-use crate::{ColumnOrigin, Result, ResultColumn, RowSet, Value};
+use crate::{ColumnOrigin, Resource, Result, ResultColumn, RowSet, Value};
 
 /// An explanation of the source-row scan produced for a `SELECT`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,8 +95,8 @@ pub(crate) fn compile_select<'catalog>(
     let resolved = resolve::select(
         catalog,
         statement,
-        limits.max_join_sources,
-        limits.max_predicates,
+        limits.max_join_sources(),
+        limits.max_predicates(),
     )?;
     compile::select(resolved, limits)
 }
@@ -106,7 +106,11 @@ pub(crate) fn compile_scan<'catalog>(
     predicates: &[Predicate],
     limits: &Limits,
 ) -> Result<ScanPlan<'catalog>> {
-    check_limit(predicates.len(), limits.max_predicates, "WHERE predicates")?;
+    check_limit(
+        predicates.len(),
+        limits.max_predicates(),
+        Resource::WherePredicates,
+    )?;
     let resolved = predicates
         .iter()
         .map(|predicate| resolve::predicate(schema, predicate));

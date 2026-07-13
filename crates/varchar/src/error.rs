@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::Resource;
+
 /// A half-open byte range in the SQL input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -49,11 +51,14 @@ pub enum Error {
     #[error("regex execution failed: {0}")]
     RegexRuntime(String),
 
+    #[error("allocation failed while {operation}")]
+    Allocation { operation: &'static str },
+
+    #[error("capacity exceeded while {operation}")]
+    Capacity { operation: &'static str },
+
     #[error("resource limit exceeded for {resource} (limit: {limit})")]
-    ResourceLimit {
-        resource: &'static str,
-        limit: usize,
-    },
+    ResourceLimit { resource: Resource, limit: usize },
 }
 
 impl Error {

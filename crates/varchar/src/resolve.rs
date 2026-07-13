@@ -351,12 +351,17 @@ pub(crate) fn select<'catalog, 'statement>(
         .len()
         .checked_add(1)
         .ok_or(Error::ResourceLimit {
-            resource: "JOIN sources",
+            resource: crate::Resource::JoinSources,
             limit: max_join_sources,
         })?;
-    check_limit(source_count, max_join_sources, "JOIN sources")?;
+    check_limit(source_count, max_join_sources, crate::Resource::JoinSources)?;
 
-    let mut sources = Vec::with_capacity(source_count);
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(source_count)
+        .map_err(|_| Error::Allocation {
+            operation: "reserving resolved JOIN sources",
+        })?;
     sources.push(require_table(catalog, &statement.table)?);
     for join in &statement.joins {
         if sources.iter().any(|schema| schema.name == join.table) {
@@ -373,7 +378,7 @@ pub(crate) fn select<'catalog, 'statement>(
     check_limit(
         statement.predicates.len(),
         max_predicates,
-        "WHERE predicates",
+        crate::Resource::WherePredicates,
     )?;
     let predicates = statement
         .predicates

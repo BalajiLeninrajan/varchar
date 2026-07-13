@@ -197,9 +197,6 @@ pub(super) fn corrupt(offset: usize, message: impl Into<String>) -> Error {
     }
 }
 
-pub(super) fn allocation_limit(resource: &'static str, attempted: usize) -> Error {
-    Error::ResourceLimit {
-        resource,
-        limit: attempted,
-    }
+pub(super) fn allocation_error(operation: &'static str) -> Error {
+    Error::Allocation { operation }
 }

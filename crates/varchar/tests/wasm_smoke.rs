@@ -1,6 +1,6 @@
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
-use varchar::{Database, Error, Limits, Outcome, Value};
+use varchar::{Database, Error, Limits, Outcome, Resource, Value};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn rows(outcome: Outcome) -> Vec<Vec<Value>> {
@@ -71,15 +71,15 @@ fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
         Err(Error::CorruptStorage { .. })
     ));
 
-    let limits = Limits {
-        max_sql_bytes: 4,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_sql_bytes(4);
     let mut database = Database::with_limits(limits);
     let before = database.as_str().to_owned();
     assert!(matches!(
         database.execute("CREATE TABLE t (id INTEGER)"),
-        Err(Error::ResourceLimit { limit: 4, .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::SqlBytes,
+            limit: 4,
+        })
     ));
     assert_eq!(database.as_str(), before);
 }

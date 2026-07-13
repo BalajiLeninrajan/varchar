@@ -7,7 +7,7 @@ use crate::query::{self, SelectPlan};
 use crate::resolve;
 use crate::sql::{self, CreateTable, Delete, Insert, Select, Statement, Update};
 use crate::storage;
-use crate::{Error, ExplainPlan, Outcome, Result, Span};
+use crate::{Error, ExplainPlan, Outcome, Resource, Result, Span};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
@@ -55,7 +55,11 @@ impl Database {
 
     /// Validate and load a database string with caller-supplied limits.
     pub fn from_string_with_limits(blob: String, limits: Limits) -> Result<Self> {
-        check_limit(blob.len(), limits.max_database_bytes, "database bytes")?;
+        check_limit(
+            blob.len(),
+            limits.max_database_bytes(),
+            Resource::DatabaseBytes,
+        )?;
         let storage = storage::StorageState::load(blob)?;
         Ok(Self { storage, limits })
     }
@@ -114,16 +118,16 @@ impl Database {
     fn check_request(&self, sql: &str) -> Result<()> {
         check_limit(
             self.storage.as_str().len(),
-            self.limits.max_database_bytes,
-            "database bytes",
+            self.limits.max_database_bytes(),
+            Resource::DatabaseBytes,
         )?;
-        check_limit(sql.len(), self.limits.max_sql_bytes, "SQL bytes")
+        check_limit(sql.len(), self.limits.max_sql_bytes(), Resource::SqlBytes)
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
         let resolved = resolve::create_schema(self.storage.catalog(), statement)?;
         let table = resolved.schema.name.clone();
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes())?;
         candidate.insert_schema_with_auto_increment(&resolved.schema, resolved.auto_increment)?;
         let next = candidate.finish()?;
         self.storage = next;
@@ -135,7 +139,7 @@ impl Database {
         let auto_increment = self.storage.catalog().auto_increment(&statement.table);
         let resolved =
             resolve::insert_values(schema, auto_increment, statement.columns, statement.values)?;
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes())?;
         if let Some(last) = resolved.next_auto_increment {
             candidate.advance_auto_increment(&statement.table, last)?;
         }
@@ -150,7 +154,7 @@ impl Database {
         let auto_increment = self.storage.catalog().auto_increment(&statement.table);
         let assignments = resolve::assignments(schema, auto_increment, &statement.assignments)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes())?;
         if let Some(last) = assignments.next_auto_increment {
             candidate.advance_auto_increment(&statement.table, last)?;
         }
@@ -171,7 +175,7 @@ impl Database {
     fn execute_delete(&mut self, statement: Delete) -> Result<Outcome> {
         let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes())?;
         let affected =
             query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |_| Ok(None))?;
         if affected > 0 {

@@ -4,7 +4,7 @@ use super::RowLayout;
 use super::encode::encode_cell;
 use super::format::{ROW_PREFIX, encode_text_into};
 use crate::limits::check_limit;
-use crate::{Column, DataType, Error, Result, Value};
+use crate::{Column, DataType, Error, Resource, Result, Value};
 
 const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
@@ -193,15 +193,14 @@ impl PatternBuilder {
                 .len()
                 .checked_add(fragment.len())
                 .ok_or(Error::ResourceLimit {
-                    resource: "generated regex bytes",
+                    resource: Resource::GeneratedRegexBytes,
                     limit: self.limit,
                 })?;
-        check_limit(new_len, self.limit, "generated regex bytes")?;
+        check_limit(new_len, self.limit, Resource::GeneratedRegexBytes)?;
         self.pattern
             .try_reserve(fragment.len())
-            .map_err(|_| Error::ResourceLimit {
-                resource: "generated regex bytes",
-                limit: self.limit,
+            .map_err(|_| Error::Allocation {
+                operation: "building a generated regex",
             })?;
         self.pattern.push_str(fragment);
         Ok(())

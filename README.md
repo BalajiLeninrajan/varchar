@@ -165,7 +165,7 @@ Use `Database::from_string` to validate and reopen a persisted blob. Errors dist
 
 ## WebAssembly
 
-The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies bounded input, pattern, result, join-execution, and regex-execution limits suitable for 32-bit WebAssembly memory.
+The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies configured limits to inputs, generated patterns, logical `SELECT` working/output charges, join execution, and regex backtracking.
 
 There is no public JavaScript/WASM package in v1. A future browser adapter can pass the complete blob into the same core, execute one statement per call, and persist the returned blob in a browser-owned store. A future WASI adapter can provide capability-based persistence separately.
 
@@ -176,7 +176,7 @@ The punchline is also the performance model:
 - Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use bounded-memory nested loops whose work can grow to the product of participating row counts.
 - Plain inserts append a row after validation. Inserts or updates that advance an auto-increment key also rewrite its persisted high-water record and are **O(n)**; updates and deletes rebuild the string and are **O(n)**.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, materialized results, join execution work, and regex backtracking are bounded. Limit failures return no partial result or mutation.
+- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows plus rows and pointer state retained for joins, while the output budget charges result metadata and projected rows. These are accounting limits, not a total query or process memory envelope; they exclude planning allocations, regex-engine scratch space, the catalog and authoritative string, allocator overhead and spare capacity, and mutation candidates. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 

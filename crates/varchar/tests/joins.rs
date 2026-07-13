@@ -1,7 +1,7 @@
 #![cfg(not(target_family = "wasm"))]
 
 use varchar::{
-    ColumnOrigin, DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value,
+    ColumnOrigin, DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value,
 };
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
@@ -618,7 +618,7 @@ fn joins_work_after_reloading_the_authoritative_string() {
 }
 
 #[test]
-fn join_fanout_obeys_the_result_byte_limit() {
+fn join_fanout_obeys_the_query_output_byte_limit() {
     let mut database = Database::new();
     execute(&mut database, "CREATE TABLE left_rows (join_key INTEGER)");
     execute(&mut database, "CREATE TABLE right_rows (join_key INTEGER)");
@@ -627,10 +627,7 @@ fn join_fanout_obeys_the_result_byte_limit() {
         execute(&mut database, "INSERT INTO right_rows VALUES (1)");
     }
     let blob = database.into_string();
-    let limits = Limits {
-        max_result_bytes: 256,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_query_output_bytes(256);
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
@@ -640,7 +637,7 @@ fn join_fanout_obeys_the_result_byte_limit() {
              ON left_rows.join_key = right_rows.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "result bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 256
         })
     ));
@@ -653,17 +650,14 @@ fn join_source_count_has_its_own_limit() {
     execute(&mut database, "CREATE TABLE a (id INTEGER NOT NULL)");
     execute(&mut database, "CREATE TABLE b (id INTEGER NOT NULL)");
     let blob = database.into_string();
-    let limits = Limits {
-        max_join_sources: 1,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_join_sources(1);
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
     assert!(matches!(
         limited.execute("SELECT * FROM a JOIN b ON a.id = b.id"),
         Err(Error::ResourceLimit {
-            resource: "JOIN sources",
+            resource: Resource::JoinSources,
             limit: 1,
         })
     ));
@@ -682,10 +676,7 @@ fn nonmatching_join_fanout_obeys_the_combination_limit() {
         execute(&mut database, "INSERT INTO c VALUES (2)");
     }
     let blob = database.into_string();
-    let limits = Limits {
-        max_join_steps: 100,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_join_steps(100);
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
@@ -696,7 +687,7 @@ fn nonmatching_join_fanout_obeys_the_combination_limit() {
              JOIN c ON b.join_key = c.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
+            resource: Resource::JoinSteps,
             limit: 100
         })
     ));
@@ -713,10 +704,7 @@ fn each_join_condition_evaluation_consumes_the_work_budget() {
         execute(&mut database, "INSERT INTO b VALUES (1)");
     }
     let blob = database.into_string();
-    let limits = Limits {
-        max_join_steps: 50,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_join_steps(50);
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
@@ -727,7 +715,7 @@ fn each_join_condition_evaluation_consumes_the_work_budget() {
              AND a.join_key = b.join_key AND a.join_key = b.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
+            resource: Resource::JoinSteps,
             limit: 50
         })
     ));
@@ -735,7 +723,7 @@ fn each_join_condition_evaluation_consumes_the_work_budget() {
 }
 
 #[test]
-fn escaped_text_workspace_obeys_the_result_byte_limit() {
+fn nonmatching_join_separates_working_memory_from_output_memory() {
     let mut database = Database::new();
     execute(
         &mut database,
@@ -754,21 +742,56 @@ fn escaped_text_workspace_obeys_the_result_byte_limit() {
     }
     execute(&mut database, "INSERT INTO right_rows VALUES (2)");
     let blob = database.into_string();
-    let limits = Limits {
-        max_result_bytes: 8_000,
-        ..Limits::default()
-    };
+    let sql = "SELECT left_rows.join_key FROM left_rows JOIN right_rows \
+               ON left_rows.join_key = right_rows.join_key";
+
+    let output_limited = Limits::default().with_max_query_output_bytes(256);
+    let mut succeeds =
+        Database::from_string_with_limits(blob.clone(), output_limited).expect("fixture reloads");
+    let outcome = succeeds
+        .execute(sql)
+        .expect("empty output fits its independent budget");
+    assert!(matches!(outcome, Outcome::Rows(ref rows) if rows.rows().is_empty()));
+    assert_eq!(succeeds.as_str(), blob);
+
+    let working_limited = Limits::default()
+        .with_max_query_output_bytes(256)
+        .with_max_query_working_bytes(8_000);
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), working_limited).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute(sql),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryWorkingBytes,
+            limit: 8_000
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn single_table_scan_charges_large_unprojected_values_to_working_memory() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE records (id INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    let payload = "x".repeat(4_096);
+    execute(
+        &mut database,
+        &format!("INSERT INTO records VALUES (1, '{payload}')"),
+    );
+    let blob = database.into_string();
+    let limits = Limits::default().with_max_query_working_bytes(512);
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
     assert!(matches!(
-        limited.execute(
-            "SELECT left_rows.join_key FROM left_rows JOIN right_rows \
-             ON left_rows.join_key = right_rows.join_key"
-        ),
+        limited.execute("SELECT id FROM records"),
         Err(Error::ResourceLimit {
-            resource: "result bytes",
-            limit: 8_000
+            resource: Resource::QueryWorkingBytes,
+            limit: 512,
         })
     ));
     assert_eq!(limited.as_str(), blob);

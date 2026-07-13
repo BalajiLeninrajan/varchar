@@ -6,7 +6,7 @@ use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::{LikeAtom, ResolvedPredicate, ResolvedSelect};
 use crate::storage::{self, RowPredicatePattern, TableSchema, TextPatternAtom};
-use crate::{Error, Result};
+use crate::{Error, Resource, Result};
 
 pub(super) fn select<'catalog>(
     resolved: ResolvedSelect<'catalog, '_>,
@@ -19,7 +19,12 @@ pub(super) fn select<'catalog>(
         predicates,
     } = resolved;
 
-    let mut predicates_by_source = Vec::with_capacity(sources.len());
+    let mut predicates_by_source = Vec::new();
+    predicates_by_source
+        .try_reserve_exact(sources.len())
+        .map_err(|_| Error::Allocation {
+            operation: "reserving query predicate buckets",
+        })?;
     predicates_by_source.resize_with(sources.len(), Vec::new);
     for resolved in predicates {
         let compiled = compile_predicate(sources[resolved.source], resolved.predicate, limits)?;
@@ -30,7 +35,7 @@ pub(super) fn select<'catalog>(
         storage::row_scan_pattern(
             sources[0].row_layout(),
             &predicates_by_source[0],
-            limits.max_pattern_bytes,
+            limits.max_pattern_bytes(),
         )?
     } else {
         alternate_source_patterns(
@@ -41,10 +46,10 @@ pub(super) fn select<'catalog>(
                     storage::row_scan_pattern(
                         schema.row_layout(),
                         predicates,
-                        limits.max_pattern_bytes,
+                        limits.max_pattern_bytes(),
                     )
                 }),
-            limits.max_pattern_bytes,
+            limits.max_pattern_bytes(),
         )?
     };
     let regex = build_regex(&pattern, limits)?;
@@ -64,7 +69,7 @@ pub(super) fn scan<'catalog, 'statement>(
 ) -> Result<ScanPlan<'catalog>> {
     let predicates = compile_predicates(schema, predicates, limits)?;
     let pattern =
-        storage::row_scan_pattern(schema.row_layout(), &predicates, limits.max_pattern_bytes)?;
+        storage::row_scan_pattern(schema.row_layout(), &predicates, limits.max_pattern_bytes())?;
     // Compile eagerly so public planning never returns an unusable pattern.
     let regex = build_regex(&pattern, limits)?;
     Ok(ScanPlan { regex, schema })
@@ -99,7 +104,7 @@ fn compile_predicate(
                 LikeAtom::AnyScalar => TextPatternAtom::AnyScalar,
                 LikeAtom::Literal(character) => TextPatternAtom::Literal(character),
             }),
-            limits.max_pattern_bytes,
+            limits.max_pattern_bytes(),
         ),
         ResolvedPredicate::IsNull { column } => Ok(RowPredicatePattern::is_null(column)),
         ResolvedPredicate::IsNotNull { column } => Ok(RowPredicatePattern::is_not_null(column)),
@@ -110,11 +115,11 @@ fn alternate_source_patterns(
     patterns: impl IntoIterator<Item = Result<String>>,
     max_pattern_bytes: usize,
 ) -> Result<String> {
-    check_limit(3, max_pattern_bytes, "generated regex bytes")?;
+    check_limit(3, max_pattern_bytes, Resource::GeneratedRegexBytes)?;
     let mut combined = String::new();
     combined
         .try_reserve_exact(3)
-        .map_err(|_| pattern_limit_error(max_pattern_bytes))?;
+        .map_err(|_| pattern_allocation_error())?;
     combined.push_str("(?:");
     for (index, pattern) in patterns.into_iter().enumerate() {
         let pattern = pattern?;
@@ -126,10 +131,10 @@ fn alternate_source_patterns(
             .len()
             .checked_add(additional)
             .ok_or_else(|| pattern_limit_error(max_pattern_bytes))?;
-        check_limit(next_len, max_pattern_bytes, "generated regex bytes")?;
+        check_limit(next_len, max_pattern_bytes, Resource::GeneratedRegexBytes)?;
         combined
             .try_reserve(additional)
-            .map_err(|_| pattern_limit_error(max_pattern_bytes))?;
+            .map_err(|_| pattern_allocation_error())?;
         if index > 0 {
             combined.push('|');
         }
@@ -139,17 +144,23 @@ fn alternate_source_patterns(
         .len()
         .checked_add(1)
         .ok_or_else(|| pattern_limit_error(max_pattern_bytes))?;
-    check_limit(final_len, max_pattern_bytes, "generated regex bytes")?;
+    check_limit(final_len, max_pattern_bytes, Resource::GeneratedRegexBytes)?;
     combined
         .try_reserve(1)
-        .map_err(|_| pattern_limit_error(max_pattern_bytes))?;
+        .map_err(|_| pattern_allocation_error())?;
     combined.push(')');
     Ok(combined)
 }
 
-fn pattern_limit_error(limit: usize) -> Error {
+fn pattern_allocation_error() -> Error {
+    Error::Allocation {
+        operation: "building a generated regex",
+    }
+}
+
+const fn pattern_limit_error(limit: usize) -> Error {
     Error::ResourceLimit {
-        resource: "generated regex bytes",
+        resource: Resource::GeneratedRegexBytes,
         limit,
     }
 }
@@ -157,8 +168,8 @@ fn pattern_limit_error(limit: usize) -> Error {
 pub(super) fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
     let mut builder = RegexBuilder::new(pattern);
     builder
-        .backtrack_limit(limits.regex_backtrack_limit)
-        .delegate_size_limit(limits.max_pattern_bytes);
+        .backtrack_limit(limits.regex_backtrack_limit())
+        .delegate_size_limit(limits.max_pattern_bytes());
     builder
         .build()
         .map_err(|error| Error::RegexCompile(error.to_string()))

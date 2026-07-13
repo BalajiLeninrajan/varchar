@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
+use varchar::{DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -250,10 +250,7 @@ fn explain_select_and_sql_explain_share_one_plan_without_mutating() {
 
 #[test]
 fn select_compilation_preserves_error_precedence() {
-    let limits = Limits {
-        max_predicates: 1,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_predicates(1);
     let mut database = Database::with_limits(limits);
     execute(
         &mut database,
@@ -278,7 +275,7 @@ fn select_compilation_preserves_error_precedence() {
     assert!(matches!(
         database.explain_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
         Err(Error::ResourceLimit {
-            resource: "WHERE predicates",
+            resource: Resource::WherePredicates,
             limit: 1,
         })
     ));
@@ -743,15 +740,78 @@ fn corrupt_storage_offsets_point_to_the_exact_cell_payload() {
 }
 
 #[test]
+fn limits_use_fluent_configuration_and_independent_query_budgets() {
+    const MIB: usize = 1024 * 1024;
+
+    let defaults = Limits::default();
+    assert_eq!(defaults.max_query_working_bytes(), 32 * MIB);
+    assert_eq!(defaults.max_query_output_bytes(), 32 * MIB);
+
+    let limits = Limits::default()
+        .with_max_database_bytes(1)
+        .with_max_sql_bytes(2)
+        .with_max_predicates(3)
+        .with_max_join_sources(4)
+        .with_max_pattern_bytes(5)
+        .with_max_query_working_bytes(6)
+        .with_max_query_output_bytes(7)
+        .with_max_join_steps(8)
+        .with_regex_backtrack_limit(9);
+
+    assert_eq!(limits.max_database_bytes(), 1);
+    assert_eq!(limits.max_sql_bytes(), 2);
+    assert_eq!(limits.max_predicates(), 3);
+    assert_eq!(limits.max_join_sources(), 4);
+    assert_eq!(limits.max_pattern_bytes(), 5);
+    assert_eq!(limits.max_query_working_bytes(), 6);
+    assert_eq!(limits.max_query_output_bytes(), 7);
+    assert_eq!(limits.max_join_steps(), 8);
+    assert_eq!(limits.regex_backtrack_limit(), 9);
+}
+
+#[test]
+fn select_working_budget_does_not_govern_update_or_delete() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE records (id INTEGER NOT NULL, note TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO records VALUES (1, 'first')");
+    execute(&mut database, "INSERT INTO records VALUES (2, 'second')");
+
+    let limits = Limits::default().with_max_query_working_bytes(0);
+    let mut limited = Database::from_string_with_limits(database.into_string(), limits)
+        .expect("fixture fits non-query limits");
+    assert_eq!(
+        execute(
+            &mut limited,
+            "UPDATE records SET note = 'changed' WHERE id = 1",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        execute(&mut limited, "DELETE FROM records WHERE id = 2"),
+        Outcome::Affected { rows: 1 }
+    );
+
+    let mut verified =
+        Database::from_string(limited.into_string()).expect("mutated database remains valid");
+    assert_eq!(
+        row_set(execute(&mut verified, "SELECT id, note FROM records")).rows(),
+        vec![vec![Value::Integer(1), Value::Text("changed".to_owned()),]]
+    );
+}
+
+#[test]
 fn configurable_resource_limits_fail_without_partial_work() {
-    let sql_limits = Limits {
-        max_sql_bytes: 8,
-        ..Limits::default()
-    };
+    let sql_limits = Limits::default().with_max_sql_bytes(8);
     let mut database = Database::with_limits(sql_limits);
     assert!(matches!(
         database.execute("CREATE TABLE t (id INTEGER)"),
-        Err(Error::ResourceLimit { limit: 8, .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::SqlBytes,
+            limit: 8,
+        })
     ));
     assert_eq!(database.as_str(), "V2;");
 
@@ -760,38 +820,38 @@ fn configurable_resource_limits_fail_without_partial_work() {
     execute(&mut database, "INSERT INTO t VALUES (12345, 'a result')");
     let blob = database.into_string();
 
-    let predicate_limits = Limits {
-        max_predicates: 1,
-        ..Limits::default()
-    };
+    let predicate_limits = Limits::default().with_max_predicates(1);
     let database = Database::from_string_with_limits(blob.clone(), predicate_limits)
         .expect("blob fits predicate limits");
     assert!(matches!(
         database.explain_select("SELECT * FROM t WHERE id = 1 AND name = 'x'"),
-        Err(Error::ResourceLimit { limit: 1, .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::WherePredicates,
+            limit: 1,
+        })
     ));
 
-    let pattern_limits = Limits {
-        max_pattern_bytes: 1,
-        ..Limits::default()
-    };
+    let pattern_limits = Limits::default().with_max_pattern_bytes(1);
     let database = Database::from_string_with_limits(blob.clone(), pattern_limits)
         .expect("blob fits pattern limits");
     assert!(matches!(
         database.explain_select("SELECT * FROM t"),
-        Err(Error::ResourceLimit { limit: 1, .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::GeneratedRegexBytes,
+            limit: 1,
+        })
     ));
 
-    let result_limits = Limits {
-        max_result_bytes: 1,
-        ..Limits::default()
-    };
+    let result_limits = Limits::default().with_max_query_output_bytes(1);
     let mut database = Database::from_string_with_limits(blob.clone(), result_limits)
         .expect("blob fits result limits");
     let before = database.as_str().to_owned();
     assert!(matches!(
         database.execute("SELECT * FROM t"),
-        Err(Error::ResourceLimit { limit: 1, .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 1,
+        })
     ));
     assert_eq!(database.as_str(), before);
 
@@ -801,34 +861,28 @@ fn configurable_resource_limits_fail_without_partial_work() {
         execute(&mut null_database, "INSERT INTO nulls VALUES (NULL)");
     }
     let null_blob = null_database.into_string();
-    let null_result_limits = Limits {
-        max_result_bytes: 256,
-        ..Limits::default()
-    };
+    let null_result_limits = Limits::default().with_max_query_output_bytes(256);
     let mut null_database = Database::from_string_with_limits(null_blob, null_result_limits)
         .expect("NULL fixture fits database limits");
     assert!(matches!(
         null_database.execute("SELECT * FROM nulls"),
         Err(Error::ResourceLimit {
-            resource: "result bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 256
         })
     ));
 
-    let load_limits = Limits {
-        max_database_bytes: blob.len() - 1,
-        ..Limits::default()
-    };
+    let load_limits = Limits::default().with_max_database_bytes(blob.len() - 1);
     assert!(matches!(
         Database::from_string_with_limits(blob.clone(), load_limits),
-        Err(Error::ResourceLimit { .. })
+        Err(Error::ResourceLimit {
+            resource: Resource::DatabaseBytes,
+            ..
+        })
     ));
 
     let database_limit = blob.len();
-    let mutation_limits = Limits {
-        max_database_bytes: database_limit,
-        ..Limits::default()
-    };
+    let mutation_limits = Limits::default().with_max_database_bytes(database_limit);
     let mut database = Database::from_string_with_limits(blob, mutation_limits)
         .expect("existing blob exactly fits");
     for sql in [
@@ -840,7 +894,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
         assert!(matches!(
             database.execute(sql),
             Err(Error::ResourceLimit {
-                resource: "database bytes",
+                resource: Resource::DatabaseBytes,
                 limit,
             }) if limit == database_limit
         ));

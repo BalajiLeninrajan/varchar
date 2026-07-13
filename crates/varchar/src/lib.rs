@@ -11,7 +11,7 @@ mod value;
 
 pub use database::Database;
 pub use error::{Error, Result, Span};
-pub use limits::Limits;
+pub use limits::{Limits, Resource};
 pub use query::ExplainPlan;
 pub use value::{ColumnOrigin, DataType, Outcome, ResultColumn, RowSet, Value};
 

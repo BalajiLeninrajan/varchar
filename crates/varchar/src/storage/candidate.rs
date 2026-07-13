@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use super::encode::encode_auto_increment_record;
 use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
-use crate::{Error, Result, Value};
+use crate::{Error, Resource, Result, Value};
 
 /// A bounded, ordered edit of one validated authoritative database string.
 pub(crate) struct Candidate<'a> {
@@ -114,7 +114,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(additional)
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| candidate_allocation_error())?;
         self.output.push_str(gap);
         self.output.push_str(replacement);
         self.cursor = range.end;
@@ -139,7 +139,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(fragment.len())
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| candidate_allocation_error())?;
         self.output.push_str(fragment);
         Ok(())
     }
@@ -155,8 +155,14 @@ fn check_size(actual: usize, limit: usize) -> Result<()> {
 
 fn limit_error(limit: usize) -> Error {
     Error::ResourceLimit {
-        resource: "database bytes",
+        resource: Resource::DatabaseBytes,
         limit,
+    }
+}
+
+fn candidate_allocation_error() -> Error {
+    Error::Allocation {
+        operation: "building a database candidate",
     }
 }
 
