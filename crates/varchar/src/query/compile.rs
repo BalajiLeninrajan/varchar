@@ -2,13 +2,16 @@
 
 use fancy_regex::{Regex, RegexBuilder};
 
-use super::{ScanPlan, SelectPlan, SelectSource};
+use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::{LikeAtom, ResolvedPredicate, ResolvedSelect};
 use crate::storage::{self, RowPredicatePattern, TableSchema, TextPatternAtom};
 use crate::{Error, Result};
 
-pub(super) fn select(resolved: ResolvedSelect<'_, '_>, limits: &Limits) -> Result<SelectPlan> {
+pub(super) fn select<'catalog>(
+    resolved: ResolvedSelect<'catalog, '_>,
+    limits: &Limits,
+) -> Result<SelectPlan<'catalog>> {
     let ResolvedSelect {
         sources,
         projection,
@@ -45,14 +48,6 @@ pub(super) fn select(resolved: ResolvedSelect<'_, '_>, limits: &Limits) -> Resul
         )?
     };
     let regex = build_regex(&pattern, limits)?;
-    let sources = sources
-        .into_iter()
-        .map(|schema| SelectSource {
-            table: schema.name.clone(),
-            schema: schema.columns.clone(),
-        })
-        .collect();
-
     Ok(SelectPlan {
         pattern,
         regex,
@@ -62,21 +57,17 @@ pub(super) fn select(resolved: ResolvedSelect<'_, '_>, limits: &Limits) -> Resul
     })
 }
 
-pub(super) fn scan<'a>(
-    schema: &TableSchema,
-    predicates: impl Iterator<Item = Result<ResolvedPredicate<'a>>>,
+pub(super) fn scan<'catalog, 'statement>(
+    schema: &'catalog TableSchema,
+    predicates: impl Iterator<Item = Result<ResolvedPredicate<'statement>>>,
     limits: &Limits,
-) -> Result<ScanPlan> {
+) -> Result<ScanPlan<'catalog>> {
     let predicates = compile_predicates(schema, predicates, limits)?;
     let pattern =
         storage::row_scan_pattern(schema.row_layout(), &predicates, limits.max_pattern_bytes)?;
     // Compile eagerly so public planning never returns an unusable pattern.
     let regex = build_regex(&pattern, limits)?;
-    Ok(ScanPlan {
-        regex,
-        table: schema.name.clone(),
-        schema: schema.columns.clone(),
-    })
+    Ok(ScanPlan { regex, schema })
 }
 
 fn compile_predicates<'a>(

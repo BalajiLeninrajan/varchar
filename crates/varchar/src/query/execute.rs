@@ -5,10 +5,10 @@ use fancy_regex::{Error as FancyError, RuntimeError};
 use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
 use crate::resolve::ResolvedJoinCondition;
-use crate::storage::{self, Candidate, RowLayout};
+use crate::storage::{self, Candidate};
 use crate::{ColumnOrigin, Error, Result, ResultColumn, RowSet, Value};
 
-pub(super) fn select(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
+pub(super) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     if plan.sources.len() == 1 {
         select_single_table(blob, plan, limits)
     } else {
@@ -16,15 +16,12 @@ pub(super) fn select(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<R
     }
 }
 
-fn select_single_table(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
+fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     let source = plan
         .sources
         .first()
         .expect("a SELECT plan always has a root source");
-    let layout = RowLayout {
-        table: &source.table,
-        columns: &source.schema,
-    };
+    let layout = source.row_layout();
     let mut result_bytes = std::mem::size_of::<RowSet>();
     check_limit(result_bytes, limits.max_result_bytes, "result bytes")?;
     let columns = materialize_result_columns(plan, &mut result_bytes, limits)?;
@@ -69,7 +66,7 @@ fn select_single_table(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result
     Ok(RowSet::new(columns, rows))
 }
 
-fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
+fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     let mut result_bytes = std::mem::size_of::<RowSet>();
     check_limit(result_bytes, limits.max_result_bytes, "result bytes")?;
     let columns = materialize_result_columns(plan, &mut result_bytes, limits)?;
@@ -93,16 +90,10 @@ fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet>
         let source_index = plan
             .sources
             .iter()
-            .position(|source| source.table == table)
+            .position(|source| source.name == table)
             .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
         let source = &plan.sources[source_index];
-        let decoded = storage::decode_row(
-            &row_record,
-            RowLayout {
-                table: &source.table,
-                columns: &source.schema,
-            },
-        )?;
+        let decoded = storage::decode_row(&row_record, source.row_layout())?;
         let structure = row_structure_charge(decoded.len(), limits)?;
         let payload = decoded.iter().try_fold(0_usize, |total, value| {
             total
@@ -144,8 +135,8 @@ fn select_join(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet>
     Ok(RowSet::new(columns, rows))
 }
 
-struct JoinOutput<'a> {
-    plan: &'a SelectPlan,
+struct JoinOutput<'a, 'catalog> {
+    plan: &'a SelectPlan<'catalog>,
     rows: &'a mut Vec<Vec<Value>>,
     result_bytes: &'a mut usize,
     join_steps: usize,
@@ -157,7 +148,7 @@ fn emit_join_rows<'rows>(
     source: usize,
     chosen: &mut Vec<&'rows [Value]>,
     source_rows: &'rows [Vec<Vec<Value>>],
-    output: &mut JoinOutput<'_>,
+    output: &mut JoinOutput<'_, '_>,
 ) -> Result<()> {
     if source == source_rows.len() {
         let payload = output
@@ -251,7 +242,7 @@ fn join_conditions_match(
 }
 
 fn materialize_result_columns(
-    plan: &SelectPlan,
+    plan: &SelectPlan<'_>,
     result_bytes: &mut usize,
     limits: &Limits,
 ) -> Result<Vec<ResultColumn>> {
@@ -268,9 +259,9 @@ fn materialize_result_columns(
         .map_err(|_| result_limit_error(limits))?;
     for location in &plan.projection {
         let source = &plan.sources[location.source];
-        let column = &source.schema[location.column];
+        let column = &source.columns[location.column];
         let label = clone_result_string(&column.name, result_bytes, limits)?;
-        let table = clone_result_string(&source.table, result_bytes, limits)?;
+        let table = clone_result_string(&source.name, result_bytes, limits)?;
         let source_column = clone_result_string(&column.name, result_bytes, limits)?;
         columns.push(ResultColumn::new(
             label,
@@ -298,17 +289,14 @@ fn row_structure_charge(column_count: usize, limits: &Limits) -> Result<usize> {
 
 pub(super) fn rewrite_matching_rows<F>(
     candidate: &mut Candidate<'_>,
-    plan: &ScanPlan,
+    plan: &ScanPlan<'_>,
     limits: &Limits,
     mut rewrite: F,
 ) -> Result<usize>
 where
     F: FnMut(Vec<Value>) -> Result<Option<Vec<Value>>>,
 {
-    let layout = RowLayout {
-        table: &plan.table,
-        columns: &plan.schema,
-    };
+    let layout = plan.schema.row_layout();
     let mut affected = 0_usize;
     let blob = candidate.source();
 

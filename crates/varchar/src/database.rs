@@ -181,7 +181,7 @@ impl Database {
         Ok(Outcome::Affected { rows: affected })
     }
 
-    fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan> {
+    fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan<'_>> {
         query::compile_select(self.storage.catalog(), statement, &self.limits)
     }
 }
