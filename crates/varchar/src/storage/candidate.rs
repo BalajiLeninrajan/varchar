@@ -22,14 +22,10 @@ impl<'a> Candidate<'a> {
     pub(super) fn new(state: &'a StorageState, max_bytes: usize) -> Result<Self> {
         let source = state.as_str();
         check_size(source.len(), max_bytes)?;
-        let mut output = String::new();
-        output
-            .try_reserve(source.len())
-            .map_err(|_| limit_error(max_bytes))?;
         Ok(Self {
             state,
             cursor: 0,
-            output,
+            output: String::new(),
             max_bytes,
         })
     }
@@ -174,6 +170,15 @@ fn invalid_range(offset: usize) -> Error {
 #[cfg(test)]
 mod tests {
     use super::StorageState;
+
+    #[test]
+    fn new_candidate_does_not_allocate_before_its_first_edit() {
+        let source = "V2;~S|t|id:I:!;~R|t|I1;";
+        let state = StorageState::load(source.to_owned()).expect("source is valid");
+        let candidate = state.candidate(source.len()).expect("source fits");
+
+        assert_eq!(candidate.output.capacity(), 0);
+    }
 
     #[test]
     fn failed_splice_leaves_the_candidate_reusable() {
