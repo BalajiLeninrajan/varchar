@@ -1,8 +1,8 @@
 //! Recursive-descent statement parser for Varchar's small SQL dialect.
 
 use super::ast::{
-    Assignment, ColumnDef, CreateTable, Delete, ForeignKeyReference, Insert, Predicate,
-    PredicateOperator, Projection, Select, Statement, TableConstraint, Update,
+    Assignment, ColumnDef, ColumnModifier, CreateElement, CreateTable, Delete, ForeignKeyReference,
+    Insert, Predicate, PredicateOperator, Projection, Select, Statement, TableConstraint, Update,
 };
 use super::lexer::{Token, TokenKind, lex};
 use crate::{DataType, Error, Result, Value};
@@ -73,27 +73,25 @@ impl Parser {
         self.expect_keyword("TABLE")?;
         let table = self.expect_identifier()?;
         self.expect(TokenKind::LeftParen, "expected `(` after table name")?;
-        let mut columns = Vec::new();
-        let mut constraints = Vec::new();
+        let mut elements = Vec::new();
         loop {
-            if self.current_word() == Some("PRIMARY") && self.peek_word() == Some("KEY") {
-                constraints.push(self.parse_table_primary_key()?);
+            let element = if self.current_word() == Some("PRIMARY")
+                && self.peek_word() == Some("KEY")
+            {
+                CreateElement::Constraint(self.parse_table_primary_key()?)
             } else if self.current_word() == Some("FOREIGN") && self.peek_word() == Some("KEY") {
-                constraints.push(self.parse_table_foreign_key()?);
+                CreateElement::Constraint(self.parse_table_foreign_key()?)
             } else {
-                columns.push(self.parse_column_definition()?);
-            }
+                CreateElement::Column(self.parse_column_definition()?)
+            };
+            elements.push(element);
             if self.consume(&TokenKind::Comma) {
                 continue;
             }
             self.expect(TokenKind::RightParen, "expected `,` or `)`")?;
             break;
         }
-        Ok(CreateTable {
-            table,
-            columns,
-            constraints,
-        })
+        Ok(CreateTable { table, elements })
     }
 
     fn parse_column_definition(&mut self) -> Result<ColumnDef> {
@@ -117,40 +115,21 @@ impl Parser {
         };
         self.advance();
 
-        let mut nullable = true;
-        let mut primary_key = false;
-        let mut references = None;
-        let mut saw_not_null = false;
+        let mut modifiers = Vec::new();
         loop {
             match self.current_word() {
                 Some("NOT") => {
-                    if saw_not_null {
-                        return Err(Error::Schema(format!(
-                            "duplicate NOT NULL declaration for column {name:?}"
-                        )));
-                    }
                     self.advance();
                     self.expect_keyword("NULL")?;
-                    nullable = false;
-                    saw_not_null = true;
+                    modifiers.push(ColumnModifier::NotNull);
                 }
                 Some("PRIMARY") if self.peek_word() == Some("KEY") => {
-                    if primary_key {
-                        return Err(Error::Schema(format!(
-                            "duplicate PRIMARY KEY declaration for column {name:?}"
-                        )));
-                    }
                     self.advance();
                     self.advance();
-                    primary_key = true;
+                    modifiers.push(ColumnModifier::PrimaryKey);
                 }
                 Some("REFERENCES") => {
-                    if references.is_some() {
-                        return Err(Error::Schema(format!(
-                            "duplicate REFERENCES declaration for column {name:?}"
-                        )));
-                    }
-                    references = Some(self.parse_reference()?);
+                    modifiers.push(ColumnModifier::References(self.parse_reference()?));
                 }
                 _ => break,
             }
@@ -159,9 +138,7 @@ impl Parser {
         Ok(ColumnDef {
             name,
             data_type,
-            nullable,
-            primary_key,
-            references,
+            modifiers,
         })
     }
 
@@ -518,8 +495,8 @@ fn is_reserved(word: &str) -> bool {
 mod tests {
     use super::parse;
     use crate::sql::ast::{
-        ColumnDef, CreateTable, ForeignKeyReference, Predicate, PredicateOperator, Projection,
-        Select, Statement, TableConstraint,
+        ColumnDef, ColumnModifier, CreateElement, CreateTable, ForeignKeyReference, Predicate,
+        PredicateOperator, Projection, Select, Statement, TableConstraint,
     };
     use crate::{DataType, Error, Value};
 
@@ -575,79 +552,107 @@ mod tests {
         );
 
         assert_eq!(
-            statement.columns,
+            statement.elements,
             vec![
-                ColumnDef {
+                CreateElement::Column(ColumnDef {
                     name: "id".to_owned(),
                     data_type: DataType::Integer,
-                    nullable: true,
-                    primary_key: true,
-                    references: Some(ForeignKeyReference {
-                        table: "parents".to_owned(),
-                        column: "id".to_owned(),
-                    }),
-                },
-                ColumnDef {
+                    modifiers: vec![
+                        ColumnModifier::References(ForeignKeyReference {
+                            table: "parents".to_owned(),
+                            column: "id".to_owned(),
+                        }),
+                        ColumnModifier::PrimaryKey,
+                    ],
+                }),
+                CreateElement::Column(ColumnDef {
                     name: "owner_id".to_owned(),
                     data_type: DataType::Integer,
-                    nullable: false,
-                    primary_key: false,
-                    references: Some(ForeignKeyReference {
-                        table: "owners".to_owned(),
-                        column: "id".to_owned(),
-                    }),
-                },
-                ColumnDef {
+                    modifiers: vec![
+                        ColumnModifier::NotNull,
+                        ColumnModifier::References(ForeignKeyReference {
+                            table: "owners".to_owned(),
+                            column: "id".to_owned(),
+                        }),
+                    ],
+                }),
+                CreateElement::Column(ColumnDef {
                     name: "note".to_owned(),
                     data_type: DataType::Text,
-                    nullable: true,
-                    primary_key: false,
-                    references: None,
-                },
+                    modifiers: Vec::new(),
+                }),
             ]
         );
     }
 
     #[test]
-    fn preserves_table_constraints_without_mutating_columns() {
+    fn preserves_table_elements_in_source_order() {
         let statement = create_table(
             "CREATE TABLE children (\
-                id INTEGER, parent_id INTEGER, \
                 PRIMARY KEY (id), \
-                FOREIGN KEY (parent_id) REFERENCES parents(id)\
+                id INTEGER, \
+                FOREIGN KEY (parent_id) REFERENCES parents(id), \
+                parent_id INTEGER\
             )",
         );
 
-        assert!(!statement.columns[0].primary_key);
-        assert!(statement.columns[0].nullable);
-        assert!(statement.columns[1].references.is_none());
         assert_eq!(
-            statement.constraints,
+            statement.elements,
             vec![
-                TableConstraint::PrimaryKey("id".to_owned()),
-                TableConstraint::ForeignKey {
+                CreateElement::Constraint(TableConstraint::PrimaryKey("id".to_owned())),
+                CreateElement::Column(ColumnDef {
+                    name: "id".to_owned(),
+                    data_type: DataType::Integer,
+                    modifiers: Vec::new(),
+                }),
+                CreateElement::Constraint(TableConstraint::ForeignKey {
                     column: "parent_id".to_owned(),
                     reference: ForeignKeyReference {
                         table: "parents".to_owned(),
                         column: "id".to_owned(),
                     },
-                },
+                }),
+                CreateElement::Column(ColumnDef {
+                    name: "parent_id".to_owned(),
+                    data_type: DataType::Integer,
+                    modifiers: Vec::new(),
+                }),
             ]
         );
     }
 
     #[test]
-    fn defers_table_constraint_name_and_cardinality_policy() {
+    fn preserves_duplicate_declarations_for_semantic_resolution() {
         let statement = create_table(
             "CREATE TABLE items (\
-                id INTEGER, \
+                id INTEGER NOT NULL PRIMARY KEY REFERENCES parents(id) \
+                    NOT NULL PRIMARY KEY REFERENCES owners(id), \
                 PRIMARY KEY (missing), \
-                PRIMARY KEY (id), \
-                FOREIGN KEY (missing) REFERENCES parents(id)\
+                PRIMARY KEY (id)\
             )",
         );
 
-        assert_eq!(statement.constraints.len(), 3);
+        let CreateElement::Column(column) = &statement.elements[0] else {
+            panic!("expected the first element to be a column");
+        };
+        assert_eq!(
+            column.modifiers,
+            vec![
+                ColumnModifier::NotNull,
+                ColumnModifier::PrimaryKey,
+                ColumnModifier::References(ForeignKeyReference {
+                    table: "parents".to_owned(),
+                    column: "id".to_owned(),
+                }),
+                ColumnModifier::NotNull,
+                ColumnModifier::PrimaryKey,
+                ColumnModifier::References(ForeignKeyReference {
+                    table: "owners".to_owned(),
+                    column: "id".to_owned(),
+                }),
+            ]
+        );
+        assert_eq!(statement.elements.len(), 3);
     }
 
     #[test]

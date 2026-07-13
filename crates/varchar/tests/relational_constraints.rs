@@ -155,12 +155,16 @@ fn invalid_key_definitions_are_rejected_without_mutating() {
 
     for sql in [
         "CREATE TABLE two_keys (a INTEGER PRIMARY KEY, b INTEGER PRIMARY KEY)",
+        "CREATE TABLE duplicate_columns (id INTEGER, id INTEGER)",
+        "CREATE TABLE duplicate_not_null (id INTEGER NOT NULL NOT NULL)",
+        "CREATE TABLE duplicate_inline_key (id INTEGER PRIMARY KEY PRIMARY KEY)",
         "CREATE TABLE missing_table (parent_id INTEGER REFERENCES absent(id))",
         "CREATE TABLE missing_column (parent_id INTEGER REFERENCES parents(absent))",
         "CREATE TABLE non_key_target (parent_code INTEGER REFERENCES parents(code))",
         "CREATE TABLE wrong_type (parent_id TEXT REFERENCES parents(id))",
         "CREATE TABLE missing_local (id INTEGER, PRIMARY KEY (absent))",
         "CREATE TABLE duplicate_key (id INTEGER PRIMARY KEY, PRIMARY KEY (id))",
+        "CREATE TABLE duplicate_inline_reference (parent_id INTEGER REFERENCES parents(id) REFERENCES parents(id))",
         "CREATE TABLE duplicate_reference (id INTEGER, parent_id INTEGER REFERENCES parents(id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
     ] {
         assert!(

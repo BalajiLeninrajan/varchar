@@ -15,17 +15,27 @@ pub(crate) enum Statement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CreateTable {
     pub(crate) table: String,
-    pub(crate) columns: Vec<ColumnDef>,
-    pub(crate) constraints: Vec<TableConstraint>,
+    pub(crate) elements: Vec<CreateElement>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CreateElement {
+    Column(ColumnDef),
+    Constraint(TableConstraint),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ColumnDef {
     pub(crate) name: String,
     pub(crate) data_type: DataType,
-    pub(crate) nullable: bool,
-    pub(crate) primary_key: bool,
-    pub(crate) references: Option<ForeignKeyReference>,
+    pub(crate) modifiers: Vec<ColumnModifier>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnModifier {
+    NotNull,
+    PrimaryKey,
+    References(ForeignKeyReference),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
