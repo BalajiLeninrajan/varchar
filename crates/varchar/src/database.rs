@@ -1,6 +1,7 @@
 //! SQL execution over the authoritative one-string database.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
 use fancy_regex::{Error as FancyError, Regex, RegexBuilder, RuntimeError};
 
@@ -45,10 +46,21 @@ impl Default for Limits {
 }
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Database {
     blob: String,
+    catalog: storage::Catalog,
     limits: Limits,
+}
+
+impl fmt::Debug for Database {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Database")
+            .field("blob", &self.blob)
+            .field("limits", &self.limits)
+            .finish()
+    }
 }
 
 impl Default for Database {
@@ -69,6 +81,7 @@ impl Database {
     pub fn with_limits(limits: Limits) -> Self {
         Self {
             blob: storage::EMPTY_BLOB.to_owned(),
+            catalog: storage::Catalog::empty(),
             limits,
         }
     }
@@ -81,8 +94,12 @@ impl Database {
     /// Validate and load a database string with caller-supplied limits.
     pub fn from_string_with_limits(blob: String, limits: Limits) -> Result<Self> {
         check_limit(blob.len(), limits.max_database_bytes, "database bytes")?;
-        storage::validate_and_catalog(&blob)?;
-        Ok(Self { blob, limits })
+        let catalog = storage::validate_and_catalog(&blob)?;
+        Ok(Self {
+            blob,
+            catalog,
+            limits,
+        })
     }
 
     /// Borrow the canonical authoritative database string.
@@ -144,8 +161,7 @@ impl Database {
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        if catalog.table(&statement.table).is_some() {
+        if self.catalog.table(&statement.table).is_some() {
             return Err(Error::Schema(format!(
                 "table {:?} already exists",
                 statement.table
@@ -165,7 +181,7 @@ impl Database {
                 .collect(),
         };
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
-        candidate.insert_schema(&catalog, &schema)?;
+        candidate.insert_schema(&self.catalog, &schema)?;
         self.commit_candidate(candidate.finish()?)?;
         Ok(Outcome::Created {
             table: statement.table,
@@ -173,8 +189,7 @@ impl Database {
     }
 
     fn execute_insert(&mut self, statement: Insert) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
+        let schema = require_table(&self.catalog, &statement.table)?;
         let values = arrange_insert_values(schema, statement.columns, statement.values)?;
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
         candidate.append_row(schema.row_layout(), &values)?;
@@ -183,8 +198,7 @@ impl Database {
     }
 
     fn execute_update(&mut self, statement: Update) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
+        let schema = require_table(&self.catalog, &statement.table)?;
         let assignments = compile_assignments(schema, &statement.assignments)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         let projection = (0..schema.columns.len()).collect();
@@ -212,8 +226,7 @@ impl Database {
     }
 
     fn execute_delete(&mut self, statement: Delete) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
+        let schema = require_table(&self.catalog, &statement.table)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         let projection = (0..schema.columns.len()).collect();
         let plan = make_plan(
@@ -232,8 +245,7 @@ impl Database {
     }
 
     fn compile_select_ast(&self, statement: &Select) -> Result<RegexPlan> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
+        let schema = require_table(&self.catalog, &statement.table)?;
         let projection = resolve_projection(schema, &statement.projection)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         make_plan(
@@ -251,8 +263,8 @@ impl Database {
             self.limits.max_database_bytes,
             "database bytes",
         )?;
-        storage::validate_and_catalog(&candidate)?;
-        self.blob = candidate;
+        let next_catalog = storage::validate_and_catalog(&candidate)?;
+        (self.blob, self.catalog) = (candidate, next_catalog);
         Ok(())
     }
 }
@@ -744,5 +756,52 @@ fn check_limit(actual: usize, limit: usize, resource: &'static str) -> Result<()
         Err(Error::ResourceLimit { resource, limit })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Database;
+    use crate::{Error, storage};
+
+    fn assert_catalog_current(database: &Database) {
+        let reconstructed =
+            storage::validate_and_catalog(database.as_str()).expect("database remains valid");
+        assert_eq!(database.catalog, reconstructed);
+    }
+
+    #[test]
+    fn derived_catalog_tracks_every_commit() {
+        let mut database = Database::new();
+        assert_catalog_current(&database);
+
+        for sql in [
+            "CREATE TABLE t (id INTEGER NOT NULL, note TEXT)",
+            "INSERT INTO t VALUES (1, 'first')",
+            "CREATE TABLE flags (enabled BOOLEAN NOT NULL)",
+            "UPDATE t SET note = 'changed' WHERE id = 1",
+            "DELETE FROM t WHERE id = 1",
+        ] {
+            database.execute(sql).expect("statement succeeds");
+            assert_catalog_current(&database);
+        }
+    }
+
+    #[test]
+    fn failed_candidate_validation_preserves_blob_and_catalog() {
+        let mut database = Database::new();
+        database
+            .execute("CREATE TABLE t (id INTEGER)")
+            .expect("fixture schema succeeds");
+        let before_blob = database.blob.clone();
+        let before_catalog = database.catalog.clone();
+
+        assert!(matches!(
+            database.commit_candidate(String::from("V1;garbage")),
+            Err(Error::CorruptStorage { .. })
+        ));
+        assert_eq!(database.blob, before_blob);
+        assert_eq!(database.catalog, before_catalog);
+        assert!(!format!("{database:?}").contains("catalog"));
     }
 }

@@ -22,7 +22,7 @@ pub(crate) use format::{
 /// The canonical empty database.
 pub(crate) const EMPTY_BLOB: &str = format::HEADER;
 
-/// The disposable schema index reconstructed from the authoritative string.
+/// The derived schema index reconstructed from the authoritative string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Catalog {
     tables: BTreeMap<String, TableSchema>,
@@ -31,6 +31,13 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
+    pub(crate) fn empty() -> Self {
+        Self {
+            tables: BTreeMap::new(),
+            row_start: EMPTY_BLOB.len(),
+        }
+    }
+
     pub(crate) fn table(&self, name: &str) -> Option<&TableSchema> {
         self.tables.get(name)
     }
