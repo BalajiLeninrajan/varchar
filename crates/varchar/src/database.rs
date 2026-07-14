@@ -1,54 +1,31 @@
 //! SQL execution over the authoritative one-string database.
 
-use std::collections::BTreeSet;
+use std::fmt;
 
 use fancy_regex::{Error as FancyError, Regex, RegexBuilder, RuntimeError};
 
-use crate::sql::{
-    self, Assignment, CreateTable, Delete, Insert, Predicate, PredicateOperator, Projection,
-    Select, Statement, Update,
-};
+use crate::limits::{Limits, check_limit};
+use crate::resolve::{self, ResolvedPredicate};
+use crate::sql::{self, CreateTable, Delete, Insert, Predicate, Select, Statement, Update};
 use crate::storage::{self, TableSchema};
-use crate::value::validate_value;
-use crate::{Column, DataType, Error, Outcome, RegexPlan, Result, RowSet, Span, Value};
-
-const MIB: usize = 1024 * 1024;
-
-/// Resource bounds applied by the platform-neutral database core.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Limits {
-    /// Maximum size of the authoritative database string, in UTF-8 bytes.
-    pub max_database_bytes: usize,
-    /// Maximum size of one SQL statement, in UTF-8 bytes.
-    pub max_sql_bytes: usize,
-    /// Maximum number of `WHERE` terms joined by `AND`.
-    pub max_predicates: usize,
-    /// Maximum size of a generated regular expression, in UTF-8 bytes.
-    pub max_pattern_bytes: usize,
-    /// Maximum amount of typed value data materialized by a query.
-    pub max_result_bytes: usize,
-    /// Per-search backtracking limit passed to the regex engine.
-    pub regex_backtrack_limit: usize,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            max_database_bytes: 64 * MIB,
-            max_sql_bytes: 64 * 1024,
-            max_predicates: 64,
-            max_pattern_bytes: 8 * MIB,
-            max_result_bytes: 64 * MIB,
-            regex_backtrack_limit: 1_000_000,
-        }
-    }
-}
+use crate::{Column, Error, Outcome, RegexPlan, Result, RowSet, Span, Value};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Database {
     blob: String,
+    catalog: storage::Catalog,
     limits: Limits,
+}
+
+impl fmt::Debug for Database {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Database")
+            .field("blob", &self.blob)
+            .field("limits", &self.limits)
+            .finish()
+    }
 }
 
 impl Default for Database {
@@ -69,6 +46,7 @@ impl Database {
     pub fn with_limits(limits: Limits) -> Self {
         Self {
             blob: storage::EMPTY_BLOB.to_owned(),
+            catalog: storage::Catalog::empty(),
             limits,
         }
     }
@@ -81,8 +59,12 @@ impl Database {
     /// Validate and load a database string with caller-supplied limits.
     pub fn from_string_with_limits(blob: String, limits: Limits) -> Result<Self> {
         check_limit(blob.len(), limits.max_database_bytes, "database bytes")?;
-        storage::validate_and_catalog(&blob)?;
-        Ok(Self { blob, limits })
+        let catalog = storage::validate_and_catalog(&blob)?;
+        Ok(Self {
+            blob,
+            catalog,
+            limits,
+        })
     }
 
     /// Borrow the canonical authoritative database string.
@@ -144,38 +126,17 @@ impl Database {
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        if catalog.table(&statement.table).is_some() {
-            return Err(Error::Schema(format!(
-                "table {:?} already exists",
-                statement.table
-            )));
-        }
-
-        let schema = TableSchema {
-            name: statement.table.clone(),
-            columns: statement
-                .columns
-                .into_iter()
-                .map(|column| Column {
-                    name: column.name,
-                    data_type: column.data_type,
-                    nullable: column.nullable,
-                })
-                .collect(),
-        };
+        let schema = resolve::create_schema(&self.catalog, statement)?;
+        let table = schema.name.clone();
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
-        candidate.insert_schema(&catalog, &schema)?;
+        candidate.insert_schema(&self.catalog, &schema)?;
         self.commit_candidate(candidate.finish()?)?;
-        Ok(Outcome::Created {
-            table: statement.table,
-        })
+        Ok(Outcome::Created { table })
     }
 
     fn execute_insert(&mut self, statement: Insert) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
-        let values = arrange_insert_values(schema, statement.columns, statement.values)?;
+        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let values = resolve::insert_values(schema, statement.columns, statement.values)?;
         let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
         candidate.append_row(schema.row_layout(), &values)?;
         self.commit_candidate(candidate.finish()?)?;
@@ -183,9 +144,8 @@ impl Database {
     }
 
     fn execute_update(&mut self, statement: Update) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
-        let assignments = compile_assignments(schema, &statement.assignments)?;
+        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let assignments = resolve::assignments(schema, &statement.assignments)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         let projection = (0..schema.columns.len()).collect();
         let plan = make_plan(
@@ -212,8 +172,7 @@ impl Database {
     }
 
     fn execute_delete(&mut self, statement: Delete) -> Result<Outcome> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
+        let schema = resolve::require_table(&self.catalog, &statement.table)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         let projection = (0..schema.columns.len()).collect();
         let plan = make_plan(
@@ -232,9 +191,8 @@ impl Database {
     }
 
     fn compile_select_ast(&self, statement: &Select) -> Result<RegexPlan> {
-        let catalog = storage::validate_and_catalog(&self.blob)?;
-        let schema = require_table(&catalog, &statement.table)?;
-        let projection = resolve_projection(schema, &statement.projection)?;
+        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let projection = resolve::projection(schema, &statement.projection)?;
         let predicates = compile_predicates(schema, &statement.predicates, &self.limits)?;
         make_plan(
             &statement.table,
@@ -251,8 +209,8 @@ impl Database {
             self.limits.max_database_bytes,
             "database bytes",
         )?;
-        storage::validate_and_catalog(&candidate)?;
-        self.blob = candidate;
+        let next_catalog = storage::validate_and_catalog(&candidate)?;
+        (self.blob, self.catalog) = (candidate, next_catalog);
         Ok(())
     }
 }
@@ -266,96 +224,6 @@ enum CompiledPredicate {
     IsNotNull { column: usize },
 }
 
-fn require_table<'a>(catalog: &'a storage::Catalog, table: &str) -> Result<&'a TableSchema> {
-    catalog
-        .table(table)
-        .ok_or_else(|| Error::Schema(format!("unknown table {table:?}")))
-}
-
-fn resolve_projection(schema: &TableSchema, projection: &Projection) -> Result<Vec<usize>> {
-    match projection {
-        Projection::All => Ok((0..schema.columns.len()).collect()),
-        Projection::Columns(columns) => columns
-            .iter()
-            .map(|name| require_column(schema, name))
-            .collect(),
-    }
-}
-
-fn require_column(schema: &TableSchema, name: &str) -> Result<usize> {
-    schema
-        .columns
-        .iter()
-        .position(|column| column.name == name)
-        .ok_or_else(|| {
-            Error::Schema(format!(
-                "unknown column {name:?} in table {:?}",
-                schema.name
-            ))
-        })
-}
-
-fn arrange_insert_values(
-    schema: &TableSchema,
-    columns: Option<Vec<String>>,
-    supplied: Vec<Value>,
-) -> Result<Vec<Value>> {
-    let values = if let Some(columns) = columns {
-        if columns.len() != supplied.len() {
-            return Err(Error::Type(format!(
-                "INSERT names {} columns but supplies {} values",
-                columns.len(),
-                supplied.len()
-            )));
-        }
-        let mut seen = BTreeSet::new();
-        let mut values = vec![Value::Null; schema.columns.len()];
-        for (name, value) in columns.into_iter().zip(supplied) {
-            if !seen.insert(name.clone()) {
-                return Err(Error::Schema(format!("duplicate INSERT column {name:?}")));
-            }
-            let index = require_column(schema, &name)?;
-            values[index] = value;
-        }
-        values
-    } else {
-        if supplied.len() != schema.columns.len() {
-            return Err(Error::Type(format!(
-                "table {:?} expects {} values, got {}",
-                schema.name,
-                schema.columns.len(),
-                supplied.len()
-            )));
-        }
-        supplied
-    };
-
-    for (value, column) in values.iter().zip(&schema.columns) {
-        validate_value(value, column)?;
-    }
-    Ok(values)
-}
-
-fn compile_assignments(
-    schema: &TableSchema,
-    assignments: &[Assignment],
-) -> Result<Vec<(usize, Value)>> {
-    let mut compiled = Vec::with_capacity(assignments.len());
-    let mut seen = BTreeSet::new();
-    for assignment in assignments {
-        if !seen.insert(assignment.column.as_str()) {
-            return Err(Error::Schema(format!(
-                "duplicate UPDATE assignment for column {:?}",
-                assignment.column
-            )));
-        }
-        let index = require_column(schema, &assignment.column)?;
-        validate_value(&assignment.value, &schema.columns[index])?;
-        compiled.push((index, assignment.value.clone()));
-    }
-    Ok(compiled)
-}
-
 fn compile_predicates(
     schema: &TableSchema,
     predicates: &[Predicate],
@@ -364,37 +232,21 @@ fn compile_predicates(
     check_limit(predicates.len(), limits.max_predicates, "WHERE predicates")?;
     predicates
         .iter()
-        .map(|predicate| {
-            let column = require_column(schema, &predicate.column)?;
-            let definition = &schema.columns[column];
-            match &predicate.operator {
-                PredicateOperator::Equal(Value::Null)
-                | PredicateOperator::NotEqual(Value::Null) => Err(Error::Type(String::from(
-                    "NULL cannot be compared with `=` or `!=`; use IS NULL or IS NOT NULL",
-                ))),
-                PredicateOperator::Equal(value) => {
-                    let encoded = storage::encode_cell(value, definition)?;
-                    Ok(CompiledPredicate::Equal { column, encoded })
-                }
-                PredicateOperator::NotEqual(value) => {
-                    let encoded = storage::encode_cell(value, definition)?;
-                    Ok(CompiledPredicate::NotEqual { column, encoded })
-                }
-                PredicateOperator::Like(pattern) => {
-                    if definition.data_type != DataType::Text {
-                        return Err(Error::Type(format!(
-                            "LIKE requires a TEXT column; {:?} is {}",
-                            definition.name, definition.data_type
-                        )));
-                    }
-                    Ok(CompiledPredicate::Like {
-                        column,
-                        pattern: compile_like_pattern(pattern, limits)?,
-                    })
-                }
-                PredicateOperator::IsNull => Ok(CompiledPredicate::IsNull { column }),
-                PredicateOperator::IsNotNull => Ok(CompiledPredicate::IsNotNull { column }),
+        .map(|predicate| match resolve::predicate(schema, predicate)? {
+            ResolvedPredicate::Equal { column, value } => {
+                let encoded = storage::encode_cell(value, &schema.columns[column])?;
+                Ok(CompiledPredicate::Equal { column, encoded })
             }
+            ResolvedPredicate::NotEqual { column, value } => {
+                let encoded = storage::encode_cell(value, &schema.columns[column])?;
+                Ok(CompiledPredicate::NotEqual { column, encoded })
+            }
+            ResolvedPredicate::Like { column, pattern } => Ok(CompiledPredicate::Like {
+                column,
+                pattern: compile_like_pattern(pattern, limits)?,
+            }),
+            ResolvedPredicate::IsNull { column } => Ok(CompiledPredicate::IsNull { column }),
+            ResolvedPredicate::IsNotNull { column } => Ok(CompiledPredicate::IsNotNull { column }),
         })
         .collect()
 }
@@ -739,10 +591,5 @@ fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
     }
 }
 
-fn check_limit(actual: usize, limit: usize, resource: &'static str) -> Result<()> {
-    if actual > limit {
-        Err(Error::ResourceLimit { resource, limit })
-    } else {
-        Ok(())
-    }
-}
+#[cfg(test)]
+mod tests;

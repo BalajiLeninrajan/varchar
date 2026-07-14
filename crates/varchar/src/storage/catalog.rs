@@ -7,7 +7,7 @@ use super::format::{HEADER, RecordKind, corrupt, records};
 use super::{Catalog, TableSchema};
 use crate::Result;
 
-/// Validate an entire blob and reconstruct its disposable schema catalog.
+/// Validate an entire blob and reconstruct its derived schema catalog.
 pub(crate) fn validate_and_catalog(blob: &str) -> Result<Catalog> {
     if !blob.starts_with(HEADER) {
         return Err(corrupt(0, "expected canonical V1; header"));
