@@ -3,7 +3,7 @@ use super::StorageState;
 #[test]
 fn failed_splice_leaves_the_candidate_reusable() {
     let state =
-        StorageState::load(String::from("V1;~S|t|id:I:!;~R|t|I1;")).expect("source is valid");
+        StorageState::load(String::from("V2;~S|t|id:I:!;~R|t|I1;")).expect("source is valid");
     let source = state.as_str();
     let mut candidate = state.candidate(source.len()).expect("source fits");
 
@@ -33,5 +33,5 @@ fn finish_rejects_an_invalid_replacement_state() {
         candidate.finish(),
         Err(crate::Error::CorruptStorage { .. })
     ));
-    assert_eq!(state.as_str(), "V1;");
+    assert_eq!(state.as_str(), "V2;");
 }

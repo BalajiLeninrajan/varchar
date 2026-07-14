@@ -175,7 +175,7 @@ fn shell_accepts_multiline_statements_and_meta_commands() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("created table notes").and(predicate::str::contains("V1;")),
+            predicate::str::contains("created table notes").and(predicate::str::contains("V2;")),
         );
 
     exec(&path, "SELECT * FROM notes")

@@ -109,3 +109,41 @@ fn like_wildcards_use_unicode_scalars_in_wasm() {
         ]
     );
 }
+
+#[wasm_bindgen_test]
+fn primary_and_foreign_keys_survive_reload_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id))",
+        )
+        .unwrap();
+    database.execute("INSERT INTO parents VALUES (1)").unwrap();
+    database
+        .execute("INSERT INTO children VALUES (10, 1)")
+        .unwrap();
+
+    assert!(matches!(
+        database.execute("INSERT INTO parents VALUES (1)"),
+        Err(Error::Constraint(_))
+    ));
+    assert!(matches!(
+        database.execute("INSERT INTO children VALUES (11, 999)"),
+        Err(Error::Constraint(_))
+    ));
+
+    let blob = database.into_string();
+    let mut reloaded = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(reloaded.as_str(), blob);
+    assert!(matches!(
+        reloaded.execute("DELETE FROM parents WHERE id = 1"),
+        Err(Error::Constraint(_))
+    ));
+    assert_eq!(
+        rows(reloaded.execute("SELECT * FROM children").unwrap()),
+        vec![vec![Value::Integer(10), Value::Integer(1)]]
+    );
+}

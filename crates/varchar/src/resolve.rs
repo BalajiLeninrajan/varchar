@@ -6,8 +6,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::sql::{Assignment, CreateTable, Predicate, PredicateOperator, Projection};
-use crate::storage::{Catalog, TableSchema};
+use crate::sql::{
+    Assignment, ColumnModifier, CreateElement, CreateTable, Predicate, PredicateOperator,
+    Projection, TableConstraint,
+};
+use crate::storage::{Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
@@ -20,25 +23,219 @@ pub(crate) enum ResolvedPredicate<'a> {
 }
 
 pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<TableSchema> {
-    if catalog.table(&statement.table).is_some() {
-        return Err(Error::Schema(format!(
-            "table {:?} already exists",
-            statement.table
+    let CreateTable { table, elements } = statement;
+    if catalog.table(&table).is_some() {
+        return Err(Error::Schema(format!("table {table:?} already exists")));
+    }
+
+    // Collect the full column namespace before resolving table constraints.
+    // A table constraint may legally precede the column that it names.
+    let mut columns = Vec::new();
+    let mut column_names = BTreeSet::new();
+    for element in &elements {
+        let CreateElement::Column(column) = element else {
+            continue;
+        };
+        if !column_names.insert(column.name.clone()) {
+            return Err(Error::Schema(format!(
+                "duplicate column name {:?}",
+                column.name
+            )));
+        }
+        columns.push(Column {
+            name: column.name.clone(),
+            data_type: column.data_type,
+            nullable: true,
+        });
+    }
+    if columns.is_empty() {
+        return Err(Error::Schema(String::from(
+            "table must contain at least one column",
         )));
     }
 
-    Ok(TableSchema {
-        name: statement.table,
-        columns: statement
-            .columns
-            .into_iter()
-            .map(|column| Column {
-                name: column.name,
-                data_type: column.data_type,
-                nullable: column.nullable,
-            })
-            .collect(),
-    })
+    let mut primary_key = None;
+    let mut foreign_keys = Vec::new();
+    let mut saw_not_null = vec![false; columns.len()];
+    let mut saw_foreign_key = vec![false; columns.len()];
+    let mut column_index = 0;
+
+    // Fold local declarations in source order. Cross-table checks wait until
+    // the complete local primary key is available for self references.
+    for element in elements {
+        match element {
+            CreateElement::Column(column) => {
+                let index = column_index;
+                column_index += 1;
+                for modifier in column.modifiers {
+                    match modifier {
+                        ColumnModifier::NotNull => {
+                            if saw_not_null[index] {
+                                return Err(Error::Schema(format!(
+                                    "duplicate NOT NULL declaration for column {:?}",
+                                    column.name
+                                )));
+                            }
+                            saw_not_null[index] = true;
+                            columns[index].nullable = false;
+                        }
+                        ColumnModifier::PrimaryKey => declare_primary_key(
+                            &table,
+                            &column.name,
+                            index,
+                            &mut primary_key,
+                            &mut columns,
+                        )?,
+                        ColumnModifier::References(reference) => declare_foreign_key(
+                            &column.name,
+                            "REFERENCES",
+                            index,
+                            reference.table,
+                            reference.column,
+                            &mut saw_foreign_key,
+                            &mut foreign_keys,
+                        )?,
+                    }
+                }
+            }
+            CreateElement::Constraint(constraint) => match constraint {
+                TableConstraint::PrimaryKey(name) => {
+                    let index = local_constraint_column(&columns, &table, &name, "PRIMARY KEY")?;
+                    declare_primary_key(&table, &name, index, &mut primary_key, &mut columns)?;
+                }
+                TableConstraint::ForeignKey { column, reference } => {
+                    let index = local_constraint_column(&columns, &table, &column, "FOREIGN KEY")?;
+                    declare_foreign_key(
+                        &column,
+                        "FOREIGN KEY",
+                        index,
+                        reference.table,
+                        reference.column,
+                        &mut saw_foreign_key,
+                        &mut foreign_keys,
+                    )?;
+                }
+            },
+        }
+    }
+
+    let mut schema = TableSchema {
+        name: table,
+        columns,
+        primary_key,
+        foreign_keys: Vec::new(),
+    };
+    for foreign_key in &foreign_keys {
+        validate_foreign_key(catalog, &schema, foreign_key)?;
+    }
+    foreign_keys.sort_by_key(|foreign_key| foreign_key.column);
+    schema.foreign_keys = foreign_keys;
+    Ok(schema)
+}
+
+fn declare_primary_key(
+    table: &str,
+    column: &str,
+    index: usize,
+    primary_key: &mut Option<usize>,
+    columns: &mut [Column],
+) -> Result<()> {
+    match *primary_key {
+        Some(existing) if existing == index => {
+            return Err(Error::Schema(format!(
+                "duplicate PRIMARY KEY declaration for column {column:?}"
+            )));
+        }
+        Some(_) => return Err(multiple_primary_keys(table)),
+        None => *primary_key = Some(index),
+    }
+    columns[index].nullable = false;
+    Ok(())
+}
+
+fn declare_foreign_key(
+    column: &str,
+    syntax: &str,
+    index: usize,
+    referenced_table: String,
+    referenced_column: String,
+    saw_foreign_key: &mut [bool],
+    foreign_keys: &mut Vec<ForeignKey>,
+) -> Result<()> {
+    if saw_foreign_key[index] {
+        return Err(Error::Schema(format!(
+            "duplicate {syntax} declaration for column {column:?}"
+        )));
+    }
+    saw_foreign_key[index] = true;
+    foreign_keys.push(ForeignKey {
+        column: index,
+        referenced_table,
+        referenced_column,
+    });
+    Ok(())
+}
+
+fn validate_foreign_key(
+    catalog: &Catalog,
+    schema: &TableSchema,
+    foreign_key: &ForeignKey,
+) -> Result<()> {
+    let referenced_schema = if foreign_key.referenced_table == schema.name {
+        schema
+    } else {
+        catalog
+            .table(&foreign_key.referenced_table)
+            .ok_or_else(|| {
+                Error::Schema(format!(
+                    "foreign key references unknown or later table {:?}",
+                    foreign_key.referenced_table
+                ))
+            })?
+    };
+    let referenced_primary_key = referenced_schema
+        .primary_key
+        .filter(|&index| referenced_schema.columns[index].name == foreign_key.referenced_column);
+    let Some(referenced_primary_key) = referenced_primary_key else {
+        return Err(Error::Schema(format!(
+            "foreign key target {:?}.{:?} is not its table's primary key",
+            foreign_key.referenced_table, foreign_key.referenced_column
+        )));
+    };
+    if schema.columns[foreign_key.column].data_type
+        != referenced_schema.columns[referenced_primary_key].data_type
+    {
+        return Err(Error::Schema(format!(
+            "foreign-key columns {:?}.{:?} and {:?}.{:?} have different types",
+            schema.name,
+            schema.columns[foreign_key.column].name,
+            foreign_key.referenced_table,
+            foreign_key.referenced_column
+        )));
+    }
+    Ok(())
+}
+
+fn local_constraint_column(
+    columns: &[Column],
+    table: &str,
+    column: &str,
+    constraint: &str,
+) -> Result<usize> {
+    columns
+        .iter()
+        .position(|candidate| candidate.name == column)
+        .ok_or_else(|| {
+            Error::Schema(format!(
+                "{constraint} references unknown column {column:?} in table {table:?}"
+            ))
+        })
+}
+
+fn multiple_primary_keys(table: &str) -> Error {
+    Error::Schema(format!(
+        "table {table:?} may have only one PRIMARY KEY column"
+    ))
 }
 
 pub(crate) fn require_table<'a>(catalog: &'a Catalog, table: &str) -> Result<&'a TableSchema> {

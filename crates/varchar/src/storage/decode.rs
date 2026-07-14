@@ -1,13 +1,87 @@
 //! Canonical decoding and validation of individual storage records.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use super::format::{
-    ROW_PREFIX, SCHEMA_PREFIX, allocation_limit, complete_record_body, corrupt,
-    is_valid_identifier, scan_text,
+    FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, RecordKind, SCHEMA_PREFIX,
+    allocation_limit, complete_record_body, corrupt, is_valid_identifier, records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
 use crate::{Column, DataType, Error, Result, Value};
+
+pub(super) struct PrimaryKeyMetadata<'a> {
+    pub(super) table: &'a str,
+    pub(super) column: &'a str,
+}
+
+pub(super) struct ForeignKeyMetadata<'a> {
+    pub(super) table: &'a str,
+    pub(super) column: &'a str,
+    pub(super) referenced_table: &'a str,
+    pub(super) referenced_column: &'a str,
+}
+
+/// A zero-copy view over a parsed V2 row envelope and validated table name.
+///
+/// Cell slices remain encoded so integrity validation can compare canonical
+/// key values without allocating decoded rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RowRecordRef<'a> {
+    range: Range<usize>,
+    table: &'a str,
+    cells: &'a str,
+}
+
+impl<'a> RowRecordRef<'a> {
+    pub(super) fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    pub(super) fn table(&self) -> &'a str {
+        self.table
+    }
+
+    pub(super) fn cells(&self) -> std::str::Split<'a, char> {
+        self.cells.split('|')
+    }
+}
+
+/// Parse one complete row envelope at its byte offset in the authoritative blob.
+pub(super) fn row_record(record: &str, offset: usize) -> Result<RowRecordRef<'_>> {
+    let body = complete_record_body(record, ROW_PREFIX, offset)?;
+    let (table, cells) = body
+        .split_once('|')
+        .ok_or_else(|| corrupt(offset, "row is missing its cell list"))?;
+    if !is_valid_identifier(table) {
+        return Err(corrupt(
+            offset + ROW_PREFIX.len(),
+            "invalid or noncanonical table name",
+        ));
+    }
+    let end = offset
+        .checked_add(record.len())
+        .ok_or_else(|| corrupt(offset, "row range exceeds the database"))?;
+    Ok(RowRecordRef {
+        range: offset..end,
+        table,
+        cells,
+    })
+}
+
+pub(super) fn row_records(
+    blob: &str,
+    row_start: usize,
+) -> impl Iterator<Item = Result<RowRecordRef<'_>>> {
+    records_from(blob, row_start).map(|record| {
+        record.and_then(|record| {
+            if record.kind != RecordKind::Row {
+                return Err(corrupt(record.range.start, "expected a row record"));
+            }
+            row_record(record.text, record.range.start)
+        })
+    })
+}
 
 /// Decode a complete canonical row record for `schema`.
 pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Value>> {
@@ -68,6 +142,48 @@ pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableS
     Ok(TableSchema {
         name: table.to_owned(),
         columns,
+        primary_key: None,
+        foreign_keys: Vec::new(),
+    })
+}
+
+pub(super) fn decode_primary_key_record(
+    record: &str,
+    offset: usize,
+) -> Result<PrimaryKeyMetadata<'_>> {
+    let body = complete_record_body(record, PRIMARY_KEY_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
+        return Err(corrupt(offset, "malformed primary-key metadata"));
+    }
+    Ok(PrimaryKeyMetadata { table, column })
+}
+
+pub(super) fn decode_foreign_key_record(
+    record: &str,
+    offset: usize,
+) -> Result<ForeignKeyMetadata<'_>> {
+    let body = complete_record_body(record, FOREIGN_KEY_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    let referenced_table = fields.next().unwrap_or_default();
+    let referenced_column = fields.next().unwrap_or_default();
+    if fields.next().is_some()
+        || !is_valid_identifier(table)
+        || !is_valid_identifier(column)
+        || !is_valid_identifier(referenced_table)
+        || !is_valid_identifier(referenced_column)
+    {
+        return Err(corrupt(offset, "malformed foreign-key metadata"));
+    }
+    Ok(ForeignKeyMetadata {
+        table,
+        column,
+        referenced_table,
+        referenced_column,
     })
 }
 
@@ -240,3 +356,6 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
     scan_text(payload, offset, |character| decoded.push(character))?;
     Ok(decoded)
 }
+
+#[cfg(test)]
+mod tests;

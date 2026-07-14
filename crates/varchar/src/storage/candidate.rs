@@ -63,7 +63,7 @@ impl<'a> Candidate<'a> {
 
     pub(crate) fn finish(mut self) -> Result<StorageState> {
         self.push_source(self.cursor..self.state.as_str().len())?;
-        StorageState::load(self.output)
+        StorageState::from_candidate(self.output)
     }
 
     fn splice(&mut self, range: Range<usize>, replacement: &str) -> Result<()> {
