@@ -8,7 +8,7 @@ use fancy_regex::Regex;
 use crate::limits::{Limits, check_limit};
 use crate::resolve;
 use crate::sql::{Predicate, Select};
-use crate::storage::{Catalog, TableSchema};
+use crate::storage::{Candidate, Catalog, TableSchema};
 use crate::{Column, Result, RowSet, Value};
 
 /// The exact regular expression and projection produced for a `SELECT`.
@@ -94,13 +94,13 @@ pub(crate) fn execute_select(blob: &str, plan: &SelectPlan, limits: &Limits) -> 
 }
 
 pub(crate) fn rewrite_matching_rows<F>(
-    blob: &str,
+    candidate: &mut Candidate<'_>,
     plan: &ScanPlan,
     limits: &Limits,
     rewrite: F,
-) -> Result<(String, usize)>
+) -> Result<usize>
 where
     F: FnMut(Vec<Value>) -> Result<Option<Vec<Value>>>,
 {
-    execute::rewrite_matching_rows(blob, plan, limits, rewrite)
+    execute::rewrite_matching_rows(candidate, plan, limits, rewrite)
 }

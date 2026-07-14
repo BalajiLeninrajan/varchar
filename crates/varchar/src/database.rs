@@ -12,8 +12,7 @@ use crate::{Error, Outcome, RegexPlan, Result, Span};
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
 pub struct Database {
-    blob: String,
-    catalog: storage::Catalog,
+    storage: storage::StorageState,
     limits: Limits,
 }
 
@@ -21,7 +20,7 @@ impl fmt::Debug for Database {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Database")
-            .field("blob", &self.blob)
+            .field("blob", &self.storage.as_str())
             .field("limits", &self.limits)
             .finish()
     }
@@ -44,8 +43,7 @@ impl Database {
     #[must_use]
     pub fn with_limits(limits: Limits) -> Self {
         Self {
-            blob: storage::EMPTY_BLOB.to_owned(),
-            catalog: storage::Catalog::empty(),
+            storage: storage::StorageState::empty(),
             limits,
         }
     }
@@ -58,24 +56,20 @@ impl Database {
     /// Validate and load a database string with caller-supplied limits.
     pub fn from_string_with_limits(blob: String, limits: Limits) -> Result<Self> {
         check_limit(blob.len(), limits.max_database_bytes, "database bytes")?;
-        let catalog = storage::validate_and_catalog(&blob)?;
-        Ok(Self {
-            blob,
-            catalog,
-            limits,
-        })
+        let storage = storage::StorageState::load(blob)?;
+        Ok(Self { storage, limits })
     }
 
     /// Borrow the canonical authoritative database string.
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.blob
+        self.storage.as_str()
     }
 
     /// Consume the database and return its authoritative string.
     #[must_use]
     pub fn into_string(self) -> String {
-        self.blob
+        self.storage.into_string()
     }
 
     /// Resource limits used by this database.
@@ -93,7 +87,7 @@ impl Database {
             Statement::Insert(statement) => self.execute_insert(statement),
             Statement::Select(statement) => {
                 let plan = self.compile_select_ast(&statement)?;
-                query::execute_select(&self.blob, &plan, &self.limits).map(Outcome::Rows)
+                query::execute_select(self.storage.as_str(), &plan, &self.limits).map(Outcome::Rows)
             }
             Statement::Update(statement) => self.execute_update(statement),
             Statement::Delete(statement) => self.execute_delete(statement),
@@ -119,7 +113,7 @@ impl Database {
 
     fn check_request(&self, sql: &str) -> Result<()> {
         check_limit(
-            self.blob.len(),
+            self.storage.as_str().len(),
             self.limits.max_database_bytes,
             "database bytes",
         )?;
@@ -127,60 +121,51 @@ impl Database {
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let schema = resolve::create_schema(&self.catalog, statement)?;
+        let schema = resolve::create_schema(self.storage.catalog(), statement)?;
         let table = schema.name.clone();
-        let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
-        candidate.insert_schema(&self.catalog, &schema)?;
-        self.commit_candidate(candidate.finish()?)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        candidate.insert_schema(&schema)?;
+        self.storage = candidate.finish()?;
         Ok(Outcome::Created { table })
     }
 
     fn execute_insert(&mut self, statement: Insert) -> Result<Outcome> {
-        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
         let values = resolve::insert_values(schema, statement.columns, statement.values)?;
-        let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
         candidate.append_row(schema.row_layout(), &values)?;
-        self.commit_candidate(candidate.finish()?)?;
+        self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: 1 })
     }
 
     fn execute_update(&mut self, statement: Update) -> Result<Outcome> {
-        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
         let assignments = resolve::assignments(schema, &statement.assignments)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
-        let (candidate, affected) =
-            query::rewrite_matching_rows(&self.blob, &plan, &self.limits, |mut values| {
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let affected =
+            query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |mut values| {
                 for (index, value) in &assignments {
                     values[*index] = value.clone();
                 }
                 Ok(Some(values))
             })?;
-        self.commit_candidate(candidate)?;
+        self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: affected })
     }
 
     fn execute_delete(&mut self, statement: Delete) -> Result<Outcome> {
-        let schema = resolve::require_table(&self.catalog, &statement.table)?;
+        let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
-        let (candidate, affected) =
-            query::rewrite_matching_rows(&self.blob, &plan, &self.limits, |_| Ok(None))?;
-        self.commit_candidate(candidate)?;
+        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let affected =
+            query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |_| Ok(None))?;
+        self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: affected })
     }
 
     fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan> {
-        query::compile_select(&self.catalog, statement, &self.limits)
-    }
-
-    fn commit_candidate(&mut self, candidate: String) -> Result<()> {
-        check_limit(
-            candidate.len(),
-            self.limits.max_database_bytes,
-            "database bytes",
-        )?;
-        let next_catalog = storage::validate_and_catalog(&candidate)?;
-        (self.blob, self.catalog) = (candidate, next_catalog);
-        Ok(())
+        query::compile_select(self.storage.catalog(), statement, &self.limits)
     }
 }
 

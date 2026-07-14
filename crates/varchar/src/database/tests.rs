@@ -1,10 +1,10 @@
 use super::Database;
-use crate::{Error, storage};
+use crate::storage;
 
 fn assert_catalog_current(database: &Database) {
     let reconstructed =
-        storage::validate_and_catalog(database.as_str()).expect("database remains valid");
-    assert_eq!(database.catalog, reconstructed);
+        storage::StorageState::load(database.as_str().to_owned()).expect("database remains valid");
+    assert_eq!(database.storage, reconstructed);
 }
 
 #[test]
@@ -22,23 +22,6 @@ fn derived_catalog_tracks_every_commit() {
         database.execute(sql).expect("statement succeeds");
         assert_catalog_current(&database);
     }
-}
-
-#[test]
-fn failed_candidate_validation_preserves_blob_and_catalog() {
-    let mut database = Database::new();
-    database
-        .execute("CREATE TABLE t (id INTEGER)")
-        .expect("fixture schema succeeds");
-    let before_blob = database.blob.clone();
-    let before_catalog = database.catalog.clone();
-
-    assert!(matches!(
-        database.commit_candidate(String::from("V1;garbage")),
-        Err(Error::CorruptStorage { .. })
-    ));
-    assert_eq!(database.blob, before_blob);
-    assert_eq!(database.catalog, before_catalog);
 }
 
 #[test]

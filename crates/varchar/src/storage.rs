@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{Column, Error, Result};
 
 pub(crate) use candidate::Candidate;
-pub(crate) use catalog::validate_and_catalog;
 pub(crate) use decode::decode_row;
 pub(crate) use encode::{encode_cell, encode_row, encode_schema};
 pub(crate) use format::{
@@ -19,8 +18,47 @@ pub(crate) use format::{
     text_unit_pattern,
 };
 
+use catalog::validate_and_catalog;
+
 /// The canonical empty database.
 pub(crate) const EMPTY_BLOB: &str = format::HEADER;
+
+/// One validated authoritative blob and the catalog derived from that exact blob.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StorageState {
+    blob: String,
+    catalog: Catalog,
+}
+
+impl StorageState {
+    pub(crate) fn empty() -> Self {
+        Self {
+            blob: EMPTY_BLOB.to_owned(),
+            catalog: Catalog::empty(),
+        }
+    }
+
+    pub(crate) fn load(blob: String) -> Result<Self> {
+        let catalog = validate_and_catalog(&blob)?;
+        Ok(Self { blob, catalog })
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.blob
+    }
+
+    pub(crate) fn into_string(self) -> String {
+        self.blob
+    }
+
+    pub(crate) fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    pub(crate) fn candidate(&self, max_bytes: usize) -> Result<Candidate<'_>> {
+        Candidate::new(self, max_bytes)
+    }
+}
 
 /// The derived schema index reconstructed from the authoritative string.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,3 +137,6 @@ pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

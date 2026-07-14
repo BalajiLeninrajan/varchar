@@ -1,9 +1,11 @@
-use super::Candidate;
+use super::StorageState;
 
 #[test]
 fn failed_splice_leaves_the_candidate_reusable() {
-    let source = "V1;~R|t|I1;";
-    let mut candidate = Candidate::new(source, source.len()).expect("source fits");
+    let state =
+        StorageState::load(String::from("V1;~S|t|id:I:!;~R|t|I1;")).expect("source is valid");
+    let source = state.as_str();
+    let mut candidate = state.candidate(source.len()).expect("source fits");
 
     assert!(
         candidate
@@ -11,7 +13,25 @@ fn failed_splice_leaves_the_candidate_reusable() {
             .is_err()
     );
     assert_eq!(
-        candidate.finish().expect("unchanged candidate fits"),
+        candidate
+            .finish()
+            .expect("unchanged candidate fits")
+            .as_str(),
         source
     );
+}
+
+#[test]
+fn finish_rejects_an_invalid_replacement_state() {
+    let state = StorageState::empty();
+    let mut candidate = state.candidate(64).expect("empty state fits");
+    candidate
+        .splice(state.as_str().len()..state.as_str().len(), "garbage")
+        .expect("unvalidated edit fits");
+
+    assert!(matches!(
+        candidate.finish(),
+        Err(crate::Error::CorruptStorage { .. })
+    ));
+    assert_eq!(state.as_str(), "V1;");
 }
