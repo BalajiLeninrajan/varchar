@@ -1,6 +1,6 @@
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
-use varchar::{Database, Error, Limits, Outcome, Value};
+use varchar::{Database, ErrorCode, Limits, Outcome, Resource, RowSet, SelectExplanation, Value};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn rows(outcome: Outcome) -> Vec<Vec<Value>> {
@@ -66,10 +66,11 @@ fn typed_crud_and_regex_planning_execute_inside_wasm() {
 
 #[wasm_bindgen_test]
 fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
-    assert!(matches!(
-        Database::from_string("not a database".to_owned()),
-        Err(Error::CorruptStorage { .. })
-    ));
+    let error = Database::from_string("not a database".to_owned())
+        .err()
+        .expect("malformed storage should be rejected");
+    assert_eq!(error.code(), ErrorCode::CorruptStorage);
+    assert!(error.storage_offset().is_some());
 
     let limits = Limits {
         max_sql_bytes: 4,
@@ -77,14 +78,60 @@ fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
     };
     let mut database = Database::with_limits(limits);
     let before = database.as_str().to_owned();
-    assert!(matches!(
-        database.execute("CREATE TABLE t (id INTEGER)"),
-        Err(Error::ResourceLimit {
-            resource: "SQL bytes",
-            limit: 4,
-        })
-    ));
+    let error = database
+        .execute("CREATE TABLE t (id INTEGER)")
+        .expect_err("oversized SQL should be rejected");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(Resource::SqlBytes));
+    assert_eq!(error.limit(), Some(4));
     assert_eq!(database.as_str(), before);
+}
+
+#[wasm_bindgen_test]
+fn query_output_limits_cover_rows_and_explanations_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE t (id INTEGER NOT NULL)")
+        .unwrap();
+    database.execute("INSERT INTO t VALUES (1)").unwrap();
+    let blob = database.into_string();
+    let row_set_limit = std::mem::size_of::<RowSet>() - 1;
+    let limits = Limits {
+        max_query_output_bytes: row_set_limit,
+        ..Limits::default()
+    };
+    let mut database =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    let error = database
+        .execute("SELECT * FROM t")
+        .expect_err("row-set output should exceed the configured limit");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
+    assert_eq!(error.limit(), Some(row_set_limit));
+    assert_eq!(database.as_str(), blob);
+
+    let explanation_limit = std::mem::size_of::<SelectExplanation>() - 1;
+    let limits = Limits {
+        max_query_output_bytes: explanation_limit,
+        ..Limits::default()
+    };
+    let mut database =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+    let error = database
+        .explain_select("SELECT * FROM t")
+        .expect_err("API explanation should exceed the configured limit");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
+    assert_eq!(error.limit(), Some(explanation_limit));
+
+    let error = database
+        .execute("EXPLAIN REGEX SELECT * FROM t")
+        .expect_err("SQL explanation should exceed the configured limit");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
+    assert_eq!(error.limit(), Some(explanation_limit));
+    assert_eq!(database.as_str(), blob);
 }
 
 #[wasm_bindgen_test]
@@ -129,22 +176,22 @@ fn primary_and_foreign_keys_survive_reload_in_wasm() {
         .execute("INSERT INTO children VALUES (10, 1)")
         .unwrap();
 
-    assert!(matches!(
-        database.execute("INSERT INTO parents VALUES (1)"),
-        Err(Error::Constraint(_))
-    ));
-    assert!(matches!(
-        database.execute("INSERT INTO children VALUES (11, 999)"),
-        Err(Error::Constraint(_))
-    ));
+    let error = database
+        .execute("INSERT INTO parents VALUES (1)")
+        .expect_err("duplicate primary key should be rejected");
+    assert_eq!(error.code(), ErrorCode::Constraint);
+    let error = database
+        .execute("INSERT INTO children VALUES (11, 999)")
+        .expect_err("missing foreign-key target should be rejected");
+    assert_eq!(error.code(), ErrorCode::Constraint);
 
     let blob = database.into_string();
     let mut reloaded = Database::from_string(blob.clone()).unwrap();
     assert_eq!(reloaded.as_str(), blob);
-    assert!(matches!(
-        reloaded.execute("DELETE FROM parents WHERE id = 1"),
-        Err(Error::Constraint(_))
-    ));
+    let error = reloaded
+        .execute("DELETE FROM parents WHERE id = 1")
+        .expect_err("referenced parent should not be deleted");
+    assert_eq!(error.code(), ErrorCode::Constraint);
     assert_eq!(
         rows(reloaded.execute("SELECT * FROM children").unwrap()),
         vec![vec![Value::Integer(10), Value::Integer(1)]]

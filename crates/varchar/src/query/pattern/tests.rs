@@ -2,7 +2,7 @@ use fancy_regex::Regex;
 
 use super::{alternate_source_patterns, row_scan_pattern};
 use crate::resolve::{LikeAtom, ResolvedPredicate};
-use crate::{DataType, SchemaColumn, Value};
+use crate::{DataType, ErrorCode, SchemaColumn, Value};
 
 const MAX_PATTERN_BYTES: usize = 16 * 1024;
 
@@ -117,5 +117,5 @@ fn invalid_predicate_column_indices_return_an_error() {
     )
     .expect_err("an out-of-range predicate is rejected");
 
-    assert!(matches!(error, crate::Error::Schema(_)));
+    assert_eq!(error.code(), ErrorCode::Schema);
 }

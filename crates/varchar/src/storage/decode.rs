@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use super::format::{
     AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, RecordKind,
-    SCHEMA_PREFIX, allocation_limit, complete_record_body, corrupt, is_valid_identifier,
+    SCHEMA_PREFIX, allocation_error, complete_record_body, corrupt, is_valid_identifier,
     records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
@@ -109,7 +109,7 @@ pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableS
     let column_count = body.bytes().filter(|byte| *byte == b'|').count();
     columns
         .try_reserve_exact(column_count)
-        .map_err(|_| allocation_limit("schema columns", column_count))?;
+        .map_err(|_| allocation_error("reserving decoded schema columns"))?;
     let mut names = BTreeSet::new();
     for field in fields {
         let mut parts = field.split(':');
@@ -270,7 +270,7 @@ fn decode_row_at(record: &str, layout: RowLayout<'_>, offset: usize) -> Result<V
     let mut values = Vec::new();
     values
         .try_reserve_exact(layout.columns.len())
-        .map_err(|_| allocation_limit("decoded row cells", layout.columns.len()))?;
+        .map_err(|_| allocation_error("reserving decoded row cells"))?;
     let mut cell_offset = offset + ROW_PREFIX.len() + table.len() + 1;
     for column in layout.columns {
         let Some(cell) = fields.next() else {
@@ -383,7 +383,7 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
     let mut decoded = String::new();
     decoded
         .try_reserve(payload.len())
-        .map_err(|_| allocation_limit("decoded text bytes", payload.len()))?;
+        .map_err(|_| allocation_error("reserving decoded text"))?;
     scan_text(payload, offset, |character| decoded.push(character))?;
     Ok(decoded)
 }

@@ -33,7 +33,7 @@ pub(super) fn resolve_joins(
             let left_type = schemas[left.source].columns[left.column].data_type;
             let right_type = schemas[right.source].columns[right.column].data_type;
             if left_type != right_type {
-                return Err(Error::Type(format!(
+                return Err(Error::type_error(format!(
                     "JOIN columns {:?}.{:?} and {:?}.{:?} have different types",
                     schemas[left.source].name,
                     schemas[left.source].columns[left.column].name,
@@ -44,7 +44,7 @@ pub(super) fn resolve_joins(
             conditions.push(ResolvedJoinCondition { left, right });
         }
         if !connects_source {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "JOIN for table {:?} must connect it to an earlier table",
                 join.table
             )));

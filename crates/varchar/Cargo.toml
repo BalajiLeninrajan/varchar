@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode"] }
-thiserror = "2"
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

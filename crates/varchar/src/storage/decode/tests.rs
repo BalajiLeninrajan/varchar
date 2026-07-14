@@ -1,6 +1,6 @@
 use super::{decode_row, row_record, row_records};
 use crate::storage::RowLayout;
-use crate::{DataType, Error, SchemaColumn, Value};
+use crate::{DataType, ErrorCode, SchemaColumn, Value};
 
 #[test]
 fn row_view_exposes_the_complete_envelope_and_absolute_range() {
@@ -93,9 +93,10 @@ fn row_iterator_rejects_a_non_row_at_its_start_offset() {
         .expect("schema record is present")
         .expect_err("schema is not a row");
 
-    assert!(matches!(
-        error,
-        Error::CorruptStorage { offset: 3, message }
-            if message == "expected a row record"
-    ));
+    assert_eq!(error.code(), ErrorCode::CorruptStorage);
+    assert_eq!(error.storage_offset(), Some(3));
+    assert_eq!(
+        error.to_string(),
+        "corrupt database at byte 3: expected a row record"
+    );
 }

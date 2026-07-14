@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{DataType, Database, Error, Outcome, RowSet, Value};
+use varchar::{DataType, Database, Error, ErrorCode, Outcome, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -50,20 +50,22 @@ fn inline_and_table_primary_keys_are_non_null_and_unique() {
     );
 
     execute(&mut database, "INSERT INTO inline_keys VALUES (1, 'kept')");
-    assert!(matches!(
+    assert_eq!(
         expect_atomic_error(
             &mut database,
             "INSERT INTO inline_keys VALUES (1, 'duplicate')",
-        ),
-        Error::Constraint(_)
-    ));
-    assert!(matches!(
+        )
+        .code(),
+        ErrorCode::Constraint
+    );
+    assert_eq!(
         expect_atomic_error(
             &mut database,
             "INSERT INTO inline_keys VALUES (NULL, 'null key')",
-        ),
-        Error::Type(_)
-    ));
+        )
+        .code(),
+        ErrorCode::Type
+    );
 
     execute(
         &mut database,
@@ -129,10 +131,10 @@ fn inline_constraints_accept_mixed_modifier_order() {
         "INSERT INTO children VALUES (99, 7, 'missing parent')",
         "INSERT INTO children VALUES (2, 99, 'missing owner')",
     ] {
-        assert!(matches!(
-            expect_atomic_error(&mut database, sql),
-            Error::Constraint(_)
-        ));
+        assert_eq!(
+            expect_atomic_error(&mut database, sql).code(),
+            ErrorCode::Constraint
+        );
     }
 }
 
@@ -181,8 +183,9 @@ fn invalid_key_definitions_are_rejected_without_mutating() {
         "CREATE TABLE duplicate_inline_reference (parent_id INTEGER REFERENCES parents(id) REFERENCES parents(id))",
         "CREATE TABLE duplicate_reference (id INTEGER, parent_id INTEGER REFERENCES parents(id), FOREIGN KEY (parent_id) REFERENCES parents(id))",
     ] {
-        assert!(
-            matches!(expect_atomic_error(&mut database, sql), Error::Schema(_)),
+        assert_eq!(
+            expect_atomic_error(&mut database, sql).code(),
+            ErrorCode::Schema,
             "expected a schema error for {sql:?}"
         );
     }
@@ -197,11 +200,9 @@ fn composite_constraints_are_explicitly_unsupported_and_atomic() {
         "CREATE TABLE t (a INTEGER, b INTEGER, FOREIGN KEY (a, b) REFERENCES p(a))",
         "CREATE TABLE t (a INTEGER REFERENCES p(a, b))",
     ] {
-        assert!(
-            matches!(
-                expect_atomic_error(&mut database, sql),
-                Error::Unsupported { .. }
-            ),
+        assert_eq!(
+            expect_atomic_error(&mut database, sql).code(),
+            ErrorCode::UnsupportedSql,
             "expected composite constraint to be unsupported: {sql}"
         );
     }
@@ -233,24 +234,26 @@ fn inline_and_table_foreign_keys_accept_valid_and_null_values_but_reject_orphans
         execute(&mut database, sql);
     }
 
-    assert!(matches!(
+    assert_eq!(
         expect_atomic_error(
             &mut database,
             "INSERT INTO inline_children VALUES (12, 999)",
-        ),
-        Error::Constraint(_)
-    ));
-    assert!(matches!(
-        expect_atomic_error(&mut database, "INSERT INTO table_children VALUES (22, 999)"),
-        Error::Constraint(_)
-    ));
-    assert!(matches!(
+        )
+        .code(),
+        ErrorCode::Constraint
+    );
+    assert_eq!(
+        expect_atomic_error(&mut database, "INSERT INTO table_children VALUES (22, 999)").code(),
+        ErrorCode::Constraint
+    );
+    assert_eq!(
         expect_atomic_error(
             &mut database,
             "UPDATE inline_children SET parent_id = 999 WHERE id = 10",
-        ),
-        Error::Constraint(_)
-    ));
+        )
+        .code(),
+        ErrorCode::Constraint
+    );
 
     assert_eq!(
         rows(execute(
@@ -350,14 +353,14 @@ fn self_referential_cycles_require_a_coordinated_delete() {
     execute(&mut database, "INSERT INTO nodes VALUES (2, 1)");
     execute(&mut database, "UPDATE nodes SET parent_id = 2 WHERE id = 1");
 
-    assert!(matches!(
-        expect_atomic_error(&mut database, "DELETE FROM nodes WHERE id = 1"),
-        Error::Constraint(_)
-    ));
-    assert!(matches!(
-        expect_atomic_error(&mut database, "DELETE FROM nodes WHERE id = 2"),
-        Error::Constraint(_)
-    ));
+    assert_eq!(
+        expect_atomic_error(&mut database, "DELETE FROM nodes WHERE id = 1").code(),
+        ErrorCode::Constraint
+    );
+    assert_eq!(
+        expect_atomic_error(&mut database, "DELETE FROM nodes WHERE id = 2").code(),
+        ErrorCode::Constraint
+    );
     assert_eq!(
         execute(&mut database, "DELETE FROM nodes"),
         Outcome::Affected { rows: 2 }
@@ -415,14 +418,14 @@ fn constrained_blobs_with_duplicate_keys_or_orphan_references_are_rejected() {
     );
     assert!(matches!(
         Database::from_string(duplicate_key),
-        Err(Error::CorruptStorage { .. })
+        Err(error) if error.code() == ErrorCode::CorruptStorage
     ));
 
     let orphan = blob.replacen("~R|children|I10|I1;", "~R|children|I10|I9;", 1);
     assert_ne!(orphan, blob, "child row encoding changed unexpectedly");
     assert!(matches!(
         Database::from_string(orphan),
-        Err(Error::CorruptStorage { .. })
+        Err(error) if error.code() == ErrorCode::CorruptStorage
     ));
 }
 

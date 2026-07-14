@@ -1,4 +1,5 @@
-use crate::Error;
+use super::assert_error;
+use crate::ErrorCode;
 use crate::resolve::create_schema;
 use crate::sql::{self, Statement};
 use crate::storage::{Catalog, ForeignKey, StorageState};
@@ -67,10 +68,11 @@ fn create_schema_owns_table_constraint_policy() {
             "duplicate FOREIGN KEY declaration for column \"parent_id\"",
         ),
     ] {
-        assert!(matches!(
+        assert_error(
             create_schema(&Catalog::empty(), create_table(sql)),
-            Err(Error::Schema(ref message)) if message == expected
-        ));
+            ErrorCode::Schema,
+            expected,
+        );
     }
 }
 
@@ -98,10 +100,11 @@ fn create_schema_owns_column_shape_and_modifier_policy() {
             "table must contain at least one column",
         ),
     ] {
-        assert!(matches!(
+        assert_error(
             create_schema(&keyed_parent_catalog(), create_table(sql)),
-            Err(Error::Schema(ref message)) if message == expected
-        ));
+            ErrorCode::Schema,
+            expected,
+        );
     }
 }
 
@@ -109,27 +112,28 @@ fn create_schema_owns_column_shape_and_modifier_policy() {
 fn duplicate_columns_precede_declaration_errors_but_declarations_keep_source_order() {
     let duplicate_column =
         create_table("CREATE TABLE items (PRIMARY KEY (missing), id INTEGER, id INTEGER)");
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), duplicate_column),
-        Err(Error::Schema(ref message)) if message == "duplicate column name \"id\""
-    ));
+        ErrorCode::Schema,
+        "duplicate column name \"id\"",
+    );
 
     let declarations =
         create_table("CREATE TABLE items (id INTEGER NOT NULL NOT NULL PRIMARY KEY PRIMARY KEY)");
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), declarations),
-        Err(Error::Schema(ref message))
-            if message == "duplicate NOT NULL declaration for column \"id\""
-    ));
+        ErrorCode::Schema,
+        "duplicate NOT NULL declaration for column \"id\"",
+    );
 
     let interleaved = create_table(
         "CREATE TABLE items (FOREIGN KEY (missing) REFERENCES parents(id), id INTEGER NOT NULL NOT NULL)",
     );
-    assert!(matches!(
+    assert_error(
         create_schema(&keyed_parent_catalog(), interleaved),
-        Err(Error::Schema(ref message))
-            if message == "FOREIGN KEY references unknown column \"missing\" in table \"items\""
-    ));
+        ErrorCode::Schema,
+        "FOREIGN KEY references unknown column \"missing\" in table \"items\"",
+    );
 }
 
 #[test]
@@ -152,20 +156,21 @@ fn create_schema_resolves_foreign_key_targets_before_storage() {
             "foreign-key columns \"children\".\"parent_id\" and \"parents\".\"id\" have different types",
         ),
     ] {
-        assert!(matches!(
+        assert_error(
             create_schema(&keyed_parent_catalog(), create_table(sql)),
-            Err(Error::Schema(ref message)) if message == expected
-        ));
+            ErrorCode::Schema,
+            expected,
+        );
     }
 
     let source_order = create_table(
         "CREATE TABLE children (first INTEGER REFERENCES missing_first(id), second INTEGER REFERENCES missing_second(id))",
     );
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), source_order),
-        Err(Error::Schema(ref message))
-            if message == "foreign key references unknown or later table \"missing_first\""
-    ));
+        ErrorCode::Schema,
+        "foreign key references unknown or later table \"missing_first\"",
+    );
 }
 
 #[test]
@@ -226,10 +231,11 @@ fn auto_increment_duplicates_and_applicability_are_resolver_owned() {
             "auto-increment column \"ids\".\"id\" must be its INTEGER primary key",
         ),
     ] {
-        assert!(matches!(
+        assert_error(
             create_schema(&Catalog::empty(), create_table(sql)),
-            Err(Error::Schema(ref message)) if message == expected
-        ));
+            ErrorCode::Schema,
+            expected,
+        );
     }
 }
 
@@ -238,27 +244,27 @@ fn auto_increment_declaration_and_applicability_errors_have_stable_precedence() 
     let duplicate_auto = create_table(
         "CREATE TABLE ids (id INTEGER AUTOINCREMENT AUTO_INCREMENT PRIMARY KEY PRIMARY KEY)",
     );
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), duplicate_auto),
-        Err(Error::Schema(ref message))
-            if message == "duplicate AUTOINCREMENT declaration for column \"id\""
-    ));
+        ErrorCode::Schema,
+        "duplicate AUTOINCREMENT declaration for column \"id\"",
+    );
 
     let duplicate_primary = create_table(
         "CREATE TABLE ids (id INTEGER PRIMARY KEY PRIMARY KEY AUTOINCREMENT AUTO_INCREMENT)",
     );
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), duplicate_primary),
-        Err(Error::Schema(ref message))
-            if message == "duplicate PRIMARY KEY declaration for column \"id\""
-    ));
+        ErrorCode::Schema,
+        "duplicate PRIMARY KEY declaration for column \"id\"",
+    );
 
     let invalid_foreign_key_before_applicability = create_table(
         "CREATE TABLE ids (id TEXT PRIMARY KEY AUTOINCREMENT, parent TEXT REFERENCES missing(id))",
     );
-    assert!(matches!(
+    assert_error(
         create_schema(&Catalog::empty(), invalid_foreign_key_before_applicability),
-        Err(Error::Schema(ref message))
-            if message == "foreign key references unknown or later table \"missing\""
-    ));
+        ErrorCode::Schema,
+        "foreign key references unknown or later table \"missing\"",
+    );
 }

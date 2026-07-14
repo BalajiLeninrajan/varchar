@@ -1,6 +1,5 @@
 use super::Database;
-use crate::Error;
-use crate::storage;
+use crate::{ErrorCode, storage};
 
 fn assert_catalog_current(database: &Database) {
     let reconstructed =
@@ -36,10 +35,10 @@ fn failed_constraint_validation_preserves_storage_state() {
         .expect("fixture row succeeds");
     let before = database.storage.clone();
 
-    assert!(matches!(
-        database.execute("INSERT INTO t VALUES (1)"),
-        Err(Error::Constraint(_))
-    ));
+    let error = database
+        .execute("INSERT INTO t VALUES (1)")
+        .expect_err("duplicate primary key is rejected");
+    assert_eq!(error.code(), ErrorCode::Constraint);
     assert_eq!(database.storage, before);
 }
 
@@ -57,15 +56,36 @@ fn auto_increment_commits_keep_the_catalog_current_and_fail_atomically() {
     }
 
     let before = database.storage.clone();
-    assert!(matches!(
-        database.execute("UPDATE ids SET id = 10 WHERE id = 11"),
-        Err(Error::Constraint(_))
-    ));
+    let error = database
+        .execute("UPDATE ids SET id = 10 WHERE id = 11")
+        .expect_err("duplicate primary key is rejected");
+    assert_eq!(error.code(), ErrorCode::Constraint);
     assert_eq!(database.storage, before);
 }
 
 #[test]
-fn debug_output_omits_the_derived_catalog() {
-    let database = Database::new();
-    assert!(!format!("{database:?}").contains("catalog"));
+fn debug_output_reports_shape_without_disclosing_user_data() {
+    let secret = "debug-output-must-not-leak-this";
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE notes (body TEXT NOT NULL)")
+        .expect("fixture schema succeeds");
+    database
+        .execute(&format!("INSERT INTO notes VALUES ('{secret}')"))
+        .expect("fixture row succeeds");
+
+    let debug = format!("{database:?}");
+    assert_eq!(
+        debug,
+        format!(
+            "Database {{ blob_len: {}, limits: {:?} }}",
+            database.as_str().len(),
+            database.limits()
+        )
+    );
+    assert!(!debug.contains("blob:"));
+    assert!(!debug.contains("catalog"));
+    assert!(!debug.contains("notes"));
+    assert!(!debug.contains("body"));
+    assert!(!debug.contains(secret));
 }

@@ -22,7 +22,7 @@ pub(crate) struct ResolvedCreate {
 pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<ResolvedCreate> {
     let CreateTable { table, elements } = statement;
     if catalog.table(&table).is_some() {
-        return Err(Error::Schema(format!("table {table:?} already exists")));
+        return Err(Error::schema(format!("table {table:?} already exists")));
     }
 
     // Collect the full column namespace before resolving table constraints.
@@ -34,7 +34,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
             continue;
         };
         if !column_names.insert(column.name.clone()) {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "duplicate column name {:?}",
                 column.name
             )));
@@ -46,7 +46,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         });
     }
     if columns.is_empty() {
-        return Err(Error::Schema(String::from(
+        return Err(Error::schema(String::from(
             "table must contain at least one column",
         )));
     }
@@ -69,7 +69,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                     match modifier {
                         ColumnModifier::NotNull => {
                             if saw_not_null[index] {
-                                return Err(Error::Schema(format!(
+                                return Err(Error::schema(format!(
                                     "duplicate NOT NULL declaration for column {:?}",
                                     column.name
                                 )));
@@ -153,7 +153,7 @@ fn local_constraint_column(
         .iter()
         .position(|candidate| candidate.name == column)
         .ok_or_else(|| {
-            Error::Schema(format!(
+            Error::schema(format!(
                 "{constraint} references unknown column {column:?} in table {table:?}"
             ))
         })

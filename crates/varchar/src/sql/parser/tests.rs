@@ -4,7 +4,7 @@ use crate::sql::ast::{
     JoinCondition, Predicate, PredicateOperator, Projection, ProjectionItem, Select, Statement,
     TableConstraint,
 };
-use crate::{DataType, Error, Value};
+use crate::{DataType, ErrorCode, Span, Value};
 
 fn create_table(sql: &str) -> CreateTable {
     match parse(sql).expect("CREATE TABLE parses") {
@@ -55,14 +55,14 @@ fn parsing_produces_the_exact_normalized_ast() {
 
 #[test]
 fn unsupported_join_syntax_keeps_its_feature_and_span() {
-    assert!(matches!(
-        parse("SELECT * FROM t LEFT JOIN u ON t.id = u.id"),
-        Err(Error::Unsupported {
-            ref feature,
-            span_start: 16,
-            span_end: 20,
-        }) if feature == "outer joins"
-    ));
+    let error = parse("SELECT * FROM t LEFT JOIN u ON t.id = u.id")
+        .expect_err("outer joins are unsupported");
+    assert_eq!(error.code(), ErrorCode::UnsupportedSql);
+    assert_eq!(error.span(), Some(Span::new(16, 20)));
+    assert_eq!(
+        error.to_string(),
+        "unsupported SQL feature at bytes 16..20: outer joins"
+    );
 }
 
 #[test]
@@ -253,8 +253,10 @@ fn rejects_composite_key_constraints_explicitly() {
         "CREATE TABLE t (a INTEGER, b INTEGER, FOREIGN KEY (a, b) REFERENCES p(a))",
         "CREATE TABLE t (a INTEGER REFERENCES p(a, b))",
     ] {
-        assert!(
-            matches!(parse(sql), Err(Error::Unsupported { .. })),
+        let error = parse(sql).expect_err("composite constraint should be unsupported");
+        assert_eq!(
+            error.code(),
+            ErrorCode::UnsupportedSql,
             "expected composite constraint to be unsupported: {sql}"
         );
     }

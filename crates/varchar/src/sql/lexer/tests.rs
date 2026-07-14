@@ -1,5 +1,19 @@
 use super::{Token, TokenKind, lex};
-use crate::{Error, Span};
+use crate::{ErrorCode, Span};
+
+fn assert_lex_error(sql: &str, detail: &str, span: Span) {
+    let error = lex(sql).expect_err("SQL should fail lexing");
+    assert_eq!(error.code(), ErrorCode::SqlParse);
+    assert_eq!(error.span(), Some(span));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "SQL parse error at bytes {}..{}: {detail}",
+            span.start(),
+            span.end()
+        )
+    );
+}
 
 #[test]
 fn tokens_retain_exact_utf8_byte_spans() {
@@ -77,28 +91,11 @@ fn qualified_names_and_stars_retain_dot_spans() {
 
 #[test]
 fn lexical_errors_point_at_the_offending_bytes() {
-    assert!(matches!(
-        lex("!"),
-        Err(Error::Parse {
-            ref message,
-            span_start: 0,
-            span_end: 1,
-        }) if message == "expected `=` after `!`"
-    ));
-    assert!(matches!(
-        lex("\u{1f4a5}"),
-        Err(Error::Parse {
-            ref message,
-            span_start: 0,
-            span_end: 4,
-        }) if message == "unexpected character '\u{1f4a5}'"
-    ));
-    assert!(matches!(
-        lex("'open"),
-        Err(Error::Parse {
-            ref message,
-            span_start: 0,
-            span_end: 5,
-        }) if message == "unterminated string literal"
-    ));
+    assert_lex_error("!", "expected `=` after `!`", Span::new(0, 1));
+    assert_lex_error(
+        "\u{1f4a5}",
+        "unexpected character '\u{1f4a5}'",
+        Span::new(0, 4),
+    );
+    assert_lex_error("'open", "unterminated string literal", Span::new(0, 5));
 }

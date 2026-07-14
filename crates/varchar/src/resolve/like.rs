@@ -19,12 +19,12 @@ pub(super) fn resolve_like_pattern(pattern: &str) -> Result<Vec<LikeAtom>> {
             '_' => atoms.push(LikeAtom::AnyScalar),
             '\\' => {
                 let Some(escaped) = characters.next() else {
-                    return Err(Error::Type(String::from(
+                    return Err(Error::type_error(String::from(
                         "LIKE pattern ends with an incomplete escape",
                     )));
                 };
                 if !matches!(escaped, '%' | '_' | '\\') {
-                    return Err(Error::Type(format!(
+                    return Err(Error::type_error(format!(
                         "LIKE pattern contains unsupported escape \\{escaped}"
                     )));
                 }

@@ -11,7 +11,7 @@ pub(super) fn declare_primary_key(
 ) -> Result<()> {
     match *primary_key {
         Some(existing) if existing == index => {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "duplicate PRIMARY KEY declaration for column {column:?}"
             )));
         }
@@ -23,7 +23,7 @@ pub(super) fn declare_primary_key(
 }
 
 fn multiple_primary_keys(table: &str) -> Error {
-    Error::Schema(format!(
+    Error::schema(format!(
         "table {table:?} may have only one PRIMARY KEY column"
     ))
 }

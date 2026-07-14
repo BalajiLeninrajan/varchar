@@ -92,7 +92,7 @@ INSERT INTO messages (body) VALUES ('first');
 INSERT INTO messages VALUES (NULL, 'second');
 ```
 
-Omitting the generated column from a named-column insert, or explicitly inserting `NULL`, generates the next positive integer. The persisted high-water mark starts at `0`, so the first generated key is `1`; it advances for larger explicit inserts and updates, never falls after deletion, and survives reloads. Zero and negative explicit values do not advance it. Overflow and every other failed mutation leave both rows and the high-water mark unchanged.
+Omitting the generated column from a named-column insert, or explicitly inserting `NULL`, generates the next positive integer. A new table persists a high-water mark of `0`, so its first generated key is `1`. The mark advances for larger explicit inserts and updates, never falls after deletion, and survives reloads. Zero and negative explicit values do not advance it. Overflow and every other failed mutation leave both rows and the high-water mark unchanged.
 
 `WHERE` supports terms joined with `AND`:
 
@@ -147,9 +147,9 @@ fn main() -> Result<(), varchar::Error> {
     db.execute("CREATE TABLE messages (body TEXT NOT NULL)")?;
     db.execute("INSERT INTO messages VALUES ('hello')")?;
 
-    let plan = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
-    println!("{}", plan.pattern());
-    assert_eq!(plan.sources(), &["messages"]);
+    let explanation = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
+    println!("{}", explanation.pattern());
+    assert_eq!(explanation.sources(), &["messages"]);
 
     if let Outcome::Rows(rows) = db.execute("SELECT body FROM messages")? {
         assert_eq!(rows.rows().len(), 1);
@@ -161,11 +161,36 @@ fn main() -> Result<(), varchar::Error> {
 }
 ```
 
-Use `Database::from_string` to validate and reopen a persisted blob. Errors distinguish malformed SQL, unsupported features, schema, type, and constraint failures, corrupt storage, regex failures, and resource-limit exhaustion. A failed mutation leaves the original string byte-for-byte unchanged.
+Use `Database::from_string` to validate and reopen a persisted blob. Errors distinguish malformed SQL, unsupported features, schema, type, and constraint failures, corrupt storage, regex failures, resource-limit exhaustion, recoverable failures from explicit allocation reservations, and internal capacity exhaustion. A failed mutation leaves the original string byte-for-byte unchanged.
+
+The diagnostic API is structured and deliberately smaller than the engine's internal error representation:
+
+```rust
+use varchar::{Database, ErrorCode, Limits, Resource};
+
+let limits = Limits {
+    max_sql_bytes: 8,
+    ..Limits::default()
+};
+let mut db = Database::with_limits(limits);
+let before = db.as_str().to_owned();
+let error = db
+    .execute("CREATE TABLE messages (body TEXT)")
+    .expect_err("the statement exceeds the configured SQL limit");
+
+assert_eq!(error.code(), ErrorCode::ResourceLimit);
+assert_eq!(error.resource(), Some(Resource::SqlBytes));
+assert_eq!(error.limit(), Some(8));
+assert_eq!(db.as_str(), before);
+```
+
+`ErrorCode::as_str()` and `Resource::as_str()` are stable machine-readable identifiers. Human-readable `Display` and `Debug` text is intended for people and may change. Parse and unsupported-syntax errors can carry a half-open byte `Span` into the original UTF-8 SQL input. Schema, type, and constraint errors are semantic diagnostics and currently do not retain SQL spans. Corrupt-storage offsets refer to bytes in the encoded database blob, not decoded values. `resource()` and `limit()` are either both present for a configured limit failure or both absent. A limit failure returns no partial result, and a failed mutation—including one rejected by a limit—leaves the authoritative blob byte-for-byte unchanged.
+
+Query rows, projected-column metadata, provenance, and `SelectExplanation` values are immutable snapshots produced by the engine. Inspect them through their accessors; a `RowSet` can also be consumed with `into_rows` or `into_parts` when the caller needs owned values.
 
 ## WebAssembly
 
-The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies bounded input, pattern, query-working, query-output, join-execution, and regex-execution limits suitable for 32-bit WebAssembly memory.
+The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies configured limits to inputs, generated patterns, logical `SELECT` working/output charges, join execution, and regex backtracking.
 
 There is no public JavaScript/WASM package in v1. A future browser adapter can pass the complete blob into the same core, execute one statement per call, and persist the returned blob in a browser-owned store. A future WASI adapter can provide capability-based persistence separately.
 
@@ -173,10 +198,10 @@ There is no public JavaScript/WASM package in v1. A future browser adapter can p
 
 The punchline is also the performance model:
 
-- Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use bounded-memory nested loops whose work can grow to the product of participating row counts.
-- Every committed mutation copies and validates a candidate string, so inserts, updates, and deletes are **O(n)**.
+- Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts.
+- Every mutation builds and validates a candidate string before replacing the old state. Inserts and schema changes copy the authoritative blob, while updates and deletes scan and finish a candidate even when no row matches, so all mutation paths are **O(n)** in database size. A zero-match update or delete installs a separately validated but byte-identical state.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, materialized results, join execution work, and regex backtracking are bounded. Limit failures return no partial result or mutation.
+- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows plus rows and pointer state retained for joins. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 
@@ -190,5 +215,10 @@ cargo check -p varchar --target wasm32-unknown-unknown
 cargo check -p varchar --target wasm32-wasip1
 wasm-pack test --node crates/varchar
 ```
+
+Unit tests live in dedicated child-module `tests.rs` files; implementation
+modules contain only the `#[cfg(test)] mod tests;` declaration. Public and
+cross-module behavior remains covered by the integration suites under each
+crate's top-level `tests/` directory.
 
 CI runs the same native and WebAssembly gates.

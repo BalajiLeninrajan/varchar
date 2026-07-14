@@ -152,13 +152,13 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
 
     if let Some(primary_key) = schema.primary_key {
         let Some(column) = schema.columns.get(primary_key) else {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "primary-key index {primary_key} is outside table {:?}",
                 schema.name
             )));
         };
         if column.nullable {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "primary-key column {:?}.{:?} must be NOT NULL",
                 schema.name, column.name
             )));
@@ -168,13 +168,13 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
     let mut foreign_key_columns = BTreeSet::new();
     for foreign_key in &schema.foreign_keys {
         if schema.columns.get(foreign_key.column).is_none() {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "foreign-key index {} is outside table {:?}",
                 foreign_key.column, schema.name
             )));
         }
         if !foreign_key_columns.insert(foreign_key.column) {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "column {:?}.{:?} has multiple foreign keys",
                 schema.name, schema.columns[foreign_key.column].name
             )));
@@ -182,7 +182,7 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
         if !format::is_valid_identifier(&foreign_key.referenced_table)
             || !format::is_valid_identifier(&foreign_key.referenced_column)
         {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "invalid foreign-key target {:?}.{:?}",
                 foreign_key.referenced_table, foreign_key.referenced_column
             )));
@@ -193,26 +193,26 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
 
 pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
     if !format::is_valid_identifier(layout.table) {
-        return Err(Error::Schema(format!(
+        return Err(Error::schema(format!(
             "invalid or noncanonical table name {:?}",
             layout.table
         )));
     }
     if layout.columns.is_empty() {
-        return Err(Error::Schema(String::from(
+        return Err(Error::schema(String::from(
             "table must contain at least one column",
         )));
     }
     let mut names = BTreeSet::new();
     for column in layout.columns {
         if !format::is_valid_identifier(&column.name) {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "invalid or noncanonical column name {:?}",
                 column.name
             )));
         }
         if !names.insert(column.name.as_str()) {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "duplicate column name {:?}",
                 column.name
             )));

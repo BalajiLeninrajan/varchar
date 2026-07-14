@@ -19,7 +19,10 @@ pub(super) fn select<'catalog>(
         predicates,
     } = resolved;
 
-    let mut predicates_by_source = Vec::with_capacity(sources.len());
+    let mut predicates_by_source = Vec::new();
+    predicates_by_source
+        .try_reserve_exact(sources.len())
+        .map_err(|_| Error::allocation("reserving query predicate buckets"))?;
     predicates_by_source.resize_with(sources.len(), Vec::new);
     for resolved in predicates {
         predicates_by_source[resolved.source].push(resolved.predicate);
@@ -87,5 +90,5 @@ fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
         .delegate_size_limit(limits.max_pattern_bytes);
     builder
         .build()
-        .map_err(|error| Error::RegexCompile(error.to_string()))
+        .map_err(|error| Error::regex_compile(error.to_string()))
 }

@@ -1,7 +1,7 @@
-use super::{catalog, people_schema, select_statement};
+use super::{assert_error, assert_resource_error, catalog, people_schema, select_statement};
 use crate::resolve::{predicate, select};
 use crate::sql::{ColumnRef, Predicate, PredicateOperator};
-use crate::{Error, Value};
+use crate::{ErrorCode, Resource, Value};
 
 #[test]
 fn predicate_resolution_preserves_name_and_operator_error_order() {
@@ -13,11 +13,11 @@ fn predicate_resolution_preserves_name_and_operator_error_order() {
         },
         operator: PredicateOperator::Equal(Value::Null),
     };
-    assert!(matches!(
+    assert_error(
         predicate(&schema, &missing),
-        Err(Error::Schema(ref message))
-            if message == "unknown column \"missing\" in table \"people\""
-    ));
+        ErrorCode::Schema,
+        "unknown column \"missing\" in table \"people\"",
+    );
 
     let null_comparison = Predicate {
         column: ColumnRef {
@@ -26,12 +26,11 @@ fn predicate_resolution_preserves_name_and_operator_error_order() {
         },
         operator: PredicateOperator::Equal(Value::Null),
     };
-    assert!(matches!(
+    assert_error(
         predicate(&schema, &null_comparison),
-        Err(Error::Type(ref message))
-            if message
-                == "NULL cannot be compared with `=` or `!=`; use IS NULL or IS NOT NULL"
-    ));
+        ErrorCode::Type,
+        "NULL cannot be compared with `=` or `!=`; use IS NULL or IS NOT NULL",
+    );
 
     let wrong_like_type = Predicate {
         column: ColumnRef {
@@ -40,11 +39,11 @@ fn predicate_resolution_preserves_name_and_operator_error_order() {
         },
         operator: PredicateOperator::Like(String::from("anything")),
     };
-    assert!(matches!(
+    assert_error(
         predicate(&schema, &wrong_like_type),
-        Err(Error::Type(ref message))
-            if message == "LIKE requires a TEXT column; \"id\" is INTEGER"
-    ));
+        ErrorCode::Type,
+        "LIKE requires a TEXT column; \"id\" is INTEGER",
+    );
 }
 
 #[test]
@@ -52,19 +51,19 @@ fn select_predicates_resolve_in_statement_order() {
     let catalog = catalog("V2;~S|t|id:I:!|note:T:!;");
     let invalid_like_first =
         select_statement(r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing = 1");
-    assert!(matches!(
+    assert_error(
         select(&catalog, &invalid_like_first, 4, 4, usize::MAX),
-        Err(Error::Type(ref message))
-            if message == "LIKE pattern contains unsupported escape \\q"
-    ));
+        ErrorCode::Type,
+        "LIKE pattern contains unsupported escape \\q",
+    );
 
     let missing_first =
         select_statement(r"SELECT id FROM t WHERE missing = 1 AND note LIKE 'bad\q'");
-    assert!(matches!(
+    assert_error(
         select(&catalog, &missing_first, 4, 4, usize::MAX),
-        Err(Error::Schema(ref message))
-            if message == "unknown column \"missing\" in table \"t\""
-    ));
+        ErrorCode::Schema,
+        "unknown column \"missing\" in table \"t\"",
+    );
 }
 
 #[test]
@@ -72,11 +71,9 @@ fn select_predicate_limit_is_enforced() {
     let catalog = catalog("V2;~S|t|id:I:!|note:T:!;");
     let statement = select_statement("SELECT id FROM t WHERE id = 1 AND note = 'one'");
 
-    assert!(matches!(
+    assert_resource_error(
         select(&catalog, &statement, 1, 1, usize::MAX),
-        Err(Error::ResourceLimit {
-            resource: "WHERE predicates",
-            limit: 1,
-        })
-    ));
+        Resource::WherePredicates,
+        1,
+    );
 }

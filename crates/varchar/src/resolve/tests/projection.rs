@@ -1,6 +1,6 @@
-use super::{catalog, select_statement};
-use crate::Error;
+use super::{assert_error, assert_resource_error, catalog, select_statement};
 use crate::resolve::{ColumnLocation, select};
+use crate::{ErrorCode, Resource};
 
 #[test]
 fn select_projection_resolves_qualified_stars_and_unambiguous_names() {
@@ -25,36 +25,34 @@ fn expanded_select_projection_obeys_the_output_budget() {
     let statement = select_statement("SELECT t.*, t.* FROM t");
     let limit = std::mem::size_of::<ColumnLocation>() * 3;
 
-    assert!(matches!(
+    assert_resource_error(
         select(&catalog, &statement, 1, 0, limit),
-        Err(Error::ResourceLimit {
-            resource: "query output bytes",
-            limit: actual,
-        }) if actual == limit
-    ));
+        Resource::QueryOutputBytes,
+        limit,
+    );
 }
 
 #[test]
 fn select_semantic_errors_precede_the_projection_output_budget() {
     let catalog = catalog("V2;~S|t|id:I:!;~S|u|id:I:!;");
     let invalid_projection = select_statement("SELECT t.*, missing FROM t");
-    assert!(matches!(
+    assert_error(
         select(&catalog, &invalid_projection, 1, 0, 0),
-        Err(Error::Schema(ref message))
-            if message == "unknown column \"missing\" in table \"t\""
-    ));
+        ErrorCode::Schema,
+        "unknown column \"missing\" in table \"t\"",
+    );
 
     let invalid_join = select_statement("SELECT t.*, t.* FROM t JOIN u ON t.id = t.id");
-    assert!(matches!(
+    assert_error(
         select(&catalog, &invalid_join, 2, 0, 0),
-        Err(Error::Schema(ref message))
-            if message == "JOIN for table \"u\" must connect it to an earlier table"
-    ));
+        ErrorCode::Schema,
+        "JOIN for table \"u\" must connect it to an earlier table",
+    );
 
     let invalid_predicate = select_statement("SELECT t.* FROM t WHERE missing = 1");
-    assert!(matches!(
+    assert_error(
         select(&catalog, &invalid_predicate, 1, 1, 0),
-        Err(Error::Schema(ref message))
-            if message == "unknown column \"missing\" in table \"t\""
-    ));
+        ErrorCode::Schema,
+        "unknown column \"missing\" in table \"t\"",
+    );
 }

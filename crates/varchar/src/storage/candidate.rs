@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use super::encode::encode_auto_increment_record;
 use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
-use crate::{Error, Result, Value};
+use crate::{Error, Resource, Result, Value};
 
 struct DeferredAutoIncrement<'a> {
     table: &'a str,
@@ -33,7 +33,7 @@ impl<'a> Candidate<'a> {
         let mut output = String::new();
         output
             .try_reserve(source.len())
-            .map_err(|_| limit_error(max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         Ok(Self {
             state,
             cursor: 0,
@@ -77,10 +77,10 @@ impl<'a> Candidate<'a> {
     fn auto_increment_edit(&self, table: &str, last: i64) -> Result<DeferredAutoIncrement<'a>> {
         let catalog = self.state.catalog();
         let state = catalog.auto_increment_state(table).ok_or_else(|| {
-            Error::Schema(format!("table {table:?} has no auto-increment column"))
+            Error::schema(format!("table {table:?} has no auto-increment column"))
         })?;
         if last < state.last {
-            return Err(Error::Schema(format!(
+            return Err(Error::schema(format!(
                 "auto-increment high-water mark for table {table:?} cannot decrease"
             )));
         }
@@ -165,7 +165,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(additional)
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         self.output.push_str(gap);
         self.output.push_str(replacement);
         self.cursor = range.end;
@@ -190,7 +190,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(fragment.len())
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         self.output.push_str(fragment);
         Ok(())
     }
@@ -205,17 +205,15 @@ fn check_size(actual: usize, limit: usize) -> Result<()> {
 }
 
 fn limit_error(limit: usize) -> Error {
-    Error::ResourceLimit {
-        resource: "database bytes",
-        limit,
-    }
+    Error::resource_limit(Resource::DatabaseBytes, limit)
+}
+
+const fn allocation_error(operation: &'static str) -> Error {
+    Error::allocation(operation)
 }
 
 fn invalid_range(offset: usize) -> Error {
-    Error::CorruptStorage {
-        offset,
-        message: String::from("storage edit range is outside the database"),
-    }
+    Error::corrupt_storage(offset, "storage edit range is outside the database")
 }
 
 #[cfg(test)]

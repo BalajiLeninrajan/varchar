@@ -18,7 +18,7 @@ pub(super) fn resolve_column(
         let source = schemas
             .iter()
             .position(|schema| schema.name == *qualifier)
-            .ok_or_else(|| Error::Schema(format!("unknown table qualifier {qualifier:?}")))?;
+            .ok_or_else(|| Error::schema(format!("unknown table qualifier {qualifier:?}")))?;
         let column = require_column(schemas[source], &reference.name)?;
         return Ok(ColumnLocation { source, column });
     }
@@ -31,7 +31,7 @@ pub(super) fn resolve_column(
             .position(|column| column.name == reference.name)
         {
             if match_.is_some() {
-                return Err(Error::Schema(format!(
+                return Err(Error::schema(format!(
                     "ambiguous column {:?}; qualify it with a table name",
                     reference.name
                 )));
@@ -41,12 +41,12 @@ pub(super) fn resolve_column(
     }
     match_.ok_or_else(|| {
         if let [schema] = schemas {
-            Error::Schema(format!(
+            Error::schema(format!(
                 "unknown column {:?} in table {:?}",
                 reference.name, schema.name
             ))
         } else {
-            Error::Schema(format!("unknown column {:?}", reference.name))
+            Error::schema(format!("unknown column {:?}", reference.name))
         }
     })
 }
@@ -55,7 +55,7 @@ pub(super) fn require_local_column(schema: &TableSchema, reference: &ColumnRef) 
     if let Some(qualifier) = &reference.qualifier
         && qualifier != &schema.name
     {
-        return Err(Error::Schema(format!(
+        return Err(Error::schema(format!(
             "unknown table qualifier {qualifier:?} for table {:?}",
             schema.name
         )));
@@ -69,7 +69,7 @@ pub(super) fn require_column(schema: &TableSchema, name: &str) -> Result<usize> 
         .iter()
         .position(|column| column.name == name)
         .ok_or_else(|| {
-            Error::Schema(format!(
+            Error::schema(format!(
                 "unknown column {name:?} in table {:?}",
                 schema.name
             ))

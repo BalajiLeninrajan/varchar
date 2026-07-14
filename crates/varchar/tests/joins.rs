@@ -1,6 +1,9 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
+use varchar::{
+    DataType, Database, Error, ErrorCode, Limits, Outcome, Resource, ResultColumn, RowSet,
+    SelectExplanation, Value,
+};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -57,34 +60,58 @@ fn assert_row_set(
     assert_eq!(actual.rows(), expected_rows);
 }
 
-fn schema_error(database: &mut Database, sql: &str) -> String {
+fn schema_error(database: &mut Database, sql: &str) -> Error {
     let before = database.as_str().to_owned();
     let error = database
         .execute(sql)
         .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
     assert_eq!(database.as_str(), before, "failed SELECT changed state");
-    match error {
-        Error::Schema(message) => message,
-        other => panic!("expected schema error for {sql:?}, got {other:?}"),
-    }
+    assert_eq!(
+        error.code(),
+        ErrorCode::Schema,
+        "expected schema error for {sql:?}, got {error:?}"
+    );
+    error
 }
 
 fn unsupported_error(database: &mut Database, sql: &str) {
     let before = database.as_str().to_owned();
-    assert!(
-        matches!(database.execute(sql), Err(Error::Unsupported { .. })),
-        "expected unsupported-feature error for {sql:?}"
+    let error = database
+        .execute(sql)
+        .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
+    assert_eq!(
+        error.code(),
+        ErrorCode::UnsupportedSql,
+        "expected unsupported-feature error for {sql:?}, got {error:?}"
     );
     assert_eq!(database.as_str(), before, "failed SELECT changed state");
 }
 
 fn parse_error(database: &mut Database, sql: &str) {
     let before = database.as_str().to_owned();
-    assert!(
-        matches!(database.execute(sql), Err(Error::Parse { .. })),
-        "expected parse error for {sql:?}"
+    let error = database
+        .execute(sql)
+        .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
+    assert_eq!(
+        error.code(),
+        ErrorCode::SqlParse,
+        "expected parse error for {sql:?}, got {error:?}"
     );
     assert_eq!(database.as_str(), before, "failed SELECT changed state");
+}
+
+fn assert_resource_limit(
+    database: &mut Database,
+    sql: &str,
+    expected_resource: Resource,
+    expected_limit: usize,
+) {
+    let error = database
+        .execute(sql)
+        .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(expected_resource));
+    assert_eq!(error.limit(), Some(expected_limit));
 }
 
 #[test]
@@ -481,7 +508,7 @@ fn unqualified_columns_must_resolve_uniquely() {
         "SELECT id FROM customers JOIN invoices ON customers.id = customer_id",
         "SELECT name FROM customers JOIN invoices ON id = customer_id",
     ] {
-        let message = schema_error(&mut database, sql);
+        let message = schema_error(&mut database, sql).to_string();
         assert!(
             message.to_ascii_lowercase().contains("ambiguous"),
             "expected an ambiguity diagnostic for {sql:?}, got {message:?}"
@@ -508,7 +535,7 @@ fn unknown_qualifiers_and_columns_are_schema_errors() {
         "SELECT children.label FROM parents JOIN children ON parents.id = children.missing",
         "SELECT children.label FROM parents JOIN children ON parents.id = children.parent_id WHERE missing.id = 1",
     ] {
-        let message = schema_error(&mut database, sql);
+        let message = schema_error(&mut database, sql).to_string();
         assert!(
             message.to_ascii_lowercase().contains("unknown"),
             "expected an unknown-name diagnostic for {sql:?}, got {message:?}"
@@ -523,10 +550,10 @@ fn join_columns_must_have_the_same_type() {
     execute(&mut database, "CREATE TABLE labels (id TEXT NOT NULL)");
     let before = database.as_str().to_owned();
 
-    assert!(matches!(
-        database.execute("SELECT * FROM numbers JOIN labels ON numbers.id = labels.id"),
-        Err(Error::Type(_))
-    ));
+    let error = database
+        .execute("SELECT * FROM numbers JOIN labels ON numbers.id = labels.id")
+        .expect_err("mismatched join column types should be rejected");
+    assert_eq!(error.code(), ErrorCode::Type);
     assert_eq!(database.as_str(), before);
 }
 
@@ -555,12 +582,14 @@ fn aliases_self_joins_and_non_inner_join_types_are_rejected() {
         unsupported_error(&mut database, sql);
     }
 
-    assert_eq!(
-        schema_error(
-            &mut database,
-            "SELECT * FROM nodes JOIN nodes ON nodes.parent_id = nodes.id",
-        ),
-        "table \"nodes\" appears more than once in a SELECT"
+    let message = schema_error(
+        &mut database,
+        "SELECT * FROM nodes JOIN nodes ON nodes.parent_id = nodes.id",
+    )
+    .to_string();
+    assert!(
+        message.contains("table \"nodes\" appears more than once in a SELECT"),
+        "expected duplicate-source context, got {message:?}"
     );
 
     for sql in [
@@ -620,6 +649,58 @@ fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
 }
 
 #[test]
+fn joined_explanation_output_budget_charges_owned_metadata() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    let sql = "SELECT parents.name, children.name \
+               FROM parents JOIN children ON parents.id = children.parent_id";
+    let explanation = database.explain_select(sql).expect("JOIN SELECT explains");
+    let exact_charge = std::mem::size_of::<SelectExplanation>()
+        + explanation.pattern().len()
+        + std::mem::size_of_val(explanation.sources())
+        + explanation.sources().iter().map(String::len).sum::<usize>()
+        + std::mem::size_of_val(explanation.columns())
+        + explanation
+            .columns()
+            .iter()
+            .map(|column| {
+                column.label().len()
+                    + column.origin().table().len()
+                    + column.origin().column().len()
+            })
+            .sum::<usize>();
+    let tight_limit = exact_charge - 1;
+    let limits = Limits {
+        max_query_output_bytes: tight_limit,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(database.into_string(), limits).expect("fixture reloads");
+    let before = limited.as_str().to_owned();
+
+    let error = limited
+        .explain_select(sql)
+        .expect_err("owned explanation metadata should exceed the tight output limit");
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
+    assert_eq!(error.limit(), Some(tight_limit));
+    assert_resource_limit(
+        &mut limited,
+        &format!("EXPLAIN REGEX {sql}"),
+        Resource::QueryOutputBytes,
+        tight_limit,
+    );
+    assert_eq!(limited.as_str(), before);
+}
+
+#[test]
 fn joins_work_after_reloading_the_authoritative_string() {
     let mut database = Database::new();
     execute(
@@ -671,16 +752,13 @@ fn join_fanout_obeys_the_query_output_byte_limit() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute(
-            "SELECT * FROM left_rows JOIN right_rows \
-             ON left_rows.join_key = right_rows.join_key"
-        ),
-        Err(Error::ResourceLimit {
-            resource: "query output bytes",
-            limit: 256
-        })
-    ));
+    assert_resource_limit(
+        &mut limited,
+        "SELECT * FROM left_rows JOIN right_rows \
+         ON left_rows.join_key = right_rows.join_key",
+        Resource::QueryOutputBytes,
+        256,
+    );
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -697,13 +775,12 @@ fn join_source_count_has_its_own_limit() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute("SELECT * FROM a JOIN b ON a.id = b.id"),
-        Err(Error::ResourceLimit {
-            resource: "JOIN sources",
-            limit: 1,
-        })
-    ));
+    assert_resource_limit(
+        &mut limited,
+        "SELECT * FROM a JOIN b ON a.id = b.id",
+        Resource::JoinSources,
+        1,
+    );
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -748,17 +825,14 @@ fn nonmatching_join_fanout_obeys_the_combination_limit() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute(
-            "SELECT * FROM a \
-             JOIN b ON a.join_key = b.join_key \
-             JOIN c ON b.join_key = c.join_key"
-        ),
-        Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
-            limit: 100
-        })
-    ));
+    assert_resource_limit(
+        &mut limited,
+        "SELECT * FROM a \
+         JOIN b ON a.join_key = b.join_key \
+         JOIN c ON b.join_key = c.join_key",
+        Resource::JoinSteps,
+        100,
+    );
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -779,17 +853,14 @@ fn each_join_condition_evaluation_consumes_the_work_budget() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute(
-            "SELECT * FROM a JOIN b ON a.join_key = b.join_key \
-             AND a.join_key = b.join_key AND a.join_key = b.join_key \
-             AND a.join_key = b.join_key AND a.join_key = b.join_key"
-        ),
-        Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
-            limit: 50
-        })
-    ));
+    assert_resource_limit(
+        &mut limited,
+        "SELECT * FROM a JOIN b ON a.join_key = b.join_key \
+         AND a.join_key = b.join_key AND a.join_key = b.join_key \
+         AND a.join_key = b.join_key AND a.join_key = b.join_key",
+        Resource::JoinSteps,
+        50,
+    );
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -836,13 +907,36 @@ fn nonmatching_join_separates_working_memory_from_output_memory() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), working_limited).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute(sql),
-        Err(Error::ResourceLimit {
-            resource: "query working bytes",
-            limit: 8_000
-        })
-    ));
+    assert_resource_limit(&mut limited, sql, Resource::QueryWorkingBytes, 8_000);
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn single_table_scan_charges_large_unprojected_values_to_working_memory() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE records (id INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    let payload = "x".repeat(4_096);
+    execute(
+        &mut database,
+        &format!("INSERT INTO records VALUES (1, '{payload}')"),
+    );
+    let blob = database.into_string();
+    let limits = Limits {
+        max_query_working_bytes: 512,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert_resource_limit(
+        &mut limited,
+        "SELECT id FROM records",
+        Resource::QueryWorkingBytes,
+        512,
+    );
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -867,14 +961,25 @@ fn join_working_budget_accounts_for_source_bucket_spare_capacity() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    assert!(matches!(
-        limited.execute("SELECT a.id FROM a JOIN b ON a.id = b.id"),
-        Err(Error::ResourceLimit {
-            resource: "query working bytes",
-            limit,
-        }) if limit == formerly_undercharged_limit
-    ));
+    assert_resource_limit(
+        &mut limited,
+        "SELECT a.id FROM a JOIN b ON a.id = b.id",
+        Resource::QueryWorkingBytes,
+        formerly_undercharged_limit,
+    );
     assert_eq!(limited.as_str(), blob);
+
+    let corrected_limit = formerly_undercharged_limit + 2 * 3 * std::mem::size_of::<Vec<Value>>();
+    let limits = Limits {
+        max_query_working_bytes: corrected_limit,
+        ..Limits::default()
+    };
+    let mut exact =
+        Database::from_string_with_limits(blob, limits).expect("fixture reloads at exact limit");
+    assert_eq!(
+        rows(&mut exact, "SELECT a.id FROM a JOIN b ON a.id = b.id").rows(),
+        &[vec![Value::Integer(1)]]
+    );
 }
 
 trait ResultExt<T, E> {
