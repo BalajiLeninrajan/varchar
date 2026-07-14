@@ -616,6 +616,61 @@ fn canonical_storage_is_strictly_validated() {
 }
 
 #[test]
+fn known_v1_storage_fixture_remains_compatible() {
+    let blob =
+        "V1;~S|people|id:I:!|note:T:?|active:B:!;~R|people|I-7|Tsemi%00003Bline%002028break|B1;";
+    let mut database = Database::from_string(blob.to_owned()).expect("known V1 fixture loads");
+
+    assert_eq!(
+        row_set(execute(
+            &mut database,
+            "SELECT id, note, active FROM people",
+        )),
+        RowSet {
+            columns: vec![
+                column("id", DataType::Integer, false),
+                column("note", DataType::Text, true),
+                column("active", DataType::Boolean, false),
+            ],
+            rows: vec![vec![
+                Value::Integer(-7),
+                Value::Text("semi;line\u{2028}break".to_owned()),
+                Value::Boolean(true),
+            ]],
+        }
+    );
+    assert_eq!(
+        execute(&mut database, "INSERT INTO people VALUES (0, NULL, FALSE)",),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(database.into_string(), format!("{blob}~R|people|I0|N|B0;"));
+}
+
+#[test]
+fn storage_edits_preserve_canonical_record_order() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE t (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO t VALUES (1, 'first')");
+    execute(&mut database, "INSERT INTO t VALUES (2, 'second')");
+    execute(&mut database, "CREATE TABLE u (flag BOOLEAN NOT NULL)");
+    assert_eq!(
+        database.as_str(),
+        "V1;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tfirst;~R|t|I2|Tsecond;"
+    );
+
+    execute(&mut database, "INSERT INTO u VALUES (TRUE)");
+    execute(&mut database, "UPDATE t SET name = 'changed' WHERE id = 1");
+    execute(&mut database, "DELETE FROM t WHERE id = 2");
+    assert_eq!(
+        database.as_str(),
+        "V1;~S|t|id:I:!|name:T:!;~S|u|flag:B:!;~R|t|I1|Tchanged;~R|u|B1;"
+    );
+}
+
+#[test]
 fn corrupt_storage_offsets_point_to_the_exact_cell_payload() {
     let blob = "V1;~S|t|id:I:?|note:T:?;~R|t|I1|Tok%0000zz;";
     let expected = blob.find('%').expect("malformed escape is present");
@@ -708,18 +763,28 @@ fn configurable_resource_limits_fail_without_partial_work() {
         Err(Error::ResourceLimit { .. })
     ));
 
+    let database_limit = blob.len();
     let mutation_limits = Limits {
-        max_database_bytes: blob.len(),
+        max_database_bytes: database_limit,
         ..Limits::default()
     };
     let mut database = Database::from_string_with_limits(blob, mutation_limits)
         .expect("existing blob exactly fits");
-    let before = database.as_str().to_owned();
-    assert!(matches!(
-        database.execute("INSERT INTO t VALUES (2, 'too large')"),
-        Err(Error::ResourceLimit { .. })
-    ));
-    assert_eq!(database.as_str(), before);
+    for sql in [
+        "CREATE TABLE extra (value BOOLEAN)",
+        "INSERT INTO t VALUES (2, 'too large')",
+        "UPDATE t SET name = 'a much larger result' WHERE id = 12345",
+    ] {
+        let before = database.as_str().to_owned();
+        assert!(matches!(
+            database.execute(sql),
+            Err(Error::ResourceLimit {
+                resource: "database bytes",
+                limit,
+            }) if limit == database_limit
+        ));
+        assert_eq!(database.as_str(), before, "failed mutation changed {sql:?}");
+    }
 }
 
 trait ResultExt<T, E> {
