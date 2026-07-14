@@ -9,10 +9,10 @@ use crate::sql::{
     Select, Statement, Update,
 };
 use crate::storage::{self, TableSchema};
+use crate::value::validate_value;
 use crate::{Column, DataType, Error, Outcome, RegexPlan, Result, RowSet, Span, Value};
 
 const MIB: usize = 1024 * 1024;
-const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
 /// Resource bounds applied by the platform-neutral database core.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,20 +164,9 @@ impl Database {
                 })
                 .collect(),
         };
-        let encoded = storage::encode_schema(&schema)?;
-        let mut candidate = String::new();
-        push_database_fragment(
-            &mut candidate,
-            &self.blob[..catalog.row_start],
-            &self.limits,
-        )?;
-        push_database_fragment(&mut candidate, &encoded, &self.limits)?;
-        push_database_fragment(
-            &mut candidate,
-            &self.blob[catalog.row_start..],
-            &self.limits,
-        )?;
-        self.commit_candidate(candidate)?;
+        let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
+        candidate.insert_schema(&catalog, &schema)?;
+        self.commit_candidate(candidate.finish()?)?;
         Ok(Outcome::Created {
             table: statement.table,
         })
@@ -187,12 +176,9 @@ impl Database {
         let catalog = storage::validate_and_catalog(&self.blob)?;
         let schema = require_table(&catalog, &statement.table)?;
         let values = arrange_insert_values(schema, statement.columns, statement.values)?;
-        let encoded = storage::encode_row(&statement.table, &values, schema)?;
-
-        let mut candidate = String::new();
-        push_database_fragment(&mut candidate, &self.blob, &self.limits)?;
-        push_database_fragment(&mut candidate, &encoded, &self.limits)?;
-        self.commit_candidate(candidate)?;
+        let mut candidate = storage::Candidate::new(&self.blob, self.limits.max_database_bytes)?;
+        candidate.append_row(schema.row_layout(), &values)?;
+        self.commit_candidate(candidate.finish()?)?;
         Ok(Outcome::Affected { rows: 1 })
     }
 
@@ -344,9 +330,8 @@ fn arrange_insert_values(
         supplied
     };
 
-    // Encoding performs both type and nullability validation.
     for (value, column) in values.iter().zip(&schema.columns) {
-        let _ = storage::encode_cell(value, column)?;
+        validate_value(value, column)?;
     }
     Ok(values)
 }
@@ -365,7 +350,7 @@ fn compile_assignments(
             )));
         }
         let index = require_column(schema, &assignment.column)?;
-        let _ = storage::encode_cell(&assignment.value, &schema.columns[index])?;
+        validate_value(&assignment.value, &schema.columns[index])?;
         compiled.push((index, assignment.value.clone()));
     }
     Ok(compiled)
@@ -404,7 +389,7 @@ fn compile_predicates(
                     }
                     Ok(CompiledPredicate::Like {
                         column,
-                        pattern: compile_like_pattern(pattern, definition, limits)?,
+                        pattern: compile_like_pattern(pattern, limits)?,
                     })
                 }
                 PredicateOperator::IsNull => Ok(CompiledPredicate::IsNull { column }),
@@ -423,14 +408,12 @@ fn compile_row_pattern(
     check_limit(predicates.len(), limits.max_predicates, "WHERE predicates")?;
 
     let mut pattern = PatternBuilder::new(limits.max_pattern_bytes);
-    pattern.push_str(r"~R\|")?;
-    pattern.push_str(&regex::escape(table))?;
-    pattern.push_str(r"\|")?;
+    pattern.push_str(&storage::row_prefix_pattern(table))?;
     for predicate in predicates {
         let column_index = predicate.column();
         pattern.push_str("(?=")?;
         for column in &schema[..column_index] {
-            pattern.push_str(&cell_pattern(column, true))?;
+            pattern.push_str(&storage::cell_pattern(column, true))?;
             pattern.push_str(r"\|")?;
         }
         match predicate {
@@ -440,9 +423,9 @@ fn compile_row_pattern(
             CompiledPredicate::NotEqual { encoded, .. } => {
                 pattern.push_str("(?!")?;
                 pattern.push_str(&regex::escape(encoded))?;
-                pattern.push_str(cell_boundary(column_index, schema.len()))?;
+                pattern.push_str(storage::cell_boundary_pattern(column_index, schema.len()))?;
                 pattern.push_char(')')?;
-                pattern.push_str(&cell_pattern(&schema[column_index], false))?;
+                pattern.push_str(&storage::cell_pattern(&schema[column_index], false))?;
             }
             CompiledPredicate::Like {
                 pattern: like_pattern,
@@ -450,10 +433,10 @@ fn compile_row_pattern(
             } => pattern.push_str(like_pattern)?,
             CompiledPredicate::IsNull { .. } => pattern.push_char('N')?,
             CompiledPredicate::IsNotNull { .. } => {
-                pattern.push_str(&cell_pattern(&schema[column_index], false))?;
+                pattern.push_str(&storage::cell_pattern(&schema[column_index], false))?;
             }
         }
-        pattern.push_str(cell_boundary(column_index, schema.len()))?;
+        pattern.push_str(storage::cell_boundary_pattern(column_index, schema.len()))?;
         pattern.push_char(')')?;
     }
 
@@ -461,7 +444,7 @@ fn compile_row_pattern(
         if index > 0 {
             pattern.push_str(r"\|")?;
         }
-        pattern.push_str(&cell_pattern(column, true))?;
+        pattern.push_str(&storage::cell_pattern(column, true))?;
     }
     pattern.push_char(';')?;
     Ok(pattern.finish())
@@ -522,28 +505,7 @@ impl CompiledPredicate {
     }
 }
 
-fn cell_boundary(column: usize, column_count: usize) -> &'static str {
-    if column + 1 == column_count {
-        ";"
-    } else {
-        r"\|"
-    }
-}
-
-fn cell_pattern(column: &Column, include_null: bool) -> String {
-    let typed = match column.data_type {
-        DataType::Text => format!("T{TEXT_UNIT_PATTERN}*"),
-        DataType::Integer => String::from(r"I(?:0|-?[1-9][0-9]*)"),
-        DataType::Boolean => String::from(r"B[01]"),
-    };
-    if include_null && column.nullable {
-        format!("(?:N|{typed})")
-    } else {
-        typed
-    }
-}
-
-fn compile_like_pattern(value: &str, column: &Column, limits: &Limits) -> Result<String> {
+fn compile_like_pattern(value: &str, limits: &Limits) -> Result<String> {
     let mut result = PatternBuilder::new(limits.max_pattern_bytes);
     result.push_str("T")?;
     let mut characters = value.chars().peekable();
@@ -552,13 +514,13 @@ fn compile_like_pattern(value: &str, column: &Column, limits: &Limits) -> Result
         match character {
             '%' => {
                 if !previous_was_many {
-                    result.push_str(TEXT_UNIT_PATTERN)?;
+                    result.push_str(storage::text_unit_pattern())?;
                     result.push_char('*')?;
                     previous_was_many = true;
                 }
             }
             '_' => {
-                result.push_str(TEXT_UNIT_PATTERN)?;
+                result.push_str(storage::text_unit_pattern())?;
                 previous_was_many = false;
             }
             '\\' => {
@@ -572,11 +534,11 @@ fn compile_like_pattern(value: &str, column: &Column, limits: &Limits) -> Result
                         "LIKE pattern contains unsupported escape \\{escaped}"
                     )));
                 }
-                push_encoded_text_literal(&mut result, escaped, column)?;
+                push_encoded_text_literal(&mut result, escaped)?;
                 previous_was_many = false;
             }
             literal => {
-                push_encoded_text_literal(&mut result, literal, column)?;
+                push_encoded_text_literal(&mut result, literal)?;
                 previous_was_many = false;
             }
         }
@@ -584,16 +546,8 @@ fn compile_like_pattern(value: &str, column: &Column, limits: &Limits) -> Result
     Ok(result.finish())
 }
 
-fn push_encoded_text_literal(
-    result: &mut PatternBuilder,
-    character: char,
-    column: &Column,
-) -> Result<()> {
-    let encoded = storage::encode_cell(&Value::Text(character.to_string()), column)?;
-    let payload = encoded
-        .strip_prefix('T')
-        .expect("encoding a TEXT value always produces a T-prefixed cell");
-    result.push_str(&regex::escape(payload))
+fn push_encoded_text_literal(result: &mut PatternBuilder, character: char) -> Result<()> {
+    result.push_str(&storage::encoded_text_literal_pattern(character))
 }
 
 fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
@@ -608,9 +562,9 @@ fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
 
 fn execute_plan(blob: &str, plan: &RegexPlan, limits: &Limits) -> Result<RowSet> {
     let regex = build_regex(plan.pattern(), limits)?;
-    let schema = TableSchema {
-        name: plan.table.clone(),
-        columns: plan.schema.clone(),
+    let layout = storage::RowLayout {
+        table: &plan.table,
+        columns: &plan.schema,
     };
     let mut result_bytes = std::mem::size_of::<RowSet>();
     check_limit(result_bytes, limits.max_result_bytes, "result bytes")?;
@@ -662,7 +616,7 @@ fn execute_plan(blob: &str, plan: &RegexPlan, limits: &Limits) -> Result<RowSet>
             .ok_or_else(|| result_limit_error(limits))?;
         check_limit(structural_total, limits.max_result_bytes, "result bytes")?;
 
-        let decoded = storage::decode_row(matched.as_str(), &schema)?;
+        let decoded = storage::decode_row(matched.as_str(), layout)?;
         let payload_bytes = plan.projection.iter().try_fold(0_usize, |total, &index| {
             total
                 .checked_add(value_payload_size(&decoded[index]))
@@ -698,45 +652,24 @@ where
     F: FnMut(Vec<Value>) -> Result<Option<Vec<Value>>>,
 {
     let regex = build_regex(pattern, limits)?;
-    let mut candidate = String::new();
-    candidate
-        .try_reserve(blob.len())
-        .map_err(|_| Error::ResourceLimit {
-            resource: "database bytes",
-            limit: limits.max_database_bytes,
-        })?;
-    let mut previous_end = 0;
+    let mut candidate = storage::Candidate::new(blob, limits.max_database_bytes)?;
     let mut affected = 0_usize;
 
     for matched in regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
-        push_database_fragment(&mut candidate, &blob[previous_end..matched.start()], limits)?;
-        let values = storage::decode_row(matched.as_str(), schema)?;
-        if let Some(values) = rewrite(values)? {
-            let encoded = storage::encode_row(&schema.name, &values, schema)?;
-            push_database_fragment(&mut candidate, &encoded, limits)?;
-        }
-        previous_end = matched.end();
+        let values = storage::decode_row(matched.as_str(), schema.row_layout())?;
+        let replacement = rewrite(values)?;
+        candidate.rewrite_row(
+            matched.start()..matched.end(),
+            schema.row_layout(),
+            replacement.as_deref(),
+        )?;
         affected = affected.checked_add(1).ok_or(Error::ResourceLimit {
             resource: "affected rows",
             limit: usize::MAX,
         })?;
     }
-    push_database_fragment(&mut candidate, &blob[previous_end..], limits)?;
-    Ok((candidate, affected))
-}
-
-fn push_database_fragment(candidate: &mut String, fragment: &str, limits: &Limits) -> Result<()> {
-    let new_len = candidate
-        .len()
-        .checked_add(fragment.len())
-        .ok_or(Error::ResourceLimit {
-            resource: "database bytes",
-            limit: limits.max_database_bytes,
-        })?;
-    check_limit(new_len, limits.max_database_bytes, "database bytes")?;
-    candidate.push_str(fragment);
-    Ok(())
+    Ok((candidate.finish()?, affected))
 }
 
 fn make_plan(
