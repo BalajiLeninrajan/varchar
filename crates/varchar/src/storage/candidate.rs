@@ -6,8 +6,16 @@
 
 use std::ops::Range;
 
+use super::encode::encode_auto_increment_record;
 use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
 use crate::{Error, Result, Value};
+
+struct DeferredAutoIncrement<'a> {
+    table: &'a str,
+    column: usize,
+    last: i64,
+    record_range: Range<usize>,
+}
 
 /// A bounded, ordered edit of one validated authoritative database string.
 pub(crate) struct Candidate<'a> {
@@ -15,6 +23,7 @@ pub(crate) struct Candidate<'a> {
     cursor: usize,
     output: String,
     max_bytes: usize,
+    deferred_auto_increment: Option<DeferredAutoIncrement<'a>>,
 }
 
 impl<'a> Candidate<'a> {
@@ -30,13 +39,77 @@ impl<'a> Candidate<'a> {
             cursor: 0,
             output,
             max_bytes,
+            deferred_auto_increment: None,
         })
     }
 
-    pub(crate) fn insert_schema(&mut self, schema: &TableSchema) -> Result<()> {
+    pub(crate) fn insert_schema_with_auto_increment(
+        &mut self,
+        schema: &TableSchema,
+        auto_increment: Option<usize>,
+    ) -> Result<()> {
         let encoded = encode_schema(schema)?;
+        let encoded = if let Some(column) = auto_increment {
+            encoded + &encode_auto_increment_record(schema, column, 0)?
+        } else {
+            encoded
+        };
         let row_start = self.state.catalog().row_start;
         self.splice(row_start..row_start, &encoded)
+    }
+
+    pub(crate) fn advance_auto_increment(&mut self, table: &str, last: i64) -> Result<()> {
+        let edit = self.auto_increment_edit(table, last)?;
+        let encoded = self.encode_auto_increment_edit(&edit)?;
+        self.splice(edit.record_range, &encoded)
+    }
+
+    /// Defer the sequence edit until a row is actually rewritten.
+    ///
+    /// `UPDATE` resolves assignments before it knows whether any row matches.
+    /// Keeping only this logical edit avoids allocating, size-checking, or
+    /// validating a larger metadata record for a zero-match statement.
+    pub(crate) fn defer_auto_increment(&mut self, table: &str, last: i64) -> Result<()> {
+        self.deferred_auto_increment = Some(self.auto_increment_edit(table, last)?);
+        Ok(())
+    }
+
+    fn auto_increment_edit(&self, table: &str, last: i64) -> Result<DeferredAutoIncrement<'a>> {
+        let catalog = self.state.catalog();
+        let state = catalog.auto_increment_state(table).ok_or_else(|| {
+            Error::Schema(format!("table {table:?} has no auto-increment column"))
+        })?;
+        if last < state.last {
+            return Err(Error::Schema(format!(
+                "auto-increment high-water mark for table {table:?} cannot decrease"
+            )));
+        }
+        let schema = catalog
+            .table(table)
+            .expect("auto-increment state always names a catalog table");
+        Ok(DeferredAutoIncrement {
+            table: &schema.name,
+            column: state.column,
+            last,
+            record_range: state.record_range.clone(),
+        })
+    }
+
+    fn encode_auto_increment_edit(&self, edit: &DeferredAutoIncrement<'_>) -> Result<String> {
+        let schema = self
+            .state
+            .catalog()
+            .table(edit.table)
+            .expect("a deferred auto-increment edit names a catalog table");
+        encode_auto_increment_record(schema, edit.column, edit.last)
+    }
+
+    fn apply_deferred_auto_increment(&mut self) -> Result<()> {
+        let Some(edit) = self.deferred_auto_increment.take() else {
+            return Ok(());
+        };
+        let encoded = self.encode_auto_increment_edit(&edit)?;
+        self.splice(edit.record_range, &encoded)
     }
 
     pub(crate) fn append_row(&mut self, layout: RowLayout<'_>, values: &[Value]) -> Result<()> {
@@ -54,6 +127,7 @@ impl<'a> Candidate<'a> {
         let encoded = replacement
             .map(|values| encode_row(values, layout))
             .transpose()?;
+        self.apply_deferred_auto_increment()?;
         self.splice(range, encoded.as_deref().unwrap_or_default())
     }
 

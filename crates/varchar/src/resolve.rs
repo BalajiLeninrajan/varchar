@@ -10,7 +10,7 @@ use crate::sql::{
     Assignment, ColumnModifier, CreateElement, CreateTable, Predicate, PredicateOperator,
     Projection, TableConstraint,
 };
-use crate::storage::{Catalog, ForeignKey, TableSchema};
+use crate::storage::{AutoIncrement, Catalog, ForeignKey, TableSchema};
 use crate::value::validate_value;
 use crate::{Column, DataType, Error, Result, Value};
 
@@ -22,7 +22,22 @@ pub(crate) enum ResolvedPredicate<'a> {
     IsNotNull { column: usize },
 }
 
-pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<TableSchema> {
+pub(crate) struct ResolvedCreate {
+    pub(crate) schema: TableSchema,
+    pub(crate) auto_increment: Option<usize>,
+}
+
+pub(crate) struct ResolvedInsert {
+    pub(crate) values: Vec<Value>,
+    pub(crate) next_auto_increment: Option<i64>,
+}
+
+pub(crate) struct ResolvedAssignments {
+    pub(crate) values: Vec<(usize, Value)>,
+    pub(crate) next_auto_increment: Option<i64>,
+}
+
+pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<ResolvedCreate> {
     let CreateTable { table, elements } = statement;
     if catalog.table(&table).is_some() {
         return Err(Error::Schema(format!("table {table:?} already exists")));
@@ -56,12 +71,13 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
 
     let mut primary_key = None;
     let mut foreign_keys = Vec::new();
+    let mut auto_increment = None;
     let mut saw_not_null = vec![false; columns.len()];
     let mut saw_foreign_key = vec![false; columns.len()];
     let mut column_index = 0;
 
-    // Fold local declarations in source order. Cross-table checks wait until
-    // the complete local primary key is available for self references.
+    // Fold local declarations in source order. Cross-table and AUTO checks
+    // wait until the complete local primary key is available.
     for element in elements {
         match element {
             CreateElement::Column(column) => {
@@ -94,6 +110,12 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             reference.column,
                             &mut saw_foreign_key,
                             &mut foreign_keys,
+                        )?,
+                        ColumnModifier::AutoIncrement => declare_auto_increment(
+                            &table,
+                            &column.name,
+                            index,
+                            &mut auto_increment,
                         )?,
                     }
                 }
@@ -130,7 +152,13 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     }
     foreign_keys.sort_by_key(|foreign_key| foreign_key.column);
     schema.foreign_keys = foreign_keys;
-    Ok(schema)
+    if let Some(column) = auto_increment {
+        validate_auto_increment(&schema, column)?;
+    }
+    Ok(ResolvedCreate {
+        schema,
+        auto_increment,
+    })
 }
 
 fn declare_primary_key(
@@ -176,6 +204,26 @@ fn declare_foreign_key(
     Ok(())
 }
 
+fn declare_auto_increment(
+    table: &str,
+    column: &str,
+    index: usize,
+    auto_increment: &mut Option<usize>,
+) -> Result<()> {
+    match *auto_increment {
+        Some(existing) if existing == index => Err(Error::Schema(format!(
+            "duplicate AUTOINCREMENT declaration for column {column:?}"
+        ))),
+        Some(_) => Err(Error::Schema(format!(
+            "table {table:?} may have only one auto-increment column"
+        ))),
+        None => {
+            *auto_increment = Some(index);
+            Ok(())
+        }
+    }
+}
+
 fn validate_foreign_key(
     catalog: &Catalog,
     schema: &TableSchema,
@@ -211,6 +259,17 @@ fn validate_foreign_key(
             schema.columns[foreign_key.column].name,
             foreign_key.referenced_table,
             foreign_key.referenced_column
+        )));
+    }
+    Ok(())
+}
+
+fn validate_auto_increment(schema: &TableSchema, column: usize) -> Result<()> {
+    let definition = &schema.columns[column];
+    if schema.primary_key != Some(column) || definition.data_type != DataType::Integer {
+        return Err(Error::Schema(format!(
+            "auto-increment column {:?}.{:?} must be its INTEGER primary key",
+            schema.name, definition.name
         )));
     }
     Ok(())
@@ -256,10 +315,11 @@ pub(crate) fn projection(schema: &TableSchema, projection: &Projection) -> Resul
 
 pub(crate) fn insert_values(
     schema: &TableSchema,
+    auto_increment: Option<AutoIncrement>,
     columns: Option<Vec<String>>,
     supplied: Vec<Value>,
-) -> Result<Vec<Value>> {
-    let values = if let Some(columns) = columns {
+) -> Result<ResolvedInsert> {
+    let mut values = if let Some(columns) = columns {
         if columns.len() != supplied.len() {
             return Err(Error::Type(format!(
                 "INSERT names {} columns but supplies {} values",
@@ -289,16 +349,42 @@ pub(crate) fn insert_values(
         supplied
     };
 
+    let next_auto_increment = if let Some(auto_increment) = auto_increment {
+        let value = values
+            .get_mut(auto_increment.column)
+            .expect("validated auto-increment column is in the schema");
+        match value {
+            Value::Null => {
+                let next = auto_increment.last.checked_add(1).ok_or_else(|| {
+                    Error::Constraint(format!(
+                        "auto-increment sequence for table {:?} is exhausted",
+                        schema.name
+                    ))
+                })?;
+                *value = Value::Integer(next);
+                Some(next)
+            }
+            Value::Integer(value) if *value > auto_increment.last => Some(*value),
+            Value::Integer(_) | Value::Text(_) | Value::Boolean(_) => None,
+        }
+    } else {
+        None
+    };
+
     for (value, column) in values.iter().zip(&schema.columns) {
         validate_value(value, column)?;
     }
-    Ok(values)
+    Ok(ResolvedInsert {
+        values,
+        next_auto_increment,
+    })
 }
 
 pub(crate) fn assignments(
     schema: &TableSchema,
+    auto_increment: Option<AutoIncrement>,
     assignments: &[Assignment],
-) -> Result<Vec<(usize, Value)>> {
+) -> Result<ResolvedAssignments> {
     let mut resolved = Vec::with_capacity(assignments.len());
     let mut seen = BTreeSet::new();
     for assignment in assignments {
@@ -312,7 +398,19 @@ pub(crate) fn assignments(
         validate_value(&assignment.value, &schema.columns[index])?;
         resolved.push((index, assignment.value.clone()));
     }
-    Ok(resolved)
+    let next_auto_increment = auto_increment.and_then(|auto_increment| {
+        resolved
+            .iter()
+            .find(|(column, _)| *column == auto_increment.column)
+            .and_then(|(_, value)| match value {
+                Value::Integer(value) if *value > auto_increment.last => Some(*value),
+                Value::Integer(_) | Value::Text(_) | Value::Boolean(_) | Value::Null => None,
+            })
+    });
+    Ok(ResolvedAssignments {
+        values: resolved,
+        next_auto_increment,
+    })
 }
 
 pub(crate) fn predicate<'a>(

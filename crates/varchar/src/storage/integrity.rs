@@ -72,6 +72,24 @@ pub(super) fn validate_rows<'a>(blob: &'a str, catalog: &Catalog) -> ValidationR
                 format!("primary key for table {:?} is NULL", schema.name),
             ));
         }
+        if let Some(auto_increment) = catalog.auto_increment_state(&schema.name) {
+            debug_assert_eq!(auto_increment.column, primary_key);
+            let stored = value
+                .strip_prefix('I')
+                .and_then(|payload| payload.parse::<i64>().ok())
+                .ok_or_else(|| {
+                    Violation::new(offset, "auto-increment primary-key cell is not an INTEGER")
+                })?;
+            if stored > auto_increment.last {
+                return Err(Violation::new(
+                    offset,
+                    format!(
+                        "auto-increment high-water mark for table {:?} is below a stored key",
+                        schema.name
+                    ),
+                ));
+            }
+        }
         let values = primary_values
             .get_mut(schema.name.as_str())
             .expect("a primary-key set exists for every keyed table");

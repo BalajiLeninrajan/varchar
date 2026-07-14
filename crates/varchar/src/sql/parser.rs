@@ -131,6 +131,10 @@ impl Parser {
                 Some("REFERENCES") => {
                     modifiers.push(ColumnModifier::References(self.parse_reference()?));
                 }
+                Some("AUTOINCREMENT" | "AUTO_INCREMENT") => {
+                    self.advance();
+                    modifiers.push(ColumnModifier::AutoIncrement);
+                }
                 _ => break,
             }
         }
