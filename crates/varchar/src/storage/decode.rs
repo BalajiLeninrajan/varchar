@@ -9,7 +9,7 @@ use super::format::{
     records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
-use crate::{Column, DataType, Error, Result, Value};
+use crate::{DataType, Error, Result, SchemaColumn, Value};
 
 pub(super) struct PrimaryKeyMetadata<'a> {
     pub(super) table: &'a str,
@@ -34,18 +34,18 @@ pub(super) struct AutoIncrementMetadata<'a> {
 /// Cell slices remain encoded so integrity validation can compare canonical
 /// key values without allocating decoded rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct RowRecordRef<'a> {
+pub(crate) struct RowRecordRef<'a> {
     range: Range<usize>,
     table: &'a str,
     cells: &'a str,
 }
 
 impl<'a> RowRecordRef<'a> {
-    pub(super) fn range(&self) -> Range<usize> {
+    pub(crate) fn range(&self) -> Range<usize> {
         self.range.clone()
     }
 
-    pub(super) fn table(&self) -> &'a str {
+    pub(crate) fn table(&self) -> &'a str {
         self.table
     }
 
@@ -55,7 +55,7 @@ impl<'a> RowRecordRef<'a> {
 }
 
 /// Parse one complete row envelope at its byte offset in the authoritative blob.
-pub(super) fn row_record(record: &str, offset: usize) -> Result<RowRecordRef<'_>> {
+pub(crate) fn row_record(record: &str, offset: usize) -> Result<RowRecordRef<'_>> {
     let body = complete_record_body(record, ROW_PREFIX, offset)?;
     let (table, cells) = body
         .split_once('|')
@@ -136,7 +136,7 @@ pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableS
             "!" => false,
             _ => return Err(corrupt(offset, "invalid column nullability tag")),
         };
-        columns.push(Column {
+        columns.push(SchemaColumn {
             name: name.to_owned(),
             data_type,
             nullable,
@@ -298,7 +298,7 @@ fn row_width_error(offset: usize, layout: RowLayout<'_>, actual: usize) -> Error
     )
 }
 
-fn validate_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<()> {
+fn validate_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<()> {
     if encoded == "N" {
         return if column.nullable {
             Ok(())
@@ -327,7 +327,7 @@ fn validate_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<()>
     }
 }
 
-fn decode_cell_at(encoded: &str, column: &Column, offset: usize) -> Result<Value> {
+fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<Value> {
     if encoded == "N" {
         return if column.nullable {
             Ok(Value::Null)

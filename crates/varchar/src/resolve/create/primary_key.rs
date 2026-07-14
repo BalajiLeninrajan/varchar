@@ -1,13 +1,13 @@
 //! Primary-key declaration and nullability rules.
 
-use crate::{Column, Error, Result};
+use crate::{Error, Result, SchemaColumn};
 
 pub(super) fn declare_primary_key(
     table: &str,
     column: &str,
     index: usize,
     primary_key: &mut Option<usize>,
-    columns: &mut [Column],
+    columns: &mut [SchemaColumn],
 ) -> Result<()> {
     match *primary_key {
         Some(existing) if existing == index => {

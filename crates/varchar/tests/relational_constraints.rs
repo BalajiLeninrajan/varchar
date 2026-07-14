@@ -37,11 +37,15 @@ fn inline_and_table_primary_keys_are_non_null_and_unique() {
         &mut database,
         "CREATE TABLE inline_keys (id INTEGER PRIMARY KEY, note TEXT)",
     );
-    let inline_columns = rows(execute(&mut database, "SELECT * FROM inline_keys")).columns;
-    assert_eq!(inline_columns[0].name, "id");
-    assert_eq!(inline_columns[0].data_type, DataType::Integer);
+    let inline_columns = rows(execute(&mut database, "SELECT * FROM inline_keys"))
+        .columns()
+        .to_vec();
+    assert_eq!(inline_columns[0].label(), "id");
+    assert_eq!(inline_columns[0].origin().table(), "inline_keys");
+    assert_eq!(inline_columns[0].origin().column(), "id");
+    assert_eq!(inline_columns[0].data_type(), DataType::Integer);
     assert!(
-        !inline_columns[0].nullable,
+        !inline_columns[0].nullable(),
         "a primary key implies NOT NULL"
     );
 
@@ -65,11 +69,15 @@ fn inline_and_table_primary_keys_are_non_null_and_unique() {
         &mut database,
         "CREATE TABLE table_keys (id INTEGER, note TEXT, PRIMARY KEY (id))",
     );
-    let table_columns = rows(execute(&mut database, "SELECT * FROM table_keys")).columns;
-    assert_eq!(table_columns[0].name, "id");
-    assert_eq!(table_columns[0].data_type, DataType::Integer);
+    let table_columns = rows(execute(&mut database, "SELECT * FROM table_keys"))
+        .columns()
+        .to_vec();
+    assert_eq!(table_columns[0].label(), "id");
+    assert_eq!(table_columns[0].origin().table(), "table_keys");
+    assert_eq!(table_columns[0].origin().column(), "id");
+    assert_eq!(table_columns[0].data_type(), DataType::Integer);
     assert!(
-        !table_columns[0].nullable,
+        !table_columns[0].nullable(),
         "a table-level primary key implies NOT NULL"
     );
 
@@ -104,10 +112,16 @@ fn inline_constraints_accept_mixed_modifier_order() {
         "CREATE TABLE children (id INTEGER REFERENCES parents(id) PRIMARY KEY, owner_id INTEGER NOT NULL REFERENCES owners(id), note TEXT)",
     );
 
-    let columns = rows(execute(&mut database, "SELECT * FROM children")).columns;
-    assert!(!columns[0].nullable, "a primary key implies NOT NULL");
-    assert!(!columns[1].nullable, "an explicit NOT NULL is preserved");
-    assert!(columns[2].nullable);
+    let columns = rows(execute(&mut database, "SELECT * FROM children"))
+        .columns()
+        .to_vec();
+    for (column, name) in columns.iter().zip(["id", "owner_id", "note"]) {
+        assert_eq!(column.origin().table(), "children");
+        assert_eq!(column.origin().column(), name);
+    }
+    assert!(!columns[0].nullable(), "a primary key implies NOT NULL");
+    assert!(!columns[1].nullable(), "an explicit NOT NULL is preserved");
+    assert!(columns[2].nullable());
 
     execute(&mut database, "INSERT INTO children VALUES (1, 7, 'kept')");
     for sql in [
@@ -137,7 +151,7 @@ fn primary_key_update_collisions_fail_atomically() {
     expect_atomic_error(&mut database, "UPDATE accounts SET id = NULL WHERE id = 2");
 
     assert_eq!(
-        rows(execute(&mut database, "SELECT id, name FROM accounts")).rows,
+        rows(execute(&mut database, "SELECT id, name FROM accounts")).rows(),
         vec![
             vec![Value::Integer(1), Value::Text("Ada".to_owned())],
             vec![Value::Integer(2), Value::Text("Grace".to_owned())],
@@ -243,7 +257,7 @@ fn inline_and_table_foreign_keys_accept_valid_and_null_values_but_reject_orphans
             &mut database,
             "SELECT id, parent_id FROM inline_children",
         ))
-        .rows,
+        .rows(),
         vec![
             vec![Value::Integer(10), Value::Integer(1)],
             vec![Value::Integer(11), Value::Null],
@@ -254,7 +268,7 @@ fn inline_and_table_foreign_keys_accept_valid_and_null_values_but_reject_orphans
             &mut database,
             "SELECT id, parent_id FROM table_children",
         ))
-        .rows,
+        .rows(),
         vec![
             vec![Value::Integer(20), Value::Integer(1)],
             vec![Value::Integer(21), Value::Null],
@@ -289,7 +303,7 @@ fn foreign_keys_restrict_parent_updates_and_deletes_until_children_are_removed()
     );
     assert!(
         rows(execute(&mut database, "SELECT * FROM parents"))
-            .rows
+            .rows()
             .is_empty()
     );
 }
@@ -316,7 +330,7 @@ fn self_referential_foreign_keys_are_checked_against_the_candidate_database() {
         "UPDATE nodes SET id = 4, parent_id = 4 WHERE id = 3",
     );
     assert_eq!(
-        rows(execute(&mut database, "SELECT id, parent_id FROM nodes")).rows,
+        rows(execute(&mut database, "SELECT id, parent_id FROM nodes")).rows(),
         vec![vec![Value::Integer(4), Value::Integer(4)]]
     );
     assert_eq!(
@@ -373,7 +387,7 @@ fn primary_and_foreign_key_constraints_survive_reload() {
     expect_atomic_error(&mut reloaded, "DELETE FROM parents WHERE id = 1");
 
     assert_eq!(
-        rows(execute(&mut reloaded, "SELECT * FROM children")).rows,
+        rows(execute(&mut reloaded, "SELECT * FROM children")).rows(),
         vec![vec![Value::Integer(10), Value::Integer(1)]]
     );
 }
@@ -429,7 +443,7 @@ fn constraint_words_remain_available_as_contextual_identifiers() {
             &mut database,
             "SELECT key, primary, foreign, references FROM words",
         ))
-        .rows,
+        .rows(),
         vec![vec![
             Value::Text("k".to_owned()),
             Value::Text("p".to_owned()),

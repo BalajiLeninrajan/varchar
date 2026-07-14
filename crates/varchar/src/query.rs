@@ -2,79 +2,55 @@
 
 mod compile;
 mod execute;
+mod pattern;
 
 use fancy_regex::Regex;
 
 use crate::limits::{Limits, check_limit};
-use crate::resolve;
+use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Candidate, Catalog, TableSchema};
-use crate::{Column, Result, RowSet, Value};
+use crate::value::{RowSet, SelectExplanation, Value};
+use crate::{Result, SchemaColumn};
 
-/// The exact regular expression and projection produced for a `SELECT`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RegexPlan {
-    pattern: String,
-    table: String,
-    schema: Vec<Column>,
-    projection: Vec<usize>,
-}
-
-impl RegexPlan {
-    /// The generated pattern used to select complete encoded rows.
-    #[must_use]
-    pub fn pattern(&self) -> &str {
-        &self.pattern
-    }
-
-    /// The selected table name.
-    #[must_use]
-    pub fn table(&self) -> &str {
-        &self.table
-    }
-
-    /// Projected columns, in query order and including duplicates.
-    #[must_use]
-    pub fn columns(&self) -> Vec<Column> {
-        self.projection
-            .iter()
-            .map(|&index| self.schema[index].clone())
-            .collect()
-    }
-}
-
+/// An owned mutation scan that remains valid while a candidate is assembled.
 pub(crate) struct ScanPlan {
-    pattern: String,
     regex: Regex,
     table: String,
-    schema: Vec<Column>,
+    schema: Vec<SchemaColumn>,
 }
 
-pub(crate) struct SelectPlan {
-    scan: ScanPlan,
-    projection: Vec<usize>,
+/// A read-only plan borrowing the catalog schemas used by one `SELECT`.
+pub(crate) struct SelectPlan<'catalog> {
+    pattern: String,
+    regex: Regex,
+    sources: Vec<&'catalog TableSchema>,
+    projection: Vec<ColumnLocation>,
+    joins: Vec<ResolvedJoin>,
 }
 
-impl SelectPlan {
-    pub(crate) fn into_regex_plan(self) -> RegexPlan {
-        RegexPlan {
-            pattern: self.scan.pattern,
-            table: self.scan.table,
-            schema: self.scan.schema,
-            projection: self.projection,
-        }
+impl SelectPlan<'_> {
+    pub(crate) fn into_explanation(
+        self,
+        max_query_output_bytes: usize,
+    ) -> Result<SelectExplanation> {
+        execute::explain(self, max_query_output_bytes)
     }
 }
 
-pub(crate) fn compile_select(
-    catalog: &Catalog,
+pub(crate) fn compile_select<'catalog>(
+    catalog: &'catalog Catalog,
     statement: &Select,
     limits: &Limits,
-) -> Result<SelectPlan> {
-    let schema = resolve::require_table(catalog, &statement.table)?;
-    let projection = resolve::projection(schema, &statement.projection)?;
-    let scan = compile_scan(schema, &statement.predicates, limits)?;
-    Ok(SelectPlan { scan, projection })
+) -> Result<SelectPlan<'catalog>> {
+    let resolved = resolve::select(
+        catalog,
+        statement,
+        limits.max_join_sources,
+        limits.max_predicates,
+        limits.max_query_output_bytes,
+    )?;
+    compile::select(resolved, limits)
 }
 
 pub(crate) fn compile_scan(
@@ -89,7 +65,7 @@ pub(crate) fn compile_scan(
     compile::scan(schema, resolved, limits)
 }
 
-pub(crate) fn execute_select(blob: &str, plan: &SelectPlan, limits: &Limits) -> Result<RowSet> {
+pub(crate) fn execute_select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     execute::select(blob, plan, limits)
 }
 
@@ -104,3 +80,6 @@ where
 {
     execute::rewrite_matching_rows(candidate, plan, limits, rewrite)
 }
+
+#[cfg(test)]
+mod tests;

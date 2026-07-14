@@ -1,5 +1,5 @@
 use super::{StorageState, TableSchema, validate_and_catalog};
-use crate::{Column, DataType, Value};
+use crate::{DataType, SchemaColumn, Value};
 
 #[test]
 fn state_keeps_each_blob_with_its_derived_catalog() {
@@ -17,7 +17,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
     let state = StorageState::empty();
     let schema = TableSchema {
         name: String::from("items"),
-        columns: vec![Column {
+        columns: vec![SchemaColumn {
             name: String::from("id"),
             data_type: DataType::Integer,
             nullable: false,

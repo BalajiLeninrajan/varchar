@@ -1,6 +1,6 @@
 use super::{decode_row, row_record, row_records};
 use crate::storage::RowLayout;
-use crate::{Column, DataType, Error, Value};
+use crate::{DataType, Error, SchemaColumn, Value};
 
 #[test]
 fn row_view_exposes_the_complete_envelope_and_absolute_range() {
@@ -15,12 +15,12 @@ fn row_view_exposes_the_complete_envelope_and_absolute_range() {
     );
 
     let columns = [
-        Column {
+        SchemaColumn {
             name: String::from("id"),
             data_type: DataType::Integer,
             nullable: false,
         },
-        Column {
+        SchemaColumn {
             name: String::from("body"),
             data_type: DataType::Text,
             nullable: false,

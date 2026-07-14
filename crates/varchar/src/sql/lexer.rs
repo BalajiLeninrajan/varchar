@@ -10,6 +10,7 @@ pub(super) enum TokenKind {
     LeftParen,
     RightParen,
     Comma,
+    Dot,
     Star,
     Equal,
     NotEqual,
@@ -53,6 +54,10 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
             ',' => {
                 cursor += 1;
                 TokenKind::Comma
+            }
+            '.' => {
+                cursor += 1;
+                TokenKind::Dot
             }
             '*' => {
                 cursor += 1;

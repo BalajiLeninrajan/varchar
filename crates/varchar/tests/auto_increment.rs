@@ -10,7 +10,7 @@ fn execute(database: &mut Database, sql: &str) -> Outcome {
 
 fn values(database: &mut Database, sql: &str) -> Vec<Vec<Value>> {
     match execute(database, sql) {
-        Outcome::Rows(rows) => rows.rows,
+        Outcome::Rows(rows) => rows.into_rows(),
         other => panic!("expected rows, got {other:?}"),
     }
 }

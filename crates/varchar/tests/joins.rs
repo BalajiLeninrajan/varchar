@@ -1,0 +1,891 @@
+#![cfg(not(target_family = "wasm"))]
+
+use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
+
+fn execute(database: &mut Database, sql: &str) -> Outcome {
+    database
+        .execute(sql)
+        .unwrap_or_else(|error| panic!("failed to execute {sql:?}: {error}"))
+}
+
+fn rows(database: &mut Database, sql: &str) -> RowSet {
+    match execute(database, sql) {
+        Outcome::Rows(rows) => rows,
+        other => panic!("expected rows for {sql:?}, got {other:?}"),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ExpectedColumn {
+    table: String,
+    name: String,
+    data_type: DataType,
+    nullable: bool,
+}
+
+fn column(table: &str, name: &str, data_type: DataType, nullable: bool) -> ExpectedColumn {
+    ExpectedColumn {
+        table: table.to_owned(),
+        name: name.to_owned(),
+        data_type,
+        nullable,
+    }
+}
+
+fn assert_columns(actual: &[ResultColumn], expected: &[ExpectedColumn]) {
+    let actual = actual
+        .iter()
+        .map(|column| {
+            assert_eq!(column.origin().column(), column.label());
+            ExpectedColumn {
+                table: column.origin().table().to_owned(),
+                name: column.label().to_owned(),
+                data_type: column.data_type(),
+                nullable: column.nullable(),
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+fn assert_row_set(
+    actual: RowSet,
+    expected_columns: Vec<ExpectedColumn>,
+    expected_rows: Vec<Vec<Value>>,
+) {
+    assert_columns(actual.columns(), &expected_columns);
+    assert_eq!(actual.rows(), expected_rows);
+}
+
+fn schema_error(database: &mut Database, sql: &str) -> String {
+    let before = database.as_str().to_owned();
+    let error = database
+        .execute(sql)
+        .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
+    assert_eq!(database.as_str(), before, "failed SELECT changed state");
+    match error {
+        Error::Schema(message) => message,
+        other => panic!("expected schema error for {sql:?}, got {other:?}"),
+    }
+}
+
+fn unsupported_error(database: &mut Database, sql: &str) {
+    let before = database.as_str().to_owned();
+    assert!(
+        matches!(database.execute(sql), Err(Error::Unsupported { .. })),
+        "expected unsupported-feature error for {sql:?}"
+    );
+    assert_eq!(database.as_str(), before, "failed SELECT changed state");
+}
+
+fn parse_error(database: &mut Database, sql: &str) {
+    let before = database.as_str().to_owned();
+    assert!(
+        matches!(database.execute(sql), Err(Error::Parse { .. })),
+        "expected parse error for {sql:?}"
+    );
+    assert_eq!(database.as_str(), before, "failed SELECT changed state");
+}
+
+#[test]
+fn join_and_inner_join_support_qualified_projection() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE authors (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE books (id INTEGER NOT NULL, author_id INTEGER, title TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO authors VALUES (1, 'Ada')",
+        "INSERT INTO authors VALUES (2, 'Grace')",
+        "INSERT INTO books VALUES (10, 2, 'Compiler')",
+        "INSERT INTO books VALUES (11, 1, 'Notes')",
+        "INSERT INTO books VALUES (12, 999, 'Orphan')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    let expected_columns = vec![
+        column("authors", "name", DataType::Text, false),
+        column("books", "title", DataType::Text, false),
+    ];
+    let expected_rows = vec![
+        vec![
+            Value::Text("Ada".to_owned()),
+            Value::Text("Notes".to_owned()),
+        ],
+        vec![
+            Value::Text("Grace".to_owned()),
+            Value::Text("Compiler".to_owned()),
+        ],
+    ];
+
+    assert_row_set(
+        rows(
+            &mut database,
+            "SELECT authors.name, books.title FROM authors \
+             JOIN books ON authors.id = books.author_id",
+        ),
+        expected_columns,
+        expected_rows,
+    );
+    assert_row_set(
+        rows(
+            &mut database,
+            "SELECT authors.name, books.title FROM authors \
+             INNER JOIN books ON authors.id = books.author_id",
+        ),
+        vec![
+            column("authors", "name", DataType::Text, false),
+            column("books", "title", DataType::Text, false),
+        ],
+        vec![
+            vec![
+                Value::Text("Ada".to_owned()),
+                Value::Text("Notes".to_owned()),
+            ],
+            vec![
+                Value::Text("Grace".to_owned()),
+                Value::Text("Compiler".to_owned()),
+            ],
+        ],
+    );
+}
+
+#[test]
+fn inner_and_on_remain_contextual_identifiers() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE inner (on INTEGER NOT NULL, value TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO inner VALUES (1, 'kept')");
+    execute(&mut database, "INSERT INTO inner VALUES (2, 'filtered')");
+
+    assert_row_set(
+        rows(
+            &mut database,
+            "SELECT inner.on, value FROM inner WHERE inner.on = 1",
+        ),
+        vec![
+            column("inner", "on", DataType::Integer, false),
+            column("inner", "value", DataType::Text, false),
+        ],
+        vec![vec![Value::Integer(1), Value::Text("kept".to_owned())]],
+    );
+}
+
+#[test]
+fn qualified_update_and_delete_predicates_remain_supported() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, active BOOLEAN NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO users VALUES (1, FALSE)");
+    execute(&mut database, "INSERT INTO users VALUES (2, FALSE)");
+
+    assert_eq!(
+        execute(
+            &mut database,
+            "UPDATE users SET active = TRUE WHERE users.id = 1",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        execute(&mut database, "DELETE FROM users WHERE users.id = 2"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id, active FROM users").into_rows(),
+        vec![vec![Value::Integer(1), Value::Boolean(true)]]
+    );
+}
+
+#[test]
+fn malformed_join_forms_are_parse_errors_and_atomic() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE users (id INTEGER NOT NULL)");
+    execute(
+        &mut database,
+        "CREATE TABLE posts (user_id INTEGER NOT NULL)",
+    );
+
+    for sql in [
+        "SELECT * FROM users JOIN posts",
+        "SELECT * FROM users JOIN posts ON users.id != posts.user_id",
+        "SELECT * FROM users JOIN posts ON users.id = 1",
+    ] {
+        parse_error(&mut database, sql);
+    }
+}
+
+#[test]
+fn stars_expand_in_source_then_schema_order() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE customers (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE invoices (id INTEGER NOT NULL, customer_id INTEGER NOT NULL, paid BOOLEAN)",
+    );
+    execute(&mut database, "INSERT INTO customers VALUES (7, 'Ada')");
+    execute(&mut database, "INSERT INTO invoices VALUES (20, 7, TRUE)");
+
+    assert_row_set(
+        rows(
+            &mut database,
+            "SELECT * FROM customers JOIN invoices \
+             ON customers.id = invoices.customer_id",
+        ),
+        vec![
+            column("customers", "id", DataType::Integer, false),
+            column("customers", "name", DataType::Text, false),
+            column("invoices", "id", DataType::Integer, false),
+            column("invoices", "customer_id", DataType::Integer, false),
+            column("invoices", "paid", DataType::Boolean, true),
+        ],
+        vec![vec![
+            Value::Integer(7),
+            Value::Text("Ada".to_owned()),
+            Value::Integer(20),
+            Value::Integer(7),
+            Value::Boolean(true),
+        ]],
+    );
+
+    assert_row_set(
+        rows(
+            &mut database,
+            "SELECT invoices.*, customers.name, customers.* \
+             FROM customers JOIN invoices \
+             ON customers.id = invoices.customer_id",
+        ),
+        vec![
+            column("invoices", "id", DataType::Integer, false),
+            column("invoices", "customer_id", DataType::Integer, false),
+            column("invoices", "paid", DataType::Boolean, true),
+            column("customers", "name", DataType::Text, false),
+            column("customers", "id", DataType::Integer, false),
+            column("customers", "name", DataType::Text, false),
+        ],
+        vec![vec![
+            Value::Integer(20),
+            Value::Integer(7),
+            Value::Boolean(true),
+            Value::Text("Ada".to_owned()),
+            Value::Integer(7),
+            Value::Text("Ada".to_owned()),
+        ]],
+    );
+}
+
+#[test]
+fn many_to_many_matches_preserve_duplicate_multiplicity_and_storage_order() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE left_rows (join_key INTEGER, marker TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE right_rows (join_key INTEGER, marker TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO left_rows VALUES (1, 'L1')",
+        "INSERT INTO left_rows VALUES (2, 'L2')",
+        "INSERT INTO left_rows VALUES (1, 'L3')",
+        "INSERT INTO right_rows VALUES (1, 'R1')",
+        "INSERT INTO right_rows VALUES (1, 'R2')",
+        "INSERT INTO right_rows VALUES (2, 'R3')",
+        "INSERT INTO right_rows VALUES (1, 'R4')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT left_rows.marker, right_rows.marker \
+             FROM left_rows JOIN right_rows \
+             ON left_rows.join_key = right_rows.join_key",
+        )
+        .into_rows(),
+        vec![
+            vec![Value::Text("L1".to_owned()), Value::Text("R1".to_owned())],
+            vec![Value::Text("L1".to_owned()), Value::Text("R2".to_owned())],
+            vec![Value::Text("L1".to_owned()), Value::Text("R4".to_owned())],
+            vec![Value::Text("L2".to_owned()), Value::Text("R3".to_owned())],
+            vec![Value::Text("L3".to_owned()), Value::Text("R1".to_owned())],
+            vec![Value::Text("L3".to_owned()), Value::Text("R2".to_owned())],
+            vec![Value::Text("L3".to_owned()), Value::Text("R4".to_owned())],
+        ]
+    );
+}
+
+#[test]
+fn null_join_keys_never_match() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE nullable_left (join_key INTEGER, marker TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE nullable_right (join_key INTEGER, marker TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO nullable_left VALUES (NULL, 'left null')",
+        "INSERT INTO nullable_left VALUES (1, 'left one')",
+        "INSERT INTO nullable_right VALUES (NULL, 'right null')",
+        "INSERT INTO nullable_right VALUES (1, 'right one')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT nullable_left.marker, nullable_right.marker \
+             FROM nullable_left JOIN nullable_right \
+             ON nullable_left.join_key = nullable_right.join_key",
+        )
+        .into_rows(),
+        vec![vec![
+            Value::Text("left one".to_owned()),
+            Value::Text("right one".to_owned()),
+        ]]
+    );
+}
+
+#[test]
+fn where_predicates_resolve_against_each_join_source() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE members (id INTEGER NOT NULL, active BOOLEAN NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE memberships (member_id INTEGER NOT NULL, team_id INTEGER NOT NULL, role TEXT)",
+    );
+    for sql in [
+        "INSERT INTO members VALUES (1, TRUE)",
+        "INSERT INTO members VALUES (2, FALSE)",
+        "INSERT INTO memberships VALUES (1, 10, 'owner')",
+        "INSERT INTO memberships VALUES (1, 20, 'viewer')",
+        "INSERT INTO memberships VALUES (2, 10, 'owner')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT members.id, memberships.team_id \
+             FROM members JOIN memberships \
+             ON members.id = memberships.member_id \
+             WHERE members.active = TRUE AND memberships.role = 'owner'",
+        )
+        .into_rows(),
+        vec![vec![Value::Integer(1), Value::Integer(10)]]
+    );
+}
+
+#[test]
+fn chained_joins_can_reference_any_prior_source_and_conjoin_conditions() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE people (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE enrollments (person_id INTEGER NOT NULL, course_id INTEGER NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE courses (id INTEGER NOT NULL, student_id INTEGER NOT NULL, title TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO people VALUES (1, 'Ada')",
+        "INSERT INTO people VALUES (2, 'Grace')",
+        "INSERT INTO enrollments VALUES (1, 20)",
+        "INSERT INTO enrollments VALUES (1, 10)",
+        "INSERT INTO enrollments VALUES (2, 10)",
+        "INSERT INTO courses VALUES (10, 1, 'Ada Compilers')",
+        "INSERT INTO courses VALUES (10, 2, 'Grace Compilers')",
+        "INSERT INTO courses VALUES (20, 1, 'Databases')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT people.name, courses.title \
+             FROM people \
+             JOIN enrollments ON people.id = enrollments.person_id \
+             JOIN courses ON enrollments.course_id = courses.id \
+                          AND people.id = courses.student_id \
+                          AND people.id = enrollments.person_id",
+        )
+        .into_rows(),
+        vec![
+            vec![
+                Value::Text("Ada".to_owned()),
+                Value::Text("Databases".to_owned()),
+            ],
+            vec![
+                Value::Text("Ada".to_owned()),
+                Value::Text("Ada Compilers".to_owned()),
+            ],
+            vec![
+                Value::Text("Grace".to_owned()),
+                Value::Text("Grace Compilers".to_owned()),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn unqualified_columns_must_resolve_uniquely() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE customers (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE invoices (id INTEGER NOT NULL, customer_id INTEGER NOT NULL, total INTEGER NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO customers VALUES (1, 'Ada')");
+    execute(&mut database, "INSERT INTO invoices VALUES (9, 1, 50)");
+
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT name, total FROM customers JOIN invoices \
+             ON customers.id = customer_id WHERE total = 50",
+        )
+        .into_rows(),
+        vec![vec![Value::Text("Ada".to_owned()), Value::Integer(50)]]
+    );
+
+    for sql in [
+        "SELECT id FROM customers JOIN invoices ON customers.id = customer_id",
+        "SELECT name FROM customers JOIN invoices ON id = customer_id",
+    ] {
+        let message = schema_error(&mut database, sql);
+        assert!(
+            message.to_ascii_lowercase().contains("ambiguous"),
+            "expected an ambiguity diagnostic for {sql:?}, got {message:?}"
+        );
+    }
+}
+
+#[test]
+fn unknown_qualifiers_and_columns_are_schema_errors() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE parents (id INTEGER NOT NULL)");
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER NOT NULL, label TEXT NOT NULL)",
+    );
+
+    for sql in [
+        "SELECT missing.label FROM parents JOIN children ON parents.id = children.parent_id",
+        "SELECT missing.* FROM parents JOIN children ON parents.id = children.parent_id",
+        "SELECT children.missing FROM parents JOIN children ON parents.id = children.parent_id",
+        "SELECT missing FROM parents JOIN children ON parents.id = children.parent_id",
+        "SELECT * FROM parents JOIN missing ON parents.id = missing.parent_id",
+        "SELECT children.label FROM parents JOIN children ON parents.id = missing.parent_id",
+        "SELECT children.label FROM parents JOIN children ON parents.id = children.missing",
+        "SELECT children.label FROM parents JOIN children ON parents.id = children.parent_id WHERE missing.id = 1",
+    ] {
+        let message = schema_error(&mut database, sql);
+        assert!(
+            message.to_ascii_lowercase().contains("unknown"),
+            "expected an unknown-name diagnostic for {sql:?}, got {message:?}"
+        );
+    }
+}
+
+#[test]
+fn join_columns_must_have_the_same_type() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE numbers (id INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE labels (id TEXT NOT NULL)");
+    let before = database.as_str().to_owned();
+
+    assert!(matches!(
+        database.execute("SELECT * FROM numbers JOIN labels ON numbers.id = labels.id"),
+        Err(Error::Type(_))
+    ));
+    assert_eq!(database.as_str(), before);
+}
+
+#[test]
+fn aliases_self_joins_and_non_inner_join_types_are_rejected() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE nodes (id INTEGER NOT NULL, parent_id INTEGER)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE labels (node_id INTEGER NOT NULL, label TEXT NOT NULL)",
+    );
+
+    for sql in [
+        "SELECT * FROM nodes AS n JOIN labels ON n.id = labels.node_id",
+        "SELECT * FROM nodes JOIN labels AS l ON nodes.id = l.node_id",
+        "SELECT * FROM nodes LEFT JOIN labels ON nodes.id = labels.node_id",
+        "SELECT * FROM nodes LEFT OUTER JOIN labels ON nodes.id = labels.node_id",
+        "SELECT * FROM nodes RIGHT JOIN labels ON nodes.id = labels.node_id",
+        "SELECT * FROM nodes FULL JOIN labels ON nodes.id = labels.node_id",
+        "SELECT * FROM nodes CROSS JOIN labels ON nodes.id = labels.node_id",
+        "SELECT * FROM nodes NATURAL JOIN labels",
+    ] {
+        unsupported_error(&mut database, sql);
+    }
+
+    assert_eq!(
+        schema_error(
+            &mut database,
+            "SELECT * FROM nodes JOIN nodes ON nodes.parent_id = nodes.id",
+        ),
+        "table \"nodes\" appears more than once in a SELECT"
+    );
+
+    for sql in [
+        "SELECT nodes.id AS node_id FROM nodes",
+        "SELECT * FROM nodes n JOIN labels ON n.id = labels.node_id",
+        "SELECT * FROM nodes JOIN labels l ON nodes.id = l.node_id",
+    ] {
+        let before = database.as_str().to_owned();
+        assert!(
+            database.execute(sql).is_err(),
+            "unexpectedly accepted alias syntax {sql:?}"
+        );
+        assert_eq!(database.as_str(), before, "failed SELECT changed state");
+    }
+}
+
+#[test]
+fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO parents VALUES (1, 'parent')");
+    execute(&mut database, "INSERT INTO children VALUES (1, 'child')");
+    let sql = "SELECT parents.name, children.name \
+               FROM parents JOIN children ON parents.id = children.parent_id \
+               WHERE children.name LIKE 'chi%'";
+    let before = database.as_str().to_owned();
+
+    let plan = database.explain_select(sql).expect("JOIN SELECT explains");
+    assert!(!plan.pattern().is_empty());
+    assert!(plan.pattern().starts_with(r"(?:~R\|parents\|"));
+    assert!(plan.pattern().contains(r";|~R\|children\|"));
+    assert!(plan.pattern().ends_with(";)"));
+    assert_eq!(plan.sources(), &["parents", "children"]);
+    assert_columns(
+        plan.columns(),
+        &[
+            column("parents", "name", DataType::Text, false),
+            column("children", "name", DataType::Text, false),
+        ],
+    );
+    assert_eq!(database.as_str(), before);
+
+    assert_eq!(
+        execute(&mut database, &format!("EXPLAIN REGEX {sql}")),
+        Outcome::Explain(plan)
+    );
+    assert_eq!(database.as_str(), before);
+    assert_eq!(rows(&mut database, sql).rows().len(), 1);
+    assert_eq!(database.as_str(), before);
+}
+
+#[test]
+fn joins_work_after_reloading_the_authoritative_string() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (id INTEGER NOT NULL, parent_id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    execute(&mut database, "INSERT INTO parents VALUES (1, 'parent')");
+    execute(
+        &mut database,
+        "INSERT INTO children VALUES (10, 1, 'child')",
+    );
+    let blob = database.into_string();
+    let mut reloaded = Database::from_string(blob.clone()).expect("database reloads");
+
+    assert_eq!(reloaded.as_str(), blob);
+    assert_eq!(
+        rows(
+            &mut reloaded,
+            "SELECT parents.name, children.name \
+             FROM parents JOIN children ON parents.id = children.parent_id",
+        )
+        .into_rows(),
+        vec![vec![
+            Value::Text("parent".to_owned()),
+            Value::Text("child".to_owned()),
+        ]]
+    );
+    assert_eq!(reloaded.as_str(), blob);
+}
+
+#[test]
+fn join_fanout_obeys_the_query_output_byte_limit() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE left_rows (join_key INTEGER)");
+    execute(&mut database, "CREATE TABLE right_rows (join_key INTEGER)");
+    for _ in 0..12 {
+        execute(&mut database, "INSERT INTO left_rows VALUES (1)");
+        execute(&mut database, "INSERT INTO right_rows VALUES (1)");
+    }
+    let blob = database.into_string();
+    let limits = Limits {
+        max_query_output_bytes: 256,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute(
+            "SELECT * FROM left_rows JOIN right_rows \
+             ON left_rows.join_key = right_rows.join_key"
+        ),
+        Err(Error::ResourceLimit {
+            resource: "query output bytes",
+            limit: 256
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn join_source_count_has_its_own_limit() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE a (id INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE b (id INTEGER NOT NULL)");
+    let blob = database.into_string();
+    let limits = Limits {
+        max_join_sources: 1,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute("SELECT * FROM a JOIN b ON a.id = b.id"),
+        Err(Error::ResourceLimit {
+            resource: "JOIN sources",
+            limit: 1,
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn join_limits_accept_their_exact_boundaries() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE a (id INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE b (id INTEGER NOT NULL)");
+    execute(&mut database, "INSERT INTO a VALUES (1)");
+    execute(&mut database, "INSERT INTO b VALUES (1)");
+    let blob = database.into_string();
+    let limits = Limits {
+        max_join_sources: 2,
+        max_join_steps: 1,
+        ..Limits::default()
+    };
+    let mut exact =
+        Database::from_string_with_limits(blob, limits).expect("fixture reloads at exact limits");
+
+    assert_eq!(
+        rows(&mut exact, "SELECT a.id FROM a JOIN b ON a.id = b.id").rows(),
+        &[vec![Value::Integer(1)]]
+    );
+}
+
+#[test]
+fn nonmatching_join_fanout_obeys_the_combination_limit() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE a (join_key INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE b (join_key INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE c (join_key INTEGER NOT NULL)");
+    for _ in 0..8 {
+        execute(&mut database, "INSERT INTO a VALUES (1)");
+        execute(&mut database, "INSERT INTO b VALUES (1)");
+        execute(&mut database, "INSERT INTO c VALUES (2)");
+    }
+    let blob = database.into_string();
+    let limits = Limits {
+        max_join_steps: 100,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute(
+            "SELECT * FROM a \
+             JOIN b ON a.join_key = b.join_key \
+             JOIN c ON b.join_key = c.join_key"
+        ),
+        Err(Error::ResourceLimit {
+            resource: "JOIN execution steps",
+            limit: 100
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn each_join_condition_evaluation_consumes_the_work_budget() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE a (join_key INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE b (join_key INTEGER NOT NULL)");
+    for _ in 0..4 {
+        execute(&mut database, "INSERT INTO a VALUES (1)");
+        execute(&mut database, "INSERT INTO b VALUES (1)");
+    }
+    let blob = database.into_string();
+    let limits = Limits {
+        max_join_steps: 50,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute(
+            "SELECT * FROM a JOIN b ON a.join_key = b.join_key \
+             AND a.join_key = b.join_key AND a.join_key = b.join_key \
+             AND a.join_key = b.join_key AND a.join_key = b.join_key"
+        ),
+        Err(Error::ResourceLimit {
+            resource: "JOIN execution steps",
+            limit: 50
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn nonmatching_join_separates_working_memory_from_output_memory() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE left_rows (join_key INTEGER NOT NULL, payload TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE right_rows (join_key INTEGER NOT NULL)",
+    );
+    let payload = "|".repeat(100);
+    for _ in 0..16 {
+        execute(
+            &mut database,
+            &format!("INSERT INTO left_rows VALUES (1, '{payload}')"),
+        );
+    }
+    execute(&mut database, "INSERT INTO right_rows VALUES (2)");
+    let blob = database.into_string();
+    let sql = "SELECT left_rows.join_key FROM left_rows JOIN right_rows \
+               ON left_rows.join_key = right_rows.join_key";
+
+    let output_limited = Limits {
+        max_query_output_bytes: 256,
+        ..Limits::default()
+    };
+    let mut succeeds =
+        Database::from_string_with_limits(blob.clone(), output_limited).expect("fixture reloads");
+    let outcome = succeeds
+        .execute(sql)
+        .expect("empty output fits its independent budget");
+    assert!(matches!(outcome, Outcome::Rows(ref rows) if rows.rows().is_empty()));
+    assert_eq!(succeeds.as_str(), blob);
+
+    let working_limited = Limits {
+        max_query_output_bytes: 256,
+        max_query_working_bytes: 8_000,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), working_limited).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute(sql),
+        Err(Error::ResourceLimit {
+            resource: "query working bytes",
+            limit: 8_000
+        })
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+#[test]
+fn join_working_budget_accounts_for_source_bucket_spare_capacity() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE a (id INTEGER NOT NULL)");
+    execute(&mut database, "CREATE TABLE b (id INTEGER NOT NULL)");
+    execute(&mut database, "INSERT INTO a VALUES (1)");
+    execute(&mut database, "INSERT INTO b VALUES (1)");
+    let blob = database.into_string();
+
+    let source_slots = 2 * std::mem::size_of::<Vec<Vec<Value>>>();
+    let decoded_rows =
+        2 * (std::mem::size_of::<Vec<Value>>() + std::mem::size_of::<Value>() + "~R|a|I1;".len());
+    let chosen_slots = 2 * std::mem::size_of::<&[Value]>();
+    let formerly_undercharged_limit = source_slots + decoded_rows + chosen_slots;
+    let limits = Limits {
+        max_query_working_bytes: formerly_undercharged_limit,
+        ..Limits::default()
+    };
+    let mut limited =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        limited.execute("SELECT a.id FROM a JOIN b ON a.id = b.id"),
+        Err(Error::ResourceLimit {
+            resource: "query working bytes",
+            limit,
+        }) if limit == formerly_undercharged_limit
+    ));
+    assert_eq!(limited.as_str(), blob);
+}
+
+trait ResultExt<T, E> {
+    fn unwrap_err_or_else(self, on_ok: impl FnOnce() -> E) -> E;
+}
+
+impl<T, E> ResultExt<T, E> for Result<T, E> {
+    fn unwrap_err_or_else(self, on_ok: impl FnOnce() -> E) -> E {
+        match self {
+            Ok(_) => on_ok(),
+            Err(error) => error,
+        }
+    }
+}

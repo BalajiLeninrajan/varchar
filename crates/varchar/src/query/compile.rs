@@ -2,215 +2,85 @@
 
 use fancy_regex::{Regex, RegexBuilder};
 
-use super::ScanPlan;
-use crate::limits::{Limits, check_limit};
-use crate::resolve::ResolvedPredicate;
-use crate::storage::{self, TableSchema};
-use crate::{Column, Error, Result};
+use super::{ScanPlan, SelectPlan, pattern};
+use crate::limits::Limits;
+use crate::resolve::{ResolvedPredicate, ResolvedSelect};
+use crate::storage::TableSchema;
+use crate::{Error, Result};
 
-#[derive(Clone, Debug)]
-enum CompiledPredicate {
-    Equal { column: usize, encoded: String },
-    NotEqual { column: usize, encoded: String },
-    Like { column: usize, pattern: String },
-    IsNull { column: usize },
-    IsNotNull { column: usize },
+pub(super) fn select<'catalog>(
+    resolved: ResolvedSelect<'catalog, '_>,
+    limits: &Limits,
+) -> Result<SelectPlan<'catalog>> {
+    let ResolvedSelect {
+        sources,
+        projection,
+        joins,
+        predicates,
+    } = resolved;
+
+    let mut predicates_by_source = Vec::with_capacity(sources.len());
+    predicates_by_source.resize_with(sources.len(), Vec::new);
+    for resolved in predicates {
+        predicates_by_source[resolved.source].push(resolved.predicate);
+    }
+
+    let pattern = if sources.len() == 1 {
+        pattern::row_scan_pattern(
+            &sources[0].name,
+            &sources[0].columns,
+            &predicates_by_source[0],
+            limits.max_pattern_bytes,
+        )?
+    } else {
+        pattern::alternate_source_patterns(
+            sources
+                .iter()
+                .zip(&predicates_by_source)
+                .map(|(schema, predicates)| {
+                    pattern::row_scan_pattern(
+                        &schema.name,
+                        &schema.columns,
+                        predicates,
+                        limits.max_pattern_bytes,
+                    )
+                }),
+            limits.max_pattern_bytes,
+        )?
+    };
+    let regex = build_regex(&pattern, limits)?;
+
+    Ok(SelectPlan {
+        pattern,
+        regex,
+        sources,
+        projection,
+        joins,
+    })
 }
 
-pub(super) fn scan<'a>(
+pub(super) fn scan<'statement>(
     schema: &TableSchema,
-    predicates: impl Iterator<Item = Result<ResolvedPredicate<'a>>>,
+    predicates: impl Iterator<Item = Result<ResolvedPredicate<'statement>>>,
     limits: &Limits,
 ) -> Result<ScanPlan> {
-    let predicates = compile_predicates(schema, predicates, limits)?;
-    let pattern = compile_row_pattern(&schema.name, &schema.columns, &predicates, limits)?;
+    let predicates = predicates.collect::<Result<Vec<_>>>()?;
+    let pattern = pattern::row_scan_pattern(
+        &schema.name,
+        &schema.columns,
+        &predicates,
+        limits.max_pattern_bytes,
+    )?;
     // Compile eagerly so public planning never returns an unusable pattern.
     let regex = build_regex(&pattern, limits)?;
     Ok(ScanPlan {
-        pattern,
         regex,
         table: schema.name.clone(),
         schema: schema.columns.clone(),
     })
 }
 
-fn compile_predicates<'a>(
-    schema: &TableSchema,
-    predicates: impl Iterator<Item = Result<ResolvedPredicate<'a>>>,
-    limits: &Limits,
-) -> Result<Vec<CompiledPredicate>> {
-    predicates
-        .map(|predicate| match predicate? {
-            ResolvedPredicate::Equal { column, value } => {
-                let encoded = storage::encode_cell(value, &schema.columns[column])?;
-                Ok(CompiledPredicate::Equal { column, encoded })
-            }
-            ResolvedPredicate::NotEqual { column, value } => {
-                let encoded = storage::encode_cell(value, &schema.columns[column])?;
-                Ok(CompiledPredicate::NotEqual { column, encoded })
-            }
-            ResolvedPredicate::Like { column, pattern } => Ok(CompiledPredicate::Like {
-                column,
-                pattern: compile_like_pattern(pattern, limits)?,
-            }),
-            ResolvedPredicate::IsNull { column } => Ok(CompiledPredicate::IsNull { column }),
-            ResolvedPredicate::IsNotNull { column } => Ok(CompiledPredicate::IsNotNull { column }),
-        })
-        .collect()
-}
-
-fn compile_row_pattern(
-    table: &str,
-    schema: &[Column],
-    predicates: &[CompiledPredicate],
-    limits: &Limits,
-) -> Result<String> {
-    check_limit(predicates.len(), limits.max_predicates, "WHERE predicates")?;
-
-    let mut pattern = PatternBuilder::new(limits.max_pattern_bytes);
-    pattern.push_str(&storage::row_prefix_pattern(table))?;
-    for predicate in predicates {
-        let column_index = predicate.column();
-        pattern.push_str("(?=")?;
-        for column in &schema[..column_index] {
-            pattern.push_str(&storage::cell_pattern(column, true))?;
-            pattern.push_str(r"\|")?;
-        }
-        match predicate {
-            CompiledPredicate::Equal { encoded, .. } => {
-                pattern.push_str(&regex::escape(encoded))?;
-            }
-            CompiledPredicate::NotEqual { encoded, .. } => {
-                pattern.push_str("(?!")?;
-                pattern.push_str(&regex::escape(encoded))?;
-                pattern.push_str(storage::cell_boundary_pattern(column_index, schema.len()))?;
-                pattern.push_char(')')?;
-                pattern.push_str(&storage::cell_pattern(&schema[column_index], false))?;
-            }
-            CompiledPredicate::Like {
-                pattern: like_pattern,
-                ..
-            } => pattern.push_str(like_pattern)?,
-            CompiledPredicate::IsNull { .. } => pattern.push_char('N')?,
-            CompiledPredicate::IsNotNull { .. } => {
-                pattern.push_str(&storage::cell_pattern(&schema[column_index], false))?;
-            }
-        }
-        pattern.push_str(storage::cell_boundary_pattern(column_index, schema.len()))?;
-        pattern.push_char(')')?;
-    }
-
-    for (index, column) in schema.iter().enumerate() {
-        if index > 0 {
-            pattern.push_str(r"\|")?;
-        }
-        pattern.push_str(&storage::cell_pattern(column, true))?;
-    }
-    pattern.push_char(';')?;
-    Ok(pattern.finish())
-}
-
-struct PatternBuilder {
-    pattern: String,
-    limit: usize,
-}
-
-impl PatternBuilder {
-    fn new(limit: usize) -> Self {
-        Self {
-            pattern: String::new(),
-            limit,
-        }
-    }
-
-    fn push_str(&mut self, fragment: &str) -> Result<()> {
-        let new_len =
-            self.pattern
-                .len()
-                .checked_add(fragment.len())
-                .ok_or(Error::ResourceLimit {
-                    resource: "generated regex bytes",
-                    limit: self.limit,
-                })?;
-        check_limit(new_len, self.limit, "generated regex bytes")?;
-        self.pattern
-            .try_reserve(fragment.len())
-            .map_err(|_| Error::ResourceLimit {
-                resource: "generated regex bytes",
-                limit: self.limit,
-            })?;
-        self.pattern.push_str(fragment);
-        Ok(())
-    }
-
-    fn push_char(&mut self, character: char) -> Result<()> {
-        let mut encoded = [0_u8; 4];
-        self.push_str(character.encode_utf8(&mut encoded))
-    }
-
-    fn finish(self) -> String {
-        self.pattern
-    }
-}
-
-impl CompiledPredicate {
-    const fn column(&self) -> usize {
-        match self {
-            Self::Equal { column, .. }
-            | Self::NotEqual { column, .. }
-            | Self::Like { column, .. }
-            | Self::IsNull { column }
-            | Self::IsNotNull { column } => *column,
-        }
-    }
-}
-
-fn compile_like_pattern(value: &str, limits: &Limits) -> Result<String> {
-    let mut result = PatternBuilder::new(limits.max_pattern_bytes);
-    result.push_str("T")?;
-    let mut characters = value.chars().peekable();
-    let mut previous_was_many = false;
-    while let Some(character) = characters.next() {
-        match character {
-            '%' => {
-                if !previous_was_many {
-                    result.push_str(storage::text_unit_pattern())?;
-                    result.push_char('*')?;
-                    previous_was_many = true;
-                }
-            }
-            '_' => {
-                result.push_str(storage::text_unit_pattern())?;
-                previous_was_many = false;
-            }
-            '\\' => {
-                let Some(escaped) = characters.next() else {
-                    return Err(Error::Type(String::from(
-                        "LIKE pattern ends with an incomplete escape",
-                    )));
-                };
-                if !matches!(escaped, '%' | '_' | '\\') {
-                    return Err(Error::Type(format!(
-                        "LIKE pattern contains unsupported escape \\{escaped}"
-                    )));
-                }
-                push_encoded_text_literal(&mut result, escaped)?;
-                previous_was_many = false;
-            }
-            literal => {
-                push_encoded_text_literal(&mut result, literal)?;
-                previous_was_many = false;
-            }
-        }
-    }
-    Ok(result.finish())
-}
-
-fn push_encoded_text_literal(result: &mut PatternBuilder, character: char) -> Result<()> {
-    result.push_str(&storage::encoded_text_literal_pattern(character))
-}
-
-pub(super) fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
+fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {
     let mut builder = RegexBuilder::new(pattern);
     builder
         .backtrack_limit(limits.regex_backtrack_limit)

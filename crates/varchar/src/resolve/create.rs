@@ -12,7 +12,7 @@ use primary_key::declare_primary_key;
 
 use crate::sql::{ColumnModifier, CreateElement, CreateTable, TableConstraint};
 use crate::storage::{Catalog, TableSchema};
-use crate::{Column, Error, Result};
+use crate::{Error, Result, SchemaColumn};
 
 pub(crate) struct ResolvedCreate {
     pub(crate) schema: TableSchema,
@@ -39,7 +39,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                 column.name
             )));
         }
-        columns.push(Column {
+        columns.push(SchemaColumn {
             name: column.name.clone(),
             data_type: column.data_type,
             nullable: true,
@@ -144,7 +144,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
 }
 
 fn local_constraint_column(
-    columns: &[Column],
+    columns: &[SchemaColumn],
     table: &str,
     column: &str,
     constraint: &str,

@@ -1,8 +1,9 @@
 //! Recursive-descent statement parser for Varchar's small SQL dialect.
 
 use super::ast::{
-    Assignment, ColumnDef, ColumnModifier, CreateElement, CreateTable, Delete, ForeignKeyReference,
-    Insert, Predicate, PredicateOperator, Projection, Select, Statement, TableConstraint, Update,
+    Assignment, ColumnDef, ColumnModifier, ColumnRef, CreateElement, CreateTable, Delete,
+    ForeignKeyReference, Insert, Join, JoinCondition, Predicate, PredicateOperator, Projection,
+    ProjectionItem, Select, Statement, TableConstraint, Update,
 };
 use super::lexer::{Token, TokenKind, lex};
 use crate::{DataType, Error, Result, Value};
@@ -57,6 +58,9 @@ impl Parser {
             let feature = match self.current_word() {
                 Some("OR") => "OR predicates",
                 Some("JOIN") => "joins",
+                Some("LEFT" | "RIGHT" | "FULL" | "OUTER") => "outer joins",
+                Some("CROSS") => "cross joins",
+                Some("NATURAL") => "natural joins",
                 Some("ORDER") => "ORDER BY",
                 Some("GROUP") => "GROUP BY",
                 Some("LIMIT") => "LIMIT",
@@ -224,19 +228,83 @@ impl Parser {
 
     fn parse_select(&mut self) -> Result<Select> {
         self.expect_keyword("SELECT")?;
-        let projection = if self.consume(&TokenKind::Star) {
-            Projection::All
-        } else {
-            Projection::Columns(self.parse_identifier_list()?)
-        };
+        let projection = self.parse_projection()?;
         self.expect_keyword("FROM")?;
         let table = self.expect_identifier()?;
+        let joins = self.parse_joins()?;
         let predicates = self.parse_optional_where()?;
         Ok(Select {
             table,
+            joins,
             projection,
             predicates,
         })
+    }
+
+    fn parse_projection(&mut self) -> Result<Projection> {
+        if self.consume(&TokenKind::Star) {
+            return Ok(Projection::All);
+        }
+
+        let mut items = vec![self.parse_projection_item()?];
+        while self.consume(&TokenKind::Comma) {
+            items.push(self.parse_projection_item()?);
+        }
+        Ok(Projection::Items(items))
+    }
+
+    fn parse_projection_item(&mut self) -> Result<ProjectionItem> {
+        let first = self.expect_identifier()?;
+        if !self.consume(&TokenKind::Dot) {
+            return Ok(ProjectionItem::Column(ColumnRef {
+                qualifier: None,
+                name: first,
+            }));
+        }
+
+        if self.consume(&TokenKind::Star) {
+            return Ok(ProjectionItem::QualifiedAll(first));
+        }
+
+        let name = self.expect_identifier()?;
+        Ok(ProjectionItem::Column(ColumnRef {
+            qualifier: Some(first),
+            name,
+        }))
+    }
+
+    fn parse_joins(&mut self) -> Result<Vec<Join>> {
+        let mut joins = Vec::new();
+        loop {
+            if self.current_word() == Some("INNER") && self.peek_word() == Some("JOIN") {
+                self.advance();
+                self.advance();
+            } else if self.consume_keyword("JOIN") {
+                // Bare JOIN is an INNER JOIN.
+            } else {
+                break;
+            }
+
+            let table = self.expect_identifier()?;
+            if self.current_word() == Some("AS") {
+                return Err(Error::unsupported("aliases", self.current().span));
+            }
+
+            self.expect_keyword("ON")?;
+            let mut conditions = vec![self.parse_join_condition()?];
+            while self.consume_keyword("AND") {
+                conditions.push(self.parse_join_condition()?);
+            }
+            joins.push(Join { table, conditions });
+        }
+        Ok(joins)
+    }
+
+    fn parse_join_condition(&mut self) -> Result<JoinCondition> {
+        let left = self.parse_column_ref()?;
+        self.expect(TokenKind::Equal, "expected `=` in JOIN condition")?;
+        let right = self.parse_column_ref()?;
+        Ok(JoinCondition { left, right })
     }
 
     fn parse_update(&mut self) -> Result<Update> {
@@ -296,7 +364,7 @@ impl Parser {
     }
 
     fn parse_predicate(&mut self) -> Result<Predicate> {
-        let column = self.expect_identifier()?;
+        let column = self.parse_column_ref()?;
         let operator = match self.current().kind.clone() {
             TokenKind::Equal => {
                 self.advance();
@@ -339,6 +407,21 @@ impl Parser {
             }
         };
         Ok(Predicate { column, operator })
+    }
+
+    fn parse_column_ref(&mut self) -> Result<ColumnRef> {
+        let first = self.expect_identifier()?;
+        if self.consume(&TokenKind::Dot) {
+            Ok(ColumnRef {
+                qualifier: Some(first),
+                name: self.expect_identifier()?,
+            })
+        } else {
+            Ok(ColumnRef {
+                qualifier: None,
+                name: first,
+            })
+        }
     }
 
     fn parse_identifier_list(&mut self) -> Result<Vec<String>> {

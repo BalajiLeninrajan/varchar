@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -254,15 +255,12 @@ fn print_outcome(outcome: &Outcome) -> io::Result<()> {
 
 fn print_rows(output: &mut impl Write, row_set: &RowSet) -> io::Result<()> {
     let rendered_rows: Vec<Vec<String>> = row_set
-        .rows
+        .rows()
         .iter()
         .map(|row| row.iter().map(render_value).collect())
         .collect();
-    let mut widths: Vec<usize> = row_set
-        .columns
-        .iter()
-        .map(|column| display_width(&column.name))
-        .collect();
+    let headers = result_headers(row_set);
+    let mut widths: Vec<usize> = headers.iter().map(|header| display_width(header)).collect();
 
     for row in &rendered_rows {
         for (index, cell) in row.iter().enumerate() {
@@ -275,11 +273,7 @@ fn print_rows(output: &mut impl Write, row_set: &RowSet) -> io::Result<()> {
     write_border(output, &widths)?;
     write_cells(
         output,
-        &row_set
-            .columns
-            .iter()
-            .map(|column| column.name.as_str())
-            .collect::<Vec<_>>(),
+        &headers.iter().map(String::as_str).collect::<Vec<_>>(),
         &widths,
     )?;
     write_border(output, &widths)?;
@@ -294,9 +288,47 @@ fn print_rows(output: &mut impl Write, row_set: &RowSet) -> io::Result<()> {
     writeln!(
         output,
         "{} row{}",
-        row_set.rows.len(),
-        if row_set.rows.len() == 1 { "" } else { "s" }
+        row_set.rows().len(),
+        if row_set.rows().len() == 1 { "" } else { "s" }
     )
+}
+
+fn result_headers(row_set: &RowSet) -> Vec<String> {
+    disambiguate_headers(row_set.columns().iter().map(|column| {
+        (
+            column.label(),
+            column.origin().table(),
+            column.origin().column(),
+        )
+    }))
+}
+
+fn disambiguate_headers<'a>(
+    columns: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+) -> Vec<String> {
+    let columns = columns.into_iter().collect::<Vec<_>>();
+    let mut labels = BTreeMap::new();
+
+    for &(label, table, column) in &columns {
+        labels
+            .entry(label)
+            .and_modify(|(first_origin, ambiguous)| {
+                *ambiguous |= *first_origin != (table, column);
+            })
+            .or_insert(((table, column), false));
+    }
+
+    columns
+        .into_iter()
+        .map(|(label, table, column)| {
+            let ambiguous = labels.get(label).is_some_and(|(_, ambiguous)| *ambiguous);
+            if ambiguous {
+                format!("{table}.{column}")
+            } else {
+                label.to_owned()
+            }
+        })
+        .collect()
 }
 
 fn render_value(value: &Value) -> String {
@@ -332,3 +364,6 @@ fn write_cells(output: &mut impl Write, cells: &[&str], widths: &[usize]) -> io:
     }
     writeln!(output)
 }
+
+#[cfg(test)]
+mod tests;
