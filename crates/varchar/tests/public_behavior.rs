@@ -240,6 +240,55 @@ fn compile_and_explain_expose_the_same_regex_plan_without_mutating() {
 }
 
 #[test]
+fn select_compilation_preserves_error_precedence() {
+    let limits = Limits {
+        max_predicates: 1,
+        ..Limits::default()
+    };
+    let mut database = Database::with_limits(limits);
+    execute(
+        &mut database,
+        "CREATE TABLE t (id INTEGER NOT NULL, note TEXT NOT NULL)",
+    );
+
+    assert!(matches!(
+        database.compile_select(
+            "SELECT missing_projection FROM missing_table \
+             WHERE missing_predicate = 1 AND id = 'wrong'",
+        ),
+        Err(Error::Schema(ref message)) if message == "unknown table \"missing_table\""
+    ));
+    assert!(matches!(
+        database.compile_select(
+            "SELECT missing_projection FROM t \
+             WHERE missing_predicate = 1 AND id = 'wrong'",
+        ),
+        Err(Error::Schema(ref message))
+            if message == "unknown column \"missing_projection\" in table \"t\""
+    ));
+    assert!(matches!(
+        database.compile_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
+        Err(Error::ResourceLimit {
+            resource: "WHERE predicates",
+            limit: 1,
+        })
+    ));
+
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE t (id INTEGER NOT NULL, note TEXT NOT NULL)",
+    );
+    assert!(matches!(
+        database.compile_select(
+            r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing_predicate = 1",
+        ),
+        Err(Error::Type(ref message))
+            if message == "LIKE pattern contains unsupported escape \\q"
+    ));
+}
+
+#[test]
 fn null_predicates_and_comparison_semantics_are_sql_like() {
     let mut database = Database::new();
     execute(
