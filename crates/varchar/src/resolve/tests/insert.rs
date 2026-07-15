@@ -1,13 +1,13 @@
 use super::people_schema;
 use crate::resolve::insert_values;
 use crate::storage::{AutoIncrement, TableSchema};
-use crate::{Column, DataType, Error, Value};
+use crate::{DataType, Error, SchemaColumn, Value};
 
 #[test]
 fn auto_increment_resolution_generates_and_tracks_only_new_high_water_marks() {
     let schema = TableSchema {
         name: String::from("ids"),
-        columns: vec![Column {
+        columns: vec![SchemaColumn {
             name: String::from("id"),
             data_type: DataType::Integer,
             nullable: false,
@@ -33,12 +33,12 @@ fn sequence_exhaustion_precedes_remaining_value_validation() {
     let schema = TableSchema {
         name: String::from("ids"),
         columns: vec![
-            Column {
+            SchemaColumn {
                 name: String::from("id"),
                 data_type: DataType::Integer,
                 nullable: false,
             },
-            Column {
+            SchemaColumn {
                 name: String::from("required"),
                 data_type: DataType::Text,
                 nullable: false,

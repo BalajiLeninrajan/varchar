@@ -1,6 +1,6 @@
 # varchar
 
-`varchar` is a deliberately absurd database: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` filters that string with one generated regular expression.
+`varchar` is a deliberately absurd database: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with generated regular expressions.
 
 It is a real parser, type checker, storage codec, and query engine wrapped around a joke premise. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
 
@@ -13,7 +13,7 @@ The Cargo workspace has two parts:
 
 The core has no filesystem or terminal API. Parsed schemas, syntax trees, compiled regexes, and result rows may exist temporarily, but the one string remains the only authoritative database state.
 
-Every supported `SELECT` compiles all of its predicates into exactly one regex. Rust decodes and projects rows after the regex matches them, but it does not perform a second predicate-filtering pass. `EXPLAIN REGEX` exposes the generated pattern so the trick stays visible.
+Every supported `SELECT` compiles the scans for all participating tables and all `WHERE` predicates into one regex—an alternation for joins. For a join, the regex buckets matching source rows by table; Rust performs the `ON` equijoin combination and projection, but it does not perform a second `WHERE`-filtering pass. `EXPLAIN REGEX` exposes the generated pattern so the trick stays visible.
 
 ## Quick start
 
@@ -54,6 +54,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | Insert | `INSERT INTO users VALUES (1, 'Ada', TRUE)` |
 | Insert by column | `INSERT INTO users (name) VALUES ('Grace')` |
 | Select | `SELECT * FROM users` or a named, ordered projection |
+| Join | `SELECT users.name, posts.body FROM users JOIN posts ON users.id = posts.user_id` |
 | Update | `UPDATE users SET active = FALSE WHERE id = 1` |
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
 | Explain | `EXPLAIN REGEX SELECT name FROM users WHERE active = TRUE` |
@@ -101,9 +102,24 @@ Omitting the generated column from a named-column insert, or explicitly insertin
 
 Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` do not match `NULL`; use `IS NULL` instead of `= NULL`. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
 
+`SELECT` supports inner equijoins using either `JOIN` or `INNER JOIN`:
+
+```sql
+SELECT users.name, posts.body
+FROM users
+INNER JOIN posts ON users.id = posts.user_id
+WHERE posts.body LIKE 'A%';
+```
+
+An `ON` clause contains column-to-column equality terms joined by `AND`. Additional join clauses form a left-to-right chain, and later clauses may refer to any earlier source. Column references in projections, `ON`, and `WHERE` may be table-qualified; a bare column is accepted only when exactly one participating table contains that name. `table.*` expands one table in schema order, while unqualified `*` expands all sources in `FROM`/`JOIN` order.
+
+Join equality uses SQL null semantics: `NULL` never equals any value, including another `NULL`. Duplicate and many-to-many matches are preserved. Results use deterministic nested-loop order: physical row order from the `FROM` table, followed by physical row order from each joined table left to right.
+
+Each library result column includes its display label and the table/column it originated from. When a joined result contains the same label from different sources, the CLI qualifies those headers with their table names.
+
 Unconstrained tables retain duplicate rows. Projection order, duplicate projected columns, and physical insertion order are preserved.
 
-The intentionally small dialect does not include joins, aggregation, ordering, aliases, subqueries, `OR`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
+The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, ordering, subqueries, `OR`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
 
 ## The one string
 
@@ -131,11 +147,12 @@ fn main() -> Result<(), varchar::Error> {
     db.execute("CREATE TABLE messages (body TEXT NOT NULL)")?;
     db.execute("INSERT INTO messages VALUES ('hello')")?;
 
-    let plan = db.compile_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
+    let plan = db.explain_select("SELECT body FROM messages WHERE body LIKE 'h%'")?;
     println!("{}", plan.pattern());
+    assert_eq!(plan.sources(), &["messages"]);
 
     if let Outcome::Rows(rows) = db.execute("SELECT body FROM messages")? {
-        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows().len(), 1);
     }
 
     let persisted: String = db.into_string();
@@ -148,7 +165,7 @@ Use `Database::from_string` to validate and reopen a persisted blob. Errors dist
 
 ## WebAssembly
 
-The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies bounded input, pattern, result, and regex-execution limits suitable for 32-bit WebAssembly memory.
+The core is kept compatible with both `wasm32-unknown-unknown` and `wasm32-wasip1`. It avoids native libraries, ambient filesystem access, networking, randomness, and threads, and applies bounded input, pattern, query-working, query-output, join-execution, and regex-execution limits suitable for 32-bit WebAssembly memory.
 
 There is no public JavaScript/WASM package in v1. A future browser adapter can pass the complete blob into the same core, execute one statement per call, and persist the returned blob in a browser-owned store. A future WASI adapter can provide capability-based persistence separately.
 
@@ -156,10 +173,10 @@ There is no public JavaScript/WASM package in v1. A future browser adapter can p
 
 The punchline is also the performance model:
 
-- Queries scan the database string, so they are **O(n)** in the size of the database.
+- Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use bounded-memory nested loops whose work can grow to the product of participating row counts.
 - Every committed mutation copies and validates a candidate string, so inserts, updates, and deletes are **O(n)**.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, materialized results, and regex backtracking are bounded. Limit failures return no partial result or mutation.
+- Inputs, generated regexes, materialized results, join execution work, and regex backtracking are bounded. Limit failures return no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 

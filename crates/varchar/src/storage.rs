@@ -10,15 +10,12 @@ mod integrity;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use crate::{Column, Error, Result};
+use crate::{Error, Result, SchemaColumn};
 
 pub(crate) use candidate::Candidate;
-pub(crate) use decode::decode_row;
+pub(crate) use decode::{RowRecordRef, decode_row, row_record};
 pub(crate) use encode::{encode_cell, encode_row, encode_schema};
-pub(crate) use format::{
-    cell_boundary_pattern, cell_pattern, encoded_text_literal_pattern, row_prefix_pattern,
-    text_unit_pattern,
-};
+pub(crate) use format::{ROW_PREFIX, encode_text_into};
 
 use catalog::{validate_and_catalog, validate_candidate};
 
@@ -120,14 +117,14 @@ struct AutoIncrementState {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RowLayout<'a> {
     pub(crate) table: &'a str,
-    pub(crate) columns: &'a [Column],
+    pub(crate) columns: &'a [SchemaColumn],
 }
 
 /// A table definition reconstructed from its schema and key metadata records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TableSchema {
     pub(crate) name: String,
-    pub(crate) columns: Vec<Column>,
+    pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) primary_key: Option<usize>,
     pub(crate) foreign_keys: Vec<ForeignKey>,
 }

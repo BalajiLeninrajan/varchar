@@ -7,7 +7,7 @@ use crate::query::{self, SelectPlan};
 use crate::resolve;
 use crate::sql::{self, CreateTable, Delete, Insert, Select, Statement, Update};
 use crate::storage;
-use crate::{Error, Outcome, RegexPlan, Result, Span};
+use crate::{Error, Outcome, Result, SelectExplanation, Span};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
@@ -92,20 +92,21 @@ impl Database {
             Statement::Update(statement) => self.execute_update(statement),
             Statement::Delete(statement) => self.execute_delete(statement),
             Statement::ExplainRegex(statement) => self
-                .compile_select_ast(&statement)
-                .map(|plan| Outcome::Explain(plan.into_regex_plan())),
+                .compile_select_ast(&statement)?
+                .into_explanation(self.limits.max_query_output_bytes)
+                .map(Outcome::Explain),
         }
     }
 
-    /// Parse, resolve, and compile a `SELECT` into its exact row-selection regex.
-    pub fn compile_select(&self, sql: &str) -> Result<RegexPlan> {
+    /// Parse, resolve, and explain a `SELECT`'s source-row scans.
+    pub fn explain_select(&self, sql: &str) -> Result<SelectExplanation> {
         self.check_request(sql)?;
         match sql::parse(sql)? {
             Statement::Select(statement) => self
                 .compile_select_ast(&statement)
-                .map(SelectPlan::into_regex_plan),
+                .and_then(|plan| plan.into_explanation(self.limits.max_query_output_bytes)),
             _ => Err(Error::parse(
-                "compile_select expects a SELECT statement",
+                "explain_select expects a SELECT statement",
                 Span::new(0, sql.len()),
             )),
         }
@@ -173,7 +174,7 @@ impl Database {
         Ok(Outcome::Affected { rows: affected })
     }
 
-    fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan> {
+    fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan<'_>> {
         query::compile_select(self.storage.catalog(), statement, &self.limits)
     }
 }

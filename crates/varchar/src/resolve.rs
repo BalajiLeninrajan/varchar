@@ -7,15 +7,22 @@
 mod column;
 mod create;
 mod insert;
+mod join;
+mod like;
 mod predicate;
 mod projection;
+mod select;
+mod source;
 mod table;
 mod update;
 
+pub(crate) use column::ColumnLocation;
 pub(crate) use create::create_schema;
 pub(crate) use insert::insert_values;
+pub(crate) use join::{ResolvedJoin, ResolvedJoinCondition};
+pub(crate) use like::LikeAtom;
 pub(crate) use predicate::{ResolvedPredicate, predicate};
-pub(crate) use projection::projection;
+pub(crate) use select::{ResolvedSelect, select};
 pub(crate) use table::require_table;
 pub(crate) use update::assignments;
 

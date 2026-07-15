@@ -12,5 +12,6 @@ mod value;
 pub use database::Database;
 pub use error::{Error, Result, Span};
 pub use limits::Limits;
-pub use query::RegexPlan;
-pub use value::{Column, DataType, Outcome, RowSet, Value};
+pub use value::{ColumnOrigin, DataType, Outcome, ResultColumn, RowSet, SelectExplanation, Value};
+
+pub(crate) use value::SchemaColumn;

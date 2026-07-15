@@ -1,7 +1,8 @@
 use super::parse;
 use crate::sql::ast::{
-    ColumnDef, ColumnModifier, CreateElement, CreateTable, ForeignKeyReference, Predicate,
-    PredicateOperator, Projection, Select, Statement, TableConstraint,
+    ColumnDef, ColumnModifier, ColumnRef, CreateElement, CreateTable, ForeignKeyReference, Join,
+    JoinCondition, Predicate, PredicateOperator, Projection, ProjectionItem, Select, Statement,
+    TableConstraint,
 };
 use crate::{DataType, Error, Value};
 
@@ -12,6 +13,20 @@ fn create_table(sql: &str) -> CreateTable {
     }
 }
 
+fn select(sql: &str) -> Select {
+    match parse(sql).expect("SELECT parses") {
+        Statement::Select(statement) => statement,
+        other => panic!("expected SELECT, got {other:?}"),
+    }
+}
+
+fn column_ref(qualifier: Option<&str>, name: &str) -> ColumnRef {
+    ColumnRef {
+        qualifier: qualifier.map(str::to_owned),
+        name: name.to_owned(),
+    }
+}
+
 #[test]
 fn parsing_produces_the_exact_normalized_ast() {
     assert_eq!(
@@ -19,14 +34,18 @@ fn parsing_produces_the_exact_normalized_ast() {
             .expect("SELECT parses"),
         Statement::Select(Select {
             table: String::from("users"),
-            projection: Projection::Columns(vec![String::from("name"), String::from("id"),]),
+            joins: Vec::new(),
+            projection: Projection::Items(vec![
+                ProjectionItem::Column(column_ref(None, "name")),
+                ProjectionItem::Column(column_ref(None, "id")),
+            ]),
             predicates: vec![
                 Predicate {
-                    column: String::from("name"),
+                    column: column_ref(None, "name"),
                     operator: PredicateOperator::Like(String::from("a_%")),
                 },
                 Predicate {
-                    column: String::from("id"),
+                    column: column_ref(None, "id"),
                     operator: PredicateOperator::NotEqual(Value::Integer(-7)),
                 },
             ],
@@ -35,15 +54,82 @@ fn parsing_produces_the_exact_normalized_ast() {
 }
 
 #[test]
-fn unsupported_trailing_syntax_keeps_its_feature_and_span() {
+fn unsupported_join_syntax_keeps_its_feature_and_span() {
     assert!(matches!(
-        parse("SELECT * FROM t JOIN u"),
+        parse("SELECT * FROM t LEFT JOIN u ON t.id = u.id"),
         Err(Error::Unsupported {
             ref feature,
             span_start: 16,
             span_end: 20,
-        }) if feature == "joins"
+        }) if feature == "outer joins"
     ));
+}
+
+#[test]
+fn parses_qualified_projection_inner_join_and_predicate_ast() {
+    assert_eq!(
+        select(
+            "SELECT authors.name, books.* FROM authors INNER JOIN books \
+             ON authors.id = books.author_id AND authors.kind = books.kind \
+             WHERE books.title LIKE 'R%'",
+        ),
+        Select {
+            table: "authors".to_owned(),
+            joins: vec![Join {
+                table: "books".to_owned(),
+                conditions: vec![
+                    JoinCondition {
+                        left: column_ref(Some("authors"), "id"),
+                        right: column_ref(Some("books"), "author_id"),
+                    },
+                    JoinCondition {
+                        left: column_ref(Some("authors"), "kind"),
+                        right: column_ref(Some("books"), "kind"),
+                    },
+                ],
+            }],
+            projection: Projection::Items(vec![
+                ProjectionItem::Column(column_ref(Some("authors"), "name")),
+                ProjectionItem::QualifiedAll("books".to_owned()),
+            ]),
+            predicates: vec![Predicate {
+                column: column_ref(Some("books"), "title"),
+                operator: PredicateOperator::Like("R%".to_owned()),
+            }],
+        }
+    );
+}
+
+#[test]
+fn preserves_repeated_join_sources_for_semantic_resolution() {
+    let statement = select("SELECT nodes.id FROM nodes JOIN nodes ON nodes.parent_id = nodes.id");
+
+    assert_eq!(statement.table, "nodes");
+    assert_eq!(statement.joins.len(), 1);
+    assert_eq!(statement.joins[0].table, "nodes");
+}
+
+#[test]
+fn inner_and_on_remain_contextual_identifiers() {
+    let statement = create_table("CREATE TABLE inner (on INTEGER)");
+    assert_eq!(statement.table, "inner");
+    let CreateElement::Column(column) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(column.name, "on");
+
+    let statement = select("SELECT inner.on FROM inner WHERE inner.on = 1");
+    assert_eq!(
+        statement.projection,
+        Projection::Items(vec![ProjectionItem::Column(column_ref(
+            Some("inner"),
+            "on",
+        ))])
+    );
+    assert_eq!(
+        statement.predicates[0].column,
+        column_ref(Some("inner"), "on")
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 fn rows(outcome: Outcome) -> Vec<Vec<Value>> {
     match outcome {
-        Outcome::Rows(row_set) => row_set.rows,
+        Outcome::Rows(row_set) => row_set.into_rows(),
         other => panic!("expected rows, got {other:?}"),
     }
 }
@@ -29,7 +29,7 @@ fn typed_crud_and_regex_planning_execute_inside_wasm() {
         .unwrap();
 
     let sql = "SELECT value, id FROM t WHERE active = TRUE AND value LIKE '💾%'";
-    let plan = database.compile_select(sql).unwrap();
+    let plan = database.explain_select(sql).unwrap();
     assert!(!plan.pattern().is_empty());
     assert_eq!(
         database.execute(&format!("EXPLAIN REGEX {sql}")).unwrap(),
@@ -79,7 +79,10 @@ fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
     let before = database.as_str().to_owned();
     assert!(matches!(
         database.execute("CREATE TABLE t (id INTEGER)"),
-        Err(Error::ResourceLimit { limit: 4, .. })
+        Err(Error::ResourceLimit {
+            resource: "SQL bytes",
+            limit: 4,
+        })
     ));
     assert_eq!(database.as_str(), before);
 }
@@ -171,5 +174,49 @@ fn auto_increment_high_water_survives_reload_in_wasm() {
     assert_eq!(
         rows(reloaded.execute("SELECT id FROM messages").unwrap()),
         vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]
+    );
+}
+
+#[wasm_bindgen_test]
+fn inner_joins_execute_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id), name TEXT NOT NULL)",
+        )
+        .unwrap();
+    database
+        .execute("INSERT INTO parents VALUES (1, 'parent')")
+        .unwrap();
+    database
+        .execute("INSERT INTO children VALUES (1, 'child')")
+        .unwrap();
+
+    let sql = "SELECT parents.name, children.name FROM parents \
+               JOIN children ON parents.id = children.parent_id";
+    let explanation = database.explain_select(sql).unwrap();
+    assert_eq!(explanation.sources(), &["parents", "children"]);
+    assert_eq!(explanation.columns().len(), 2);
+    assert_eq!(explanation.columns()[0].label(), "name");
+    assert_eq!(explanation.columns()[0].origin().table(), "parents");
+    assert_eq!(explanation.columns()[0].origin().column(), "name");
+    assert_eq!(explanation.columns()[1].label(), "name");
+    assert_eq!(explanation.columns()[1].origin().table(), "children");
+    assert_eq!(explanation.columns()[1].origin().column(), "name");
+
+    let row_set = match database.execute(sql).unwrap() {
+        Outcome::Rows(row_set) => row_set,
+        other => panic!("expected joined rows, got {other:?}"),
+    };
+    assert_eq!(row_set.columns(), explanation.columns());
+    assert_eq!(
+        row_set.into_rows(),
+        vec![vec![
+            Value::Text("parent".to_owned()),
+            Value::Text("child".to_owned()),
+        ]]
     );
 }
