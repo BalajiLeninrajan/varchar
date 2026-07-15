@@ -27,7 +27,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
     };
     let mut candidate = state.candidate(1024).expect("empty state fits");
     candidate
-        .insert_schema(&schema)
+        .insert_schema_with_auto_increment(&schema, None)
         .expect("schema edit succeeds");
     candidate
         .append_row(schema.row_layout(), &[Value::Integer(1)])

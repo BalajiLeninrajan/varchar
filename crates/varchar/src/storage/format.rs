@@ -9,6 +9,7 @@ pub(super) const HEADER: &str = "V2;";
 pub(super) const SCHEMA_PREFIX: &str = "~S|";
 pub(super) const PRIMARY_KEY_PREFIX: &str = "~P|";
 pub(super) const FOREIGN_KEY_PREFIX: &str = "~F|";
+pub(super) const AUTO_INCREMENT_PREFIX: &str = "~A|";
 pub(super) const ROW_PREFIX: &str = "~R|";
 const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
 
@@ -17,6 +18,7 @@ pub(super) enum RecordKind {
     Schema,
     PrimaryKey,
     ForeignKey,
+    AutoIncrement,
     Row,
     Unknown,
 }
@@ -79,6 +81,8 @@ impl<'a> Iterator for RecordIter<'a> {
             RecordKind::PrimaryKey
         } else if text.starts_with(FOREIGN_KEY_PREFIX) {
             RecordKind::ForeignKey
+        } else if text.starts_with(AUTO_INCREMENT_PREFIX) {
+            RecordKind::AutoIncrement
         } else if text.starts_with(ROW_PREFIX) {
             RecordKind::Row
         } else {

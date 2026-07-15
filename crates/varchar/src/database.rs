@@ -121,31 +121,40 @@ impl Database {
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let schema = resolve::create_schema(self.storage.catalog(), statement)?;
-        let table = schema.name.clone();
+        let resolved = resolve::create_schema(self.storage.catalog(), statement)?;
+        let table = resolved.schema.name.clone();
         let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
-        candidate.insert_schema(&schema)?;
+        candidate.insert_schema_with_auto_increment(&resolved.schema, resolved.auto_increment)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Created { table })
     }
 
     fn execute_insert(&mut self, statement: Insert) -> Result<Outcome> {
         let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
-        let values = resolve::insert_values(schema, statement.columns, statement.values)?;
+        let auto_increment = self.storage.catalog().auto_increment(&statement.table);
+        let resolved =
+            resolve::insert_values(schema, auto_increment, statement.columns, statement.values)?;
         let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
-        candidate.append_row(schema.row_layout(), &values)?;
+        if let Some(last) = resolved.next_auto_increment {
+            candidate.advance_auto_increment(&statement.table, last)?;
+        }
+        candidate.append_row(schema.row_layout(), &resolved.values)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: 1 })
     }
 
     fn execute_update(&mut self, statement: Update) -> Result<Outcome> {
         let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
-        let assignments = resolve::assignments(schema, &statement.assignments)?;
+        let auto_increment = self.storage.catalog().auto_increment(&statement.table);
+        let assignments = resolve::assignments(schema, auto_increment, &statement.assignments)?;
         let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
         let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        if let Some(last) = assignments.next_auto_increment {
+            candidate.defer_auto_increment(&statement.table, last)?;
+        }
         let affected =
             query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |mut values| {
-                for (index, value) in &assignments {
+                for (index, value) in &assignments.values {
                     values[*index] = value.clone();
                 }
                 Ok(Some(values))

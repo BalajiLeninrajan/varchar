@@ -173,3 +173,46 @@ fn rejects_composite_key_constraints_explicitly() {
         );
     }
 }
+
+#[test]
+fn auto_increment_spellings_are_contextual_column_modifiers() {
+    for modifier in ["AUTOINCREMENT", "AUTO_INCREMENT"] {
+        let statement = create_table(&format!(
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY {modifier})"
+        ));
+        let CreateElement::Column(column) = &statement.elements[0] else {
+            panic!("expected a column");
+        };
+        assert_eq!(
+            column.modifiers,
+            vec![ColumnModifier::PrimaryKey, ColumnModifier::AutoIncrement]
+        );
+    }
+
+    let statement = create_table(
+        "CREATE TABLE autoincrement (auto_increment INTEGER, value INTEGER PRIMARY KEY)",
+    );
+    assert_eq!(statement.table, "autoincrement");
+    let CreateElement::Column(column) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(column.name, "auto_increment");
+    assert!(column.modifiers.is_empty());
+}
+
+#[test]
+fn preserves_duplicate_auto_increment_modifiers_for_resolution() {
+    let statement =
+        create_table("CREATE TABLE ids (id INTEGER AUTOINCREMENT AUTO_INCREMENT AUTOINCREMENT)");
+    let CreateElement::Column(column) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        column.modifiers,
+        vec![
+            ColumnModifier::AutoIncrement,
+            ColumnModifier::AutoIncrement,
+            ColumnModifier::AutoIncrement,
+        ]
+    );
+}

@@ -1,7 +1,8 @@
 //! Canonical serialization for schemas, rows, and typed cells.
 
 use super::format::{
-    FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX, encode_text_into, type_tag,
+    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX, encode_text_into,
+    type_tag,
 };
 use super::{RowLayout, TableSchema, validate_row_layout, validate_schema_for_write};
 use crate::value::validate_value;
@@ -52,6 +53,37 @@ pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
         encoded.push(';');
     }
     Ok(encoded)
+}
+
+/// Encode one persisted auto-increment high-water record.
+pub(crate) fn encode_auto_increment_record(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<String> {
+    validate_schema_for_write(schema)?;
+    if last < 0 {
+        return Err(Error::Schema(format!(
+            "auto-increment high-water mark for table {:?} must be nonnegative",
+            schema.name
+        )));
+    }
+    let Some(definition) = schema.columns.get(column) else {
+        return Err(Error::Schema(format!(
+            "auto-increment index {column} is outside table {:?}",
+            schema.name
+        )));
+    };
+    if schema.primary_key != Some(column) || definition.data_type != DataType::Integer {
+        return Err(Error::Schema(format!(
+            "auto-increment column {:?}.{:?} must be its INTEGER primary key",
+            schema.name, definition.name
+        )));
+    }
+    Ok(format!(
+        "{AUTO_INCREMENT_PREFIX}{}|{}|I{last};",
+        schema.name, definition.name
+    ))
 }
 
 /// Encode a complete row record, including its terminator.

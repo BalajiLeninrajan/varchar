@@ -128,6 +128,32 @@ fn failed_execution_preserves_the_previous_database() {
     );
 }
 
+#[test]
+fn auto_increment_state_persists_across_cli_processes() {
+    let (_directory, path) = initialized_database();
+    exec(
+        &path,
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
+    )
+    .success();
+    exec(&path, "INSERT INTO messages (body) VALUES ('first')").success();
+    exec(&path, "INSERT INTO messages (body) VALUES ('second')").success();
+
+    exec(&path, "SELECT id, body FROM messages")
+        .success()
+        .stdout(
+            predicate::str::contains("first")
+                .and(predicate::str::contains("second"))
+                .and(predicate::str::contains("2 rows")),
+        );
+    command()
+        .arg("dump")
+        .arg(path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("~A|messages|id|I2;"));
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_persistence_preserves_the_previous_database() {
