@@ -1,15 +1,17 @@
-//! Physical compilation of semantically resolved predicates into row regexes.
+//! Compilation of resolved queries and predicates into executable scan plans.
 
 use fancy_regex::{Regex, RegexBuilder};
 
 use super::{ScanPlan, SelectPlan, pattern};
-use crate::limits::Limits;
-use crate::resolve::{ResolvedPredicate, ResolvedSelect};
-use crate::storage::TableSchema;
-use crate::{Error, Result};
+use crate::limits::{Limits, check_limit};
+use crate::resolve::{self, ResolvedSelect};
+use crate::sql::{Predicate, Select};
+use crate::storage::{Catalog, TableSchema};
+use crate::{Error, Resource, Result};
 
-pub(super) fn select<'catalog>(
-    resolved: ResolvedSelect<'catalog, '_>,
+pub(crate) fn compile_select<'catalog>(
+    catalog: &'catalog Catalog,
+    statement: &Select,
     limits: &Limits,
 ) -> Result<SelectPlan<'catalog>> {
     let ResolvedSelect {
@@ -17,7 +19,13 @@ pub(super) fn select<'catalog>(
         projection,
         joins,
         predicates,
-    } = resolved;
+    } = resolve::select(
+        catalog,
+        statement,
+        limits.max_join_sources,
+        limits.max_predicates,
+        limits.max_query_output_bytes,
+    )?;
 
     let mut predicates_by_source = Vec::new();
     predicates_by_source
@@ -64,12 +72,20 @@ pub(super) fn select<'catalog>(
     })
 }
 
-pub(super) fn scan<'statement>(
+pub(crate) fn compile_scan(
     schema: &TableSchema,
-    predicates: impl Iterator<Item = Result<ResolvedPredicate<'statement>>>,
+    predicates: &[Predicate],
     limits: &Limits,
 ) -> Result<ScanPlan> {
-    let predicates = predicates.collect::<Result<Vec<_>>>()?;
+    check_limit(
+        predicates.len(),
+        limits.max_predicates,
+        Resource::WherePredicates,
+    )?;
+    let predicates = predicates
+        .iter()
+        .map(|predicate| resolve::predicate(schema, predicate))
+        .collect::<Result<Vec<_>>>()?;
     let pattern = pattern::row_scan_pattern(
         &schema.name,
         &schema.columns,
