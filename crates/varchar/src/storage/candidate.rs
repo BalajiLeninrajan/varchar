@@ -6,40 +6,43 @@
 
 use std::ops::Range;
 
-use super::{Catalog, RowLayout, TableSchema, encode_row, encode_schema};
+use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
 use crate::{Error, Result, Value};
 
 /// A bounded, ordered edit of one validated authoritative database string.
 pub(crate) struct Candidate<'a> {
-    source: &'a str,
+    state: &'a StorageState,
     cursor: usize,
     output: String,
     max_bytes: usize,
 }
 
 impl<'a> Candidate<'a> {
-    pub(crate) fn new(source: &'a str, max_bytes: usize) -> Result<Self> {
+    pub(super) fn new(state: &'a StorageState, max_bytes: usize) -> Result<Self> {
+        let source = state.as_str();
         check_size(source.len(), max_bytes)?;
         let mut output = String::new();
         output
             .try_reserve(source.len())
             .map_err(|_| limit_error(max_bytes))?;
         Ok(Self {
-            source,
+            state,
             cursor: 0,
             output,
             max_bytes,
         })
     }
 
-    pub(crate) fn insert_schema(&mut self, catalog: &Catalog, schema: &TableSchema) -> Result<()> {
+    pub(crate) fn insert_schema(&mut self, schema: &TableSchema) -> Result<()> {
         let encoded = encode_schema(schema)?;
-        self.splice(catalog.row_start..catalog.row_start, &encoded)
+        let row_start = self.state.catalog().row_start;
+        self.splice(row_start..row_start, &encoded)
     }
 
     pub(crate) fn append_row(&mut self, layout: RowLayout<'_>, values: &[Value]) -> Result<()> {
         let encoded = encode_row(values, layout)?;
-        self.splice(self.source.len()..self.source.len(), &encoded)
+        let source_len = self.state.as_str().len();
+        self.splice(source_len..source_len, &encoded)
     }
 
     pub(crate) fn rewrite_row(
@@ -54,20 +57,26 @@ impl<'a> Candidate<'a> {
         self.splice(range, encoded.as_deref().unwrap_or_default())
     }
 
-    pub(crate) fn finish(mut self) -> Result<String> {
-        self.push_source(self.cursor..self.source.len())?;
-        Ok(self.output)
+    pub(crate) fn source(&self) -> &'a str {
+        self.state.as_str()
+    }
+
+    pub(crate) fn finish(mut self) -> Result<StorageState> {
+        self.push_source(self.cursor..self.state.as_str().len())?;
+        StorageState::load(self.output)
     }
 
     fn splice(&mut self, range: Range<usize>, replacement: &str) -> Result<()> {
         if range.start < self.cursor || range.start > range.end {
             return Err(invalid_range(range.start));
         }
-        self.source
+        self.state
+            .as_str()
             .get(range.clone())
             .ok_or_else(|| invalid_range(range.start))?;
         let gap = self
-            .source
+            .state
+            .as_str()
             .get(self.cursor..range.start)
             .ok_or_else(|| invalid_range(range.start))?;
         let additional = gap
@@ -91,7 +100,8 @@ impl<'a> Candidate<'a> {
 
     fn push_source(&mut self, range: Range<usize>) -> Result<()> {
         let fragment = self
-            .source
+            .state
+            .as_str()
             .get(range.clone())
             .ok_or_else(|| invalid_range(range.start))?;
         self.push(fragment)
