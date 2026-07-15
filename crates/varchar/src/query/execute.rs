@@ -4,9 +4,10 @@ use fancy_regex::{Error as FancyError, RuntimeError};
 
 use super::{ScanPlan, SelectPlan};
 use crate::limits::{Limits, check_limit};
+use crate::output::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation};
 use crate::resolve::ResolvedJoinCondition;
 use crate::storage::{self, Candidate, RowLayout, RowRecordRef};
-use crate::value::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation, Value};
+use crate::value::Value;
 use crate::{Error, Resource, Result};
 
 pub(super) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {

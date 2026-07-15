@@ -3,6 +3,7 @@
 mod database;
 mod error;
 mod limits;
+mod output;
 mod query;
 mod resolve;
 mod sql;
@@ -12,6 +13,7 @@ mod value;
 pub use database::Database;
 pub use error::{Error, Result, Span};
 pub use limits::{Limits, Resource};
-pub use value::{ColumnOrigin, DataType, Outcome, ResultColumn, RowSet, SelectExplanation, Value};
+pub use output::{ColumnOrigin, Outcome, ResultColumn, RowSet, SelectExplanation};
+pub use value::{DataType, Value};
 
 pub(crate) use value::SchemaColumn;

@@ -7,10 +7,11 @@ mod pattern;
 use fancy_regex::Regex;
 
 use crate::limits::{Limits, check_limit};
+use crate::output::{RowSet, SelectExplanation};
 use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Candidate, Catalog, TableSchema};
-use crate::value::{RowSet, SelectExplanation, Value};
+use crate::value::Value;
 use crate::{Resource, Result, SchemaColumn};
 
 /// An owned mutation scan that remains valid while a candidate is assembled.
