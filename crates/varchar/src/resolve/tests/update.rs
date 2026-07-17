@@ -1,7 +1,7 @@
-use super::{assert_error, people_schema};
+use super::people_schema;
 use crate::resolve::assignments;
 use crate::sql::Assignment;
-use crate::{ErrorCode, Value};
+use crate::{Error, Value};
 
 #[test]
 fn assignments_validate_in_statement_order() {
@@ -16,11 +16,11 @@ fn assignments_validate_in_statement_order() {
             value: Value::Integer(1),
         },
     ];
-    assert_error(
+    assert!(matches!(
         assignments(&schema, None, &assignments_to_resolve),
-        ErrorCode::Type,
-        "column \"id\" expects INTEGER, got TEXT",
-    );
+        Err(Error::Type(ref message))
+            if message == "column \"id\" expects INTEGER, got TEXT"
+    ));
 }
 
 #[test]
@@ -36,9 +36,9 @@ fn duplicate_assignments_are_rejected() {
             value: Value::Integer(2),
         },
     ];
-    assert_error(
+    assert!(matches!(
         assignments(&schema, None, &duplicate_assignments),
-        ErrorCode::Schema,
-        "duplicate UPDATE assignment for column \"id\"",
-    );
+        Err(Error::Schema(ref message))
+            if message == "duplicate UPDATE assignment for column \"id\""
+    ));
 }

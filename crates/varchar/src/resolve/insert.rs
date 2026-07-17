@@ -20,7 +20,7 @@ pub(crate) fn insert_values(
 ) -> Result<ResolvedInsert> {
     let mut values = if let Some(columns) = columns {
         if columns.len() != supplied.len() {
-            return Err(Error::type_error(format!(
+            return Err(Error::Type(format!(
                 "INSERT names {} columns but supplies {} values",
                 columns.len(),
                 supplied.len()
@@ -30,7 +30,7 @@ pub(crate) fn insert_values(
         let mut values = vec![Value::Null; schema.columns.len()];
         for (name, value) in columns.into_iter().zip(supplied) {
             if !seen.insert(name.clone()) {
-                return Err(Error::schema(format!("duplicate INSERT column {name:?}")));
+                return Err(Error::Schema(format!("duplicate INSERT column {name:?}")));
             }
             let index = require_column(schema, &name)?;
             values[index] = value;
@@ -38,7 +38,7 @@ pub(crate) fn insert_values(
         values
     } else {
         if supplied.len() != schema.columns.len() {
-            return Err(Error::type_error(format!(
+            return Err(Error::Type(format!(
                 "table {:?} expects {} values, got {}",
                 schema.name,
                 schema.columns.len(),
@@ -55,7 +55,7 @@ pub(crate) fn insert_values(
         match value {
             Value::Null => {
                 let next = auto_increment.last.checked_add(1).ok_or_else(|| {
-                    Error::constraint(format!(
+                    Error::Constraint(format!(
                         "auto-increment sequence for table {:?} is exhausted",
                         schema.name
                     ))

@@ -1,5 +1,5 @@
-use super::{assert_error, catalog, select_statement};
-use crate::ErrorCode;
+use super::{catalog, select_statement};
+use crate::Error;
 use crate::resolve::select;
 
 #[test]
@@ -13,17 +13,18 @@ fn joins_must_connect_each_new_source_with_compatible_columns() {
          JOIN books ON authors.id = books.author_id \
          JOIN reviews ON authors.id = books.author_id",
     );
-    assert_error(
+    assert!(matches!(
         select(&catalog, &disconnected, 3, 0, usize::MAX),
-        ErrorCode::Schema,
-        "JOIN for table \"reviews\" must connect it to an earlier table",
-    );
+        Err(Error::Schema(ref message))
+            if message == "JOIN for table \"reviews\" must connect it to an earlier table"
+    ));
 
     let type_mismatch =
         select_statement("SELECT * FROM authors JOIN books ON authors.name = books.author_id");
-    assert_error(
+    assert!(matches!(
         select(&catalog, &type_mismatch, 2, 0, usize::MAX),
-        ErrorCode::Type,
-        "JOIN columns \"authors\".\"name\" and \"books\".\"author_id\" have different types",
-    );
+        Err(Error::Type(ref message))
+            if message
+                == "JOIN columns \"authors\".\"name\" and \"books\".\"author_id\" have different types"
+    ));
 }

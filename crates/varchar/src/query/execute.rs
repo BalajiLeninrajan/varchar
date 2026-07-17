@@ -126,7 +126,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
             .sources
             .iter()
             .position(|source| source.name == table)
-            .ok_or_else(|| Error::regex_runtime(format!("matched unexpected table {table:?}")))?;
+            .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
         let source = plan.sources[source_index];
         let retained_row_charge =
             retained_row_charge(&row_record, source.columns.len(), &working_budget)?;
@@ -365,9 +365,9 @@ where
             layout,
             replacement.as_deref(),
         )?;
-        affected = affected
-            .checked_add(1)
-            .ok_or(Error::capacity("counting affected rows"))?;
+        affected = affected.checked_add(1).ok_or(Error::Capacity {
+            operation: "counting affected rows",
+        })?;
     }
     Ok(affected)
 }
@@ -431,24 +431,31 @@ impl ByteBudget {
     }
 
     const fn limit_error(&self) -> Error {
-        Error::resource_limit(self.resource, self.limit)
+        Error::ResourceLimit {
+            resource: self.resource,
+            limit: self.limit,
+        }
     }
 }
 
 const fn allocation_error(operation: &'static str) -> Error {
-    Error::allocation(operation)
+    Error::Allocation { operation }
 }
 
 const fn join_limit_error(limits: &Limits) -> Error {
-    Error::resource_limit(Resource::JoinSteps, limits.max_join_steps)
+    Error::ResourceLimit {
+        resource: Resource::JoinSteps,
+        limit: limits.max_join_steps,
+    }
 }
 
 fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
     match error {
-        FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded) => {
-            Error::resource_limit(Resource::RegexBacktracking, limits.regex_backtrack_limit)
-        }
-        other => Error::regex_runtime(other.to_string()),
+        FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded) => Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: limits.regex_backtrack_limit,
+        },
+        other => Error::RegexRuntime(other.to_string()),
     }
 }
 

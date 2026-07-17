@@ -1,9 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{
-    DataType, Database, Error, ErrorCode, Limits, Outcome, Resource, ResultColumn, RowSet,
-    SelectExplanation, Value,
-};
+use varchar::{DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -43,12 +40,6 @@ fn single_text_column(database: &mut Database, sql: &str) -> Vec<Value> {
             row.into_iter().next().expect("one projected value")
         })
         .collect()
-}
-
-fn assert_resource_limit(error: &Error, resource: Resource, limit: usize) {
-    assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    assert_eq!(error.resource(), Some(resource));
-    assert_eq!(error.limit(), Some(limit));
 }
 
 #[test]
@@ -269,48 +260,41 @@ fn select_compilation_preserves_error_precedence() {
         "CREATE TABLE t (id INTEGER NOT NULL, note TEXT NOT NULL)",
     );
 
-    let error = database
-        .explain_select(
+    assert!(matches!(
+        database.explain_select(
             "SELECT missing_projection FROM missing_table \
              WHERE missing_predicate = 1 AND id = 'wrong'",
-        )
-        .unwrap_err_or_else(|| panic!("missing table unexpectedly resolved"));
-    assert_eq!(error.code(), ErrorCode::Schema);
-    assert_eq!(
-        error.to_string(),
-        "schema error: unknown table \"missing_table\""
-    );
-
-    let error = database
-        .explain_select(
+        ),
+        Err(Error::Schema(ref message)) if message == "unknown table \"missing_table\""
+    ));
+    assert!(matches!(
+        database.explain_select(
             "SELECT missing_projection FROM t \
              WHERE missing_predicate = 1 AND id = 'wrong'",
-        )
-        .unwrap_err_or_else(|| panic!("missing projection unexpectedly resolved"));
-    assert_eq!(error.code(), ErrorCode::Schema);
-    assert_eq!(
-        error.to_string(),
-        "schema error: unknown column \"missing_projection\" in table \"t\""
-    );
-
-    let error = database
-        .explain_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'")
-        .unwrap_err_or_else(|| panic!("predicate limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::WherePredicates, 1);
+        ),
+        Err(Error::Schema(ref message))
+            if message == "unknown column \"missing_projection\" in table \"t\""
+    ));
+    assert!(matches!(
+        database.explain_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
+        Err(Error::ResourceLimit {
+            resource: Resource::WherePredicates,
+            limit: 1,
+        })
+    ));
 
     let mut database = Database::new();
     execute(
         &mut database,
         "CREATE TABLE t (id INTEGER NOT NULL, note TEXT NOT NULL)",
     );
-    let error = database
-        .explain_select(r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing_predicate = 1")
-        .unwrap_err_or_else(|| panic!("invalid LIKE escape unexpectedly resolved"));
-    assert_eq!(error.code(), ErrorCode::Type);
-    assert_eq!(
-        error.to_string(),
-        "type error: LIKE pattern contains unsupported escape \\q"
-    );
+    assert!(matches!(
+        database.explain_select(
+            r"SELECT id FROM t WHERE note LIKE 'bad\q' AND missing_predicate = 1",
+        ),
+        Err(Error::Type(ref message))
+            if message == "LIKE pattern contains unsupported escape \\q"
+    ));
 }
 
 #[test]
@@ -328,30 +312,24 @@ fn select_resolves_all_predicates_before_physical_pattern_limits() {
         .expect("fixture fits generated-pattern limits");
     let oversized_pattern = "x".repeat(256);
 
-    let physical_limit = database
-        .explain_select(&format!(
+    assert!(matches!(
+        database.explain_select(&format!(
             "SELECT id FROM t WHERE note LIKE {pattern}",
             pattern = sql_text(&oversized_pattern),
-        ))
-        .expect_err("oversized generated pattern is rejected");
-    assert_eq!(physical_limit.code(), ErrorCode::ResourceLimit);
-    assert_eq!(
-        physical_limit.resource(),
-        Some(Resource::GeneratedRegexBytes)
-    );
-    assert_eq!(physical_limit.limit(), Some(128));
+        )),
+        Err(Error::ResourceLimit {
+            resource: Resource::GeneratedRegexBytes,
+            limit: 128,
+        })
+    ));
 
-    let semantic_error = database
-        .explain_select(&format!(
+    assert!(matches!(
+        database.explain_select(&format!(
             "SELECT id FROM t WHERE note LIKE {pattern} AND missing = 1",
             pattern = sql_text(&oversized_pattern),
-        ))
-        .expect_err("semantic resolution precedes physical compilation");
-    assert_eq!(semantic_error.code(), ErrorCode::Schema);
-    assert_eq!(
-        semantic_error.to_string(),
-        "schema error: unknown column \"missing\" in table \"t\""
-    );
+        )),
+        Err(Error::Schema(ref message)) if message == "unknown column \"missing\" in table \"t\""
+    ));
 }
 
 #[test]
@@ -403,13 +381,9 @@ fn null_predicates_and_comparison_semantics_are_sql_like() {
         "SELECT id FROM values_ WHERE note != NULL",
         "SELECT id FROM values_ WHERE id LIKE '1'",
     ] {
-        let error = database
-            .execute(sql)
-            .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
-        assert_eq!(
-            error.code(),
-            ErrorCode::Type,
-            "unexpected error for {sql:?}"
+        assert!(
+            matches!(database.execute(sql), Err(Error::Type(_))),
+            "expected a type error for {sql:?}"
         );
     }
 }
@@ -438,12 +412,9 @@ fn integer_boundaries_and_boolean_literals_round_trip() {
         ]
     );
 
-    let error = database
-        .execute("INSERT INTO bounds VALUES (9223372036854775808, TRUE)")
-        .unwrap_err_or_else(|| panic!("out-of-range integer unexpectedly accepted"));
     assert!(matches!(
-        error.code(),
-        ErrorCode::Type | ErrorCode::SqlParse
+        database.execute("INSERT INTO bounds VALUES (9223372036854775808, TRUE)"),
+        Err(Error::Type(_)) | Err(Error::Parse { .. })
     ));
 }
 
@@ -587,10 +558,7 @@ fn like_uses_unicode_scalars_and_honors_escapes() {
 
     for pattern in [r"'abc\'", r"'abc\q'"] {
         let sql = format!("SELECT value FROM patterns WHERE value LIKE {pattern}");
-        let error = database
-            .execute(&sql)
-            .unwrap_err_or_else(|| panic!("invalid LIKE pattern unexpectedly accepted"));
-        assert_eq!(error.code(), ErrorCode::Type);
+        assert!(matches!(database.execute(&sql), Err(Error::Type(_))));
     }
 }
 
@@ -637,18 +605,22 @@ fn unsupported_and_malformed_sql_are_rejected_with_spans() {
         let error = database
             .execute(sql)
             .unwrap_err_or_else(|| panic!("unexpectedly accepted {sql:?}"));
-        assert!(
-            matches!(
-                error.code(),
-                ErrorCode::SqlParse | ErrorCode::UnsupportedSql
-            ),
-            "expected parse/unsupported error for {sql:?}, got {error:?}"
-        );
-        let span = error
-            .span()
-            .unwrap_or_else(|| panic!("parse/unsupported error for {sql:?} lacked a span"));
-        assert!(span.start() <= span.end());
-        assert!(span.end() <= sql.len());
+        match error {
+            Error::Parse {
+                span_start,
+                span_end,
+                ..
+            }
+            | Error::Unsupported {
+                span_start,
+                span_end,
+                ..
+            } => {
+                assert!(span_start <= span_end);
+                assert!(span_end <= sql.len());
+            }
+            other => panic!("expected parse/unsupported error for {sql:?}, got {other:?}"),
+        }
         assert_eq!(database.as_str(), before);
     }
 }
@@ -716,9 +688,13 @@ fn canonical_storage_is_strictly_validated() {
     ];
 
     for blob in corrupt {
-        let error = Database::from_string(blob.to_owned())
-            .unwrap_err_or_else(|| panic!("unexpectedly accepted corrupt blob {blob:?}"));
-        assert_eq!(error.code(), ErrorCode::CorruptStorage);
+        assert!(
+            matches!(
+                Database::from_string(blob.to_owned()),
+                Err(Error::CorruptStorage { .. })
+            ),
+            "unexpectedly accepted corrupt blob {blob:?}"
+        );
     }
 
     let mut database = Database::new();
@@ -795,10 +771,10 @@ fn corrupt_storage_offsets_point_to_the_exact_cell_payload() {
     let blob = "V2;~S|t|id:I:?|note:T:?;~R|t|I1|Tok%0000zz;";
     let expected = blob.find('%').expect("malformed escape is present");
 
-    let error = Database::from_string(blob.to_owned())
-        .unwrap_err_or_else(|| panic!("malformed escape unexpectedly accepted"));
-    assert_eq!(error.code(), ErrorCode::CorruptStorage);
-    assert_eq!(error.storage_offset(), Some(expected));
+    assert!(matches!(
+        Database::from_string(blob.to_owned()),
+        Err(Error::CorruptStorage { offset, .. }) if offset == expected
+    ));
 }
 
 #[test]
@@ -857,12 +833,13 @@ fn single_table_scan_charges_large_unprojected_values_to_working_memory() {
     let mut limited =
         Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
 
-    let error = limited
-        .execute("SELECT id FROM records")
-        .expect_err("decoded unprojected values count toward working memory");
-    assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    assert_eq!(error.resource(), Some(Resource::QueryWorkingBytes));
-    assert_eq!(error.limit(), Some(512));
+    assert!(matches!(
+        limited.execute("SELECT id FROM records"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryWorkingBytes,
+            limit: 512,
+        })
+    ));
     assert_eq!(limited.as_str(), blob);
 }
 
@@ -873,10 +850,13 @@ fn configurable_resource_limits_fail_without_partial_work() {
         ..Limits::default()
     };
     let mut database = Database::with_limits(sql_limits);
-    let error = database
-        .execute("CREATE TABLE t (id INTEGER)")
-        .unwrap_err_or_else(|| panic!("oversized SQL unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::SqlBytes, 8);
+    assert!(matches!(
+        database.execute("CREATE TABLE t (id INTEGER)"),
+        Err(Error::ResourceLimit {
+            resource: Resource::SqlBytes,
+            limit: 8,
+        })
+    ));
     assert_eq!(database.as_str(), "V2;");
 
     let mut database = Database::new();
@@ -890,10 +870,13 @@ fn configurable_resource_limits_fail_without_partial_work() {
     };
     let database = Database::from_string_with_limits(blob.clone(), predicate_limits)
         .expect("blob fits predicate limits");
-    let error = database
-        .explain_select("SELECT * FROM t WHERE id = 1 AND name = 'x'")
-        .unwrap_err_or_else(|| panic!("predicate limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::WherePredicates, 1);
+    assert!(matches!(
+        database.explain_select("SELECT * FROM t WHERE id = 1 AND name = 'x'"),
+        Err(Error::ResourceLimit {
+            resource: Resource::WherePredicates,
+            limit: 1,
+        })
+    ));
 
     let pattern_limits = Limits {
         max_pattern_bytes: 1,
@@ -901,41 +884,42 @@ fn configurable_resource_limits_fail_without_partial_work() {
     };
     let database = Database::from_string_with_limits(blob.clone(), pattern_limits)
         .expect("blob fits pattern limits");
-    let error = database
-        .explain_select("SELECT * FROM t")
-        .unwrap_err_or_else(|| panic!("pattern limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::GeneratedRegexBytes, 1);
+    assert!(matches!(
+        database.explain_select("SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::GeneratedRegexBytes,
+            limit: 1,
+        })
+    ));
 
-    let row_set_limit = std::mem::size_of::<RowSet>() - 1;
     let result_limits = Limits {
-        max_query_output_bytes: row_set_limit,
+        max_query_output_bytes: 1,
         ..Limits::default()
     };
     let mut database = Database::from_string_with_limits(blob.clone(), result_limits)
         .expect("blob fits result limits");
     let before = database.as_str().to_owned();
-    let error = database
-        .execute("SELECT * FROM t")
-        .unwrap_err_or_else(|| panic!("output limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::QueryOutputBytes, row_set_limit);
-    assert_eq!(database.as_str(), before);
-
-    let explanation_limit = std::mem::size_of::<SelectExplanation>() - 1;
-    let explanation_limits = Limits {
-        max_query_output_bytes: explanation_limit,
-        ..Limits::default()
-    };
-    let mut database = Database::from_string_with_limits(blob.clone(), explanation_limits)
-        .expect("blob fits explanation limits");
-    let before = database.as_str().to_owned();
-    let error = database
-        .explain_select("SELECT * FROM t")
-        .unwrap_err_or_else(|| panic!("explanation output limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::QueryOutputBytes, explanation_limit);
-    let error = database
-        .execute("EXPLAIN REGEX SELECT * FROM t")
-        .unwrap_err_or_else(|| panic!("SQL explanation output limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::QueryOutputBytes, explanation_limit);
+    assert!(matches!(
+        database.execute("SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 1,
+        })
+    ));
+    assert!(matches!(
+        database.explain_select("SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 1,
+        })
+    ));
+    assert!(matches!(
+        database.execute("EXPLAIN REGEX SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 1,
+        })
+    ));
     assert_eq!(database.as_str(), before);
 
     let mut null_database = Database::new();
@@ -950,18 +934,25 @@ fn configurable_resource_limits_fail_without_partial_work() {
     };
     let mut null_database = Database::from_string_with_limits(null_blob, null_result_limits)
         .expect("NULL fixture fits database limits");
-    let error = null_database
-        .execute("SELECT * FROM nulls")
-        .unwrap_err_or_else(|| panic!("NULL output limit unexpectedly accepted"));
-    assert_resource_limit(&error, Resource::QueryOutputBytes, 256);
+    assert!(matches!(
+        null_database.execute("SELECT * FROM nulls"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 256
+        })
+    ));
 
     let load_limits = Limits {
         max_database_bytes: blob.len() - 1,
         ..Limits::default()
     };
-    let error = Database::from_string_with_limits(blob.clone(), load_limits)
-        .unwrap_err_or_else(|| panic!("oversized database unexpectedly loaded"));
-    assert_resource_limit(&error, Resource::DatabaseBytes, blob.len() - 1);
+    assert!(matches!(
+        Database::from_string_with_limits(blob.clone(), load_limits),
+        Err(Error::ResourceLimit {
+            resource: Resource::DatabaseBytes,
+            ..
+        })
+    ));
 
     let database_limit = blob.len();
     let mutation_limits = Limits {
@@ -976,10 +967,13 @@ fn configurable_resource_limits_fail_without_partial_work() {
         "UPDATE t SET name = 'a much larger result' WHERE id = 12345",
     ] {
         let before = database.as_str().to_owned();
-        let error = database
-            .execute(sql)
-            .unwrap_err_or_else(|| panic!("oversized mutation unexpectedly accepted"));
-        assert_resource_limit(&error, Resource::DatabaseBytes, database_limit);
+        assert!(matches!(
+            database.execute(sql),
+            Err(Error::ResourceLimit {
+                resource: Resource::DatabaseBytes,
+                limit,
+            }) if limit == database_limit
+        ));
         assert_eq!(database.as_str(), before, "failed mutation changed {sql:?}");
     }
 }

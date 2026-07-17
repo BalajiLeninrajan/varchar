@@ -24,7 +24,7 @@ pub(super) fn row_scan_pattern(
     for predicate in predicates {
         let column_index = predicate_column(predicate);
         if column_index >= columns.len() {
-            return Err(Error::schema(format!(
+            return Err(Error::Schema(format!(
                 "predicate column index {column_index} is outside table {table:?}"
             )));
         }
@@ -179,7 +179,9 @@ impl PatternBuilder {
         check_limit(new_len, self.limit, Resource::GeneratedRegexBytes)?;
         self.pattern
             .try_reserve(fragment.len())
-            .map_err(|_| Error::allocation("growing a query row pattern"))?;
+            .map_err(|_| Error::Allocation {
+                operation: "growing a query row pattern",
+            })?;
         self.pattern.push_str(fragment);
         Ok(())
     }
@@ -194,7 +196,10 @@ impl PatternBuilder {
     }
 
     const fn limit_error(&self) -> Error {
-        Error::resource_limit(Resource::GeneratedRegexBytes, self.limit)
+        Error::ResourceLimit {
+            resource: Resource::GeneratedRegexBytes,
+            limit: self.limit,
+        }
     }
 }
 

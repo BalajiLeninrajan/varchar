@@ -63,19 +63,19 @@ pub(crate) fn encode_auto_increment_record(
 ) -> Result<String> {
     validate_schema_for_write(schema)?;
     if last < 0 {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "auto-increment high-water mark for table {:?} must be nonnegative",
             schema.name
         )));
     }
     let Some(definition) = schema.columns.get(column) else {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "auto-increment index {column} is outside table {:?}",
             schema.name
         )));
     };
     if schema.primary_key != Some(column) || definition.data_type != DataType::Integer {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "auto-increment column {:?}.{:?} must be its INTEGER primary key",
             schema.name, definition.name
         )));
@@ -90,7 +90,7 @@ pub(crate) fn encode_auto_increment_record(
 pub(crate) fn encode_row(values: &[Value], layout: RowLayout<'_>) -> Result<String> {
     validate_row_layout(layout)?;
     if values.len() != layout.columns.len() {
-        return Err(Error::type_error(format!(
+        return Err(Error::Type(format!(
             "table {:?} expects {} values, got {}",
             layout.table,
             layout.columns.len(),

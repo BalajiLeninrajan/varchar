@@ -1,7 +1,7 @@
-use super::{assert_error, people_schema};
+use super::people_schema;
 use crate::resolve::insert_values;
 use crate::storage::{AutoIncrement, TableSchema};
-use crate::{DataType, ErrorCode, SchemaColumn, Value};
+use crate::{DataType, Error, SchemaColumn, Value};
 
 #[test]
 fn auto_increment_resolution_generates_and_tracks_only_new_high_water_marks() {
@@ -48,7 +48,7 @@ fn sequence_exhaustion_precedes_remaining_value_validation() {
         foreign_keys: Vec::new(),
     };
 
-    assert_error(
+    assert!(matches!(
         insert_values(
             &schema,
             Some(AutoIncrement {
@@ -58,24 +58,24 @@ fn sequence_exhaustion_precedes_remaining_value_validation() {
             None,
             vec![Value::Null, Value::Null],
         ),
-        ErrorCode::Constraint,
-        "auto-increment sequence for table \"ids\" is exhausted",
-    );
+        Err(Error::Constraint(ref message))
+            if message == "auto-increment sequence for table \"ids\" is exhausted"
+    ));
 }
 
 #[test]
 fn named_insert_resolves_names_before_validating_the_row() {
     let schema = people_schema();
-    assert_error(
+    assert!(matches!(
         insert_values(
             &schema,
             None,
             Some(vec![String::from("id"), String::from("missing")]),
             vec![Value::Text(String::from("wrong")), Value::Integer(1)],
         ),
-        ErrorCode::Schema,
-        "unknown column \"missing\" in table \"people\"",
-    );
+        Err(Error::Schema(ref message))
+            if message == "unknown column \"missing\" in table \"people\""
+    ));
 
     assert_eq!(
         insert_values(
@@ -105,14 +105,13 @@ fn named_insert_resolves_names_before_validating_the_row() {
 #[test]
 fn duplicate_insert_columns_are_rejected() {
     let schema = people_schema();
-    assert_error(
+    assert!(matches!(
         insert_values(
             &schema,
             None,
             Some(vec![String::from("id"), String::from("id")]),
             vec![Value::Integer(1), Value::Integer(2)],
         ),
-        ErrorCode::Schema,
-        "duplicate INSERT column \"id\"",
-    );
+        Err(Error::Schema(ref message)) if message == "duplicate INSERT column \"id\""
+    ));
 }

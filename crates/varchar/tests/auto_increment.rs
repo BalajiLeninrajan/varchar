@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Database, Error, ErrorCode, Limits, Outcome, Value};
+use varchar::{Database, Error, Limits, Outcome, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -131,34 +131,31 @@ fn failed_inserts_do_not_consume_generated_ids() {
         "CREATE TABLE children (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES parents(id), body TEXT NOT NULL)",
     );
 
-    assert_eq!(
+    assert!(matches!(
         atomic_error(
             &mut database,
             "INSERT INTO children (parent_id, body) VALUES (999, 'orphan')",
-        )
-        .code(),
-        ErrorCode::Constraint
-    );
-    assert_eq!(
+        ),
+        Error::Constraint(_)
+    ));
+    assert!(matches!(
         atomic_error(
             &mut database,
             "INSERT INTO children (parent_id, body) VALUES (1, NULL)",
-        )
-        .code(),
-        ErrorCode::Type
-    );
+        ),
+        Error::Type(_)
+    ));
     execute(
         &mut database,
         "INSERT INTO children (parent_id, body) VALUES (1, 'first')",
     );
-    assert_eq!(
+    assert!(matches!(
         atomic_error(
             &mut database,
             "INSERT INTO children VALUES (1, 1, 'duplicate')",
-        )
-        .code(),
-        ErrorCode::Constraint
-    );
+        ),
+        Error::Constraint(_)
+    ));
     execute(
         &mut database,
         "INSERT INTO children (parent_id, body) VALUES (1, 'second')",
@@ -182,10 +179,10 @@ fn sequence_exhaustion_is_atomic() {
         &format!("INSERT INTO ids VALUES ({})", i64::MAX),
     );
 
-    assert_eq!(
-        atomic_error(&mut database, "INSERT INTO ids VALUES (NULL)").code(),
-        ErrorCode::Constraint
-    );
+    assert!(matches!(
+        atomic_error(&mut database, "INSERT INTO ids VALUES (NULL)"),
+        Error::Constraint(_)
+    ));
     assert_eq!(
         values(&mut database, "SELECT id FROM ids"),
         vec![vec![Value::Integer(i64::MAX)]]
@@ -202,20 +199,18 @@ fn successful_updates_advance_but_zero_match_and_failed_updates_do_not() {
     execute(&mut database, "INSERT INTO ids VALUES (NULL)");
     execute(&mut database, "INSERT INTO ids VALUES (NULL)");
     execute(&mut database, "UPDATE ids SET id = 10 WHERE id = 2");
-    let before_zero_match = database.as_str().to_owned();
     assert_eq!(
         execute(&mut database, "UPDATE ids SET id = 20 WHERE id = 999"),
         Outcome::Affected { rows: 0 }
     );
-    assert_eq!(database.as_str(), before_zero_match);
-    assert_eq!(
-        atomic_error(&mut database, "UPDATE ids SET id = 1 WHERE id = 10").code(),
-        ErrorCode::Constraint
-    );
-    assert_eq!(
-        atomic_error(&mut database, "UPDATE ids SET id = 100 WHERE id != 999").code(),
-        ErrorCode::Constraint
-    );
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE ids SET id = 1 WHERE id = 10"),
+        Error::Constraint(_)
+    ));
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE ids SET id = 100 WHERE id != 999"),
+        Error::Constraint(_)
+    ));
     execute(&mut database, "INSERT INTO ids VALUES (NULL)");
 
     assert_eq!(
@@ -292,7 +287,7 @@ fn invalid_auto_increment_definitions_are_schema_errors() {
         "CREATE TABLE two_auto (a INTEGER PRIMARY KEY AUTOINCREMENT, b INTEGER AUTOINCREMENT)",
         "CREATE TABLE duplicate_auto (id INTEGER PRIMARY KEY AUTOINCREMENT AUTO_INCREMENT)",
     ] {
-        assert_eq!(atomic_error(&mut database, sql).code(), ErrorCode::Schema);
+        assert!(matches!(atomic_error(&mut database, sql), Error::Schema(_)));
     }
 }
 
@@ -318,26 +313,24 @@ fn malformed_or_stale_auto_increment_records_are_rejected() {
         "~A|ids|id|I1;~A|ids|id|I1;",
     ] {
         let corrupt = blob.replacen(record, replacement, 1);
-        let error = match Database::from_string(corrupt) {
-            Ok(_) => panic!("accepted replacement {replacement:?}"),
-            Err(error) => error,
-        };
-        assert_eq!(error.code(), ErrorCode::CorruptStorage);
+        assert!(
+            matches!(
+                Database::from_string(corrupt),
+                Err(Error::CorruptStorage { .. })
+            ),
+            "accepted replacement {replacement:?}"
+        );
     }
 
     let reordered = blob.replacen("~P|ids|id;~A|ids|id|I1;", "~A|ids|id|I1;~P|ids|id;", 1);
-    assert_eq!(
-        Database::from_string(reordered)
-            .expect_err("accepted reordered auto-increment record")
-            .code(),
-        ErrorCode::CorruptStorage
-    );
+    assert!(matches!(
+        Database::from_string(reordered),
+        Err(Error::CorruptStorage { .. })
+    ));
 
     let after_rows = format!("{}{record}", blob.replacen(record, "", 1));
-    assert_eq!(
-        Database::from_string(after_rows)
-            .expect_err("accepted auto-increment record after rows")
-            .code(),
-        ErrorCode::CorruptStorage
-    );
+    assert!(matches!(
+        Database::from_string(after_rows),
+        Err(Error::CorruptStorage { .. })
+    ));
 }

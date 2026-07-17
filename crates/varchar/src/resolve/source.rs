@@ -15,17 +15,17 @@ pub(super) fn resolve_sources<'catalog>(
         .joins
         .len()
         .checked_add(1)
-        .ok_or(Error::resource_limit(
-            Resource::JoinSources,
-            max_join_sources,
-        ))?;
+        .ok_or(Error::ResourceLimit {
+            resource: Resource::JoinSources,
+            limit: max_join_sources,
+        })?;
     check_limit(source_count, max_join_sources, Resource::JoinSources)?;
 
     let mut sources = Vec::with_capacity(source_count);
     sources.push(require_table(catalog, &statement.table)?);
     for join in &statement.joins {
         if sources.iter().any(|schema| schema.name == join.table) {
-            return Err(Error::schema(format!(
+            return Err(Error::Schema(format!(
                 "table {:?} appears more than once in a SELECT",
                 join.table
             )));

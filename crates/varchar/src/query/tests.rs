@@ -1,7 +1,7 @@
 use super::{compile_scan, compile_select};
 use crate::sql::{self, Statement};
 use crate::storage::StorageState;
-use crate::{ErrorCode, Limits, Resource};
+use crate::{Error, Limits, Resource};
 
 #[test]
 fn select_plans_borrow_sources_while_mutation_scans_own_their_layout() {
@@ -39,10 +39,11 @@ fn select_explanations_obey_the_query_output_budget() {
     let plan = compile_select(state.catalog(), &statement, &Limits::default())
         .expect("SELECT plan compiles");
 
-    let error = plan
-        .into_explanation(0)
-        .expect_err("the explanation exceeds a zero-byte output budget");
-    assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
-    assert_eq!(error.limit(), Some(0));
+    assert!(matches!(
+        plan.into_explanation(0),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 0,
+        })
+    ));
 }

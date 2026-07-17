@@ -368,13 +368,13 @@ impl Violation {
 fn map_schema_violation(violation: Violation, mode: ValidationMode) -> Error {
     match mode {
         ValidationMode::Persisted => corrupt(violation.offset, violation.message),
-        ValidationMode::Candidate => Error::schema(violation.message),
+        ValidationMode::Candidate => Error::Schema(violation.message),
     }
 }
 
 fn map_constraint_violation(violation: integrity::Violation, mode: ValidationMode) -> Error {
     match mode {
         ValidationMode::Persisted => corrupt(violation.offset, violation.message),
-        ValidationMode::Candidate => Error::constraint(violation.message),
+        ValidationMode::Candidate => Error::Constraint(violation.message),
     }
 }

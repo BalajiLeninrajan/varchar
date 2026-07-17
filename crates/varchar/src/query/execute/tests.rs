@@ -1,7 +1,7 @@
 use super::{ByteBudget, map_regex_runtime, retained_row_charge};
 use crate::storage::row_record;
 use crate::value::Value;
-use crate::{ErrorCode, Limits, Resource};
+use crate::{Error, Limits, Resource};
 use fancy_regex::{Error as FancyError, RuntimeError};
 
 #[test]
@@ -10,9 +10,13 @@ fn byte_budget_accepts_its_exact_bound_and_rejects_one_more_byte() {
 
     budget.charge(4).expect("partial charge fits");
     budget.charge(6).expect("exact bound fits");
-    let error = budget.charge(1).expect_err("one byte exceeds the budget");
-    assert_eq!(error.resource(), Some(Resource::QueryOutputBytes));
-    assert_eq!(error.limit(), Some(10));
+    assert!(matches!(
+        budget.charge(1),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 10,
+        })
+    ));
     assert_eq!(budget.used, 10, "a rejected charge is not committed");
 }
 
@@ -24,11 +28,13 @@ fn transient_budget_checks_use_the_same_exact_boundary() {
     budget
         .check_transient(6)
         .expect("an exact transient peak fits");
-    let error = budget
-        .check_transient(7)
-        .expect_err("the transient peak exceeds the budget");
-    assert_eq!(error.resource(), Some(Resource::QueryWorkingBytes));
-    assert_eq!(error.limit(), Some(10));
+    assert!(matches!(
+        budget.check_transient(7),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryWorkingBytes,
+            limit: 10,
+        })
+    ));
     assert_eq!(budget.used, 4, "transient checks do not retain a charge");
 }
 
@@ -56,15 +62,17 @@ fn only_backtrack_exhaustion_is_a_configured_resource_limit() {
         FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded),
         &limits,
     );
-    assert_eq!(backtrack.code(), ErrorCode::ResourceLimit);
-    assert_eq!(backtrack.resource(), Some(Resource::RegexBacktracking));
-    assert_eq!(backtrack.limit(), Some(7));
+    assert!(matches!(
+        backtrack,
+        Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: 7,
+        }
+    ));
 
     let stack = map_regex_runtime(
         FancyError::RuntimeError(RuntimeError::StackOverflow),
         &limits,
     );
-    assert_eq!(stack.code(), ErrorCode::RegexRuntime);
-    assert_eq!(stack.resource(), None);
-    assert_eq!(stack.limit(), None);
+    assert!(matches!(stack, Error::RegexRuntime(_)));
 }

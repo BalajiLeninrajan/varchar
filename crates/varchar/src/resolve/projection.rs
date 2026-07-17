@@ -45,7 +45,9 @@ pub(super) fn resolve_projection(
     let mut resolved = Vec::new();
     resolved
         .try_reserve_exact(projection_len)
-        .map_err(|_| Error::allocation("reserving resolved projection columns"))?;
+        .map_err(|_| Error::Allocation {
+            operation: "reserving resolved projection columns",
+        })?;
     match projection {
         Projection::All => {
             for (source, schema) in schemas.iter().enumerate() {
@@ -79,9 +81,12 @@ fn qualified_projection_source(schemas: &[&TableSchema], table: &str) -> Result<
     schemas
         .iter()
         .position(|schema| schema.name == table)
-        .ok_or_else(|| Error::schema(format!("unknown table qualifier {table:?} in projection")))
+        .ok_or_else(|| Error::Schema(format!("unknown table qualifier {table:?} in projection")))
 }
 
 const fn query_output_limit_error(limit: usize) -> Error {
-    Error::resource_limit(Resource::QueryOutputBytes, limit)
+    Error::ResourceLimit {
+        resource: Resource::QueryOutputBytes,
+        limit,
+    }
 }

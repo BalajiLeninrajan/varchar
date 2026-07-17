@@ -1,7 +1,7 @@
 #![cfg(not(target_family = "wasm"))]
 
 use proptest::prelude::*;
-use varchar::{DataType, Database, ErrorCode, Outcome, ResultColumn, RowSet, Value};
+use varchar::{DataType, Database, Error, Outcome, ResultColumn, RowSet, Value};
 
 #[derive(Clone, Copy, Debug)]
 enum SelectedColumn {
@@ -405,10 +405,10 @@ proptest! {
 
         let mut truncated = blob;
         prop_assert_eq!(truncated.pop(), Some(';'));
-        match Database::from_string(truncated) {
-            Err(error) => prop_assert_eq!(error.code(), ErrorCode::CorruptStorage),
-            Ok(_) => prop_assert!(false, "truncated storage was accepted"),
-        }
+        prop_assert!(matches!(
+            Database::from_string(truncated),
+            Err(Error::CorruptStorage { .. })
+        ), "truncated storage was accepted");
     }
 
     #[test]

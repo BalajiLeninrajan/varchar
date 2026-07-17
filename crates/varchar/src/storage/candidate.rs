@@ -77,10 +77,10 @@ impl<'a> Candidate<'a> {
     fn auto_increment_edit(&self, table: &str, last: i64) -> Result<DeferredAutoIncrement<'a>> {
         let catalog = self.state.catalog();
         let state = catalog.auto_increment_state(table).ok_or_else(|| {
-            Error::schema(format!("table {table:?} has no auto-increment column"))
+            Error::Schema(format!("table {table:?} has no auto-increment column"))
         })?;
         if last < state.last {
-            return Err(Error::schema(format!(
+            return Err(Error::Schema(format!(
                 "auto-increment high-water mark for table {table:?} cannot decrease"
             )));
         }
@@ -205,15 +205,21 @@ fn check_size(actual: usize, limit: usize) -> Result<()> {
 }
 
 fn limit_error(limit: usize) -> Error {
-    Error::resource_limit(Resource::DatabaseBytes, limit)
+    Error::ResourceLimit {
+        resource: Resource::DatabaseBytes,
+        limit,
+    }
 }
 
 const fn allocation_error(operation: &'static str) -> Error {
-    Error::allocation(operation)
+    Error::Allocation { operation }
 }
 
 fn invalid_range(offset: usize) -> Error {
-    Error::corrupt_storage(offset, "storage edit range is outside the database")
+    Error::CorruptStorage {
+        offset,
+        message: String::from("storage edit range is outside the database"),
+    }
 }
 
 #[cfg(test)]

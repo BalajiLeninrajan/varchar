@@ -1,5 +1,5 @@
-use super::{assert_error, catalog, select_statement};
-use crate::ErrorCode;
+use super::{catalog, select_statement};
+use crate::Error;
 use crate::resolve::select;
 
 #[test]
@@ -8,18 +8,17 @@ fn select_rejects_ambiguous_columns_and_unknown_qualifiers() {
 
     let ambiguous =
         select_statement("SELECT id FROM authors JOIN books ON authors.id = books.author_id");
-    assert_error(
+    assert!(matches!(
         select(&catalog, &ambiguous, 2, 0, usize::MAX),
-        ErrorCode::Schema,
-        "ambiguous column \"id\"; qualify it with a table name",
-    );
+        Err(Error::Schema(ref message))
+            if message == "ambiguous column \"id\"; qualify it with a table name"
+    ));
 
     let unknown_qualifier = select_statement(
         "SELECT missing.id FROM authors JOIN books ON authors.id = books.author_id",
     );
-    assert_error(
+    assert!(matches!(
         select(&catalog, &unknown_qualifier, 2, 0, usize::MAX),
-        ErrorCode::Schema,
-        "unknown table qualifier \"missing\"",
-    );
+        Err(Error::Schema(ref message)) if message == "unknown table qualifier \"missing\""
+    ));
 }

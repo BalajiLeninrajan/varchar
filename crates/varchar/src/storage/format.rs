@@ -191,9 +191,12 @@ fn must_escape(character: char) -> bool {
 }
 
 pub(super) fn corrupt(offset: usize, message: impl Into<String>) -> Error {
-    Error::corrupt_storage(offset, message)
+    Error::CorruptStorage {
+        offset,
+        message: message.into(),
+    }
 }
 
 pub(super) const fn allocation_error(operation: &'static str) -> Error {
-    Error::allocation(operation)
+    Error::Allocation { operation }
 }

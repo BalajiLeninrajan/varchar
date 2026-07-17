@@ -22,7 +22,7 @@ pub(crate) fn assignments(
     let mut seen = BTreeSet::new();
     for assignment in assignments {
         if !seen.insert(assignment.column.as_str()) {
-            return Err(Error::schema(format!(
+            return Err(Error::Schema(format!(
                 "duplicate UPDATE assignment for column {:?}",
                 assignment.column
             )));

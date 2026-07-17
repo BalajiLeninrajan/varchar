@@ -166,7 +166,7 @@ Use `Database::from_string` to validate and reopen a persisted blob. Errors dist
 The diagnostic API is structured and deliberately smaller than the engine's internal error representation:
 
 ```rust
-use varchar::{Database, ErrorCode, Limits, Resource};
+use varchar::{Database, Error, Limits, Resource};
 
 let limits = Limits {
     max_sql_bytes: 8,
@@ -178,13 +178,17 @@ let error = db
     .execute("CREATE TABLE messages (body TEXT)")
     .expect_err("the statement exceeds the configured SQL limit");
 
-assert_eq!(error.code(), ErrorCode::ResourceLimit);
-assert_eq!(error.resource(), Some(Resource::SqlBytes));
-assert_eq!(error.limit(), Some(8));
+assert!(matches!(
+    error,
+    Error::ResourceLimit {
+        resource: Resource::SqlBytes,
+        limit: 8,
+    }
+));
 assert_eq!(db.as_str(), before);
 ```
 
-`ErrorCode::as_str()` and `Resource::as_str()` are stable machine-readable identifiers. Human-readable `Display` and `Debug` text is intended for people and may change. Parse and unsupported-syntax errors can carry a half-open byte `Span` into the original UTF-8 SQL input. Schema, type, and constraint errors are semantic diagnostics and currently do not retain SQL spans. Corrupt-storage offsets refer to bytes in the encoded database blob, not decoded values. `resource()` and `limit()` are either both present for a configured limit failure or both absent. A limit failure returns no partial result, and a failed mutation—including one rejected by a limit—leaves the authoritative blob byte-for-byte unchanged.
+Match on `Error` variants for structured diagnostics; human-readable `Display` text is intended for people and may change. Parse and unsupported-syntax errors carry half-open UTF-8 byte offsets into the original SQL input. Corrupt-storage offsets refer to bytes in the encoded database blob, not decoded values. A configured limit failure includes both its typed `Resource` and limit. It returns no partial result, and a failed mutation—including one rejected by a limit—leaves the authoritative blob byte-for-byte unchanged.
 
 Query rows, projected-column metadata, provenance, and `SelectExplanation` values are immutable snapshots produced by the engine. Inspect them through their accessors; a `RowSet` can also be consumed with `into_rows` or `into_parts` when the caller needs owned values.
 

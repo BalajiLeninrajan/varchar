@@ -241,14 +241,11 @@ impl Outcome {
 pub(crate) fn validate_value(value: &Value, column: &SchemaColumn) -> Result<()> {
     match (value, column.data_type) {
         (Value::Null, _) if column.nullable => Ok(()),
-        (Value::Null, _) => Err(Error::type_error(format!(
-            "column {:?} is NOT NULL",
-            column.name
-        ))),
+        (Value::Null, _) => Err(Error::Type(format!("column {:?} is NOT NULL", column.name))),
         (Value::Text(_), DataType::Text)
         | (Value::Integer(_), DataType::Integer)
         | (Value::Boolean(_), DataType::Boolean) => Ok(()),
-        (actual, expected) => Err(Error::type_error(format!(
+        (actual, expected) => Err(Error::Type(format!(
             "column {:?} expects {expected}, got {}",
             column.name,
             value_kind(actual)

@@ -1,5 +1,5 @@
 use super::Database;
-use crate::{ErrorCode, storage};
+use crate::{Error, storage};
 
 fn assert_catalog_current(database: &Database) {
     let reconstructed =
@@ -38,7 +38,7 @@ fn failed_constraint_validation_preserves_storage_state() {
     let error = database
         .execute("INSERT INTO t VALUES (1)")
         .expect_err("duplicate primary key is rejected");
-    assert_eq!(error.code(), ErrorCode::Constraint);
+    assert!(matches!(error, Error::Constraint(_)));
     assert_eq!(database.storage, before);
 }
 
@@ -59,7 +59,7 @@ fn auto_increment_commits_keep_the_catalog_current_and_fail_atomically() {
     let error = database
         .execute("UPDATE ids SET id = 10 WHERE id = 11")
         .expect_err("duplicate primary key is rejected");
-    assert_eq!(error.code(), ErrorCode::Constraint);
+    assert!(matches!(error, Error::Constraint(_)));
     assert_eq!(database.storage, before);
 }
 

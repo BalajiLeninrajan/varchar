@@ -52,7 +52,7 @@ fn predicate_at<'a>(
     let definition = &schema.columns[column];
     match operator {
         PredicateOperator::Equal(Value::Null) | PredicateOperator::NotEqual(Value::Null) => {
-            Err(Error::type_error(String::from(
+            Err(Error::Type(String::from(
                 "NULL cannot be compared with `=` or `!=`; use IS NULL or IS NOT NULL",
             )))
         }
@@ -66,7 +66,7 @@ fn predicate_at<'a>(
         }
         PredicateOperator::Like(pattern) => {
             if definition.data_type != DataType::Text {
-                return Err(Error::type_error(format!(
+                return Err(Error::Type(format!(
                     "LIKE requires a TEXT column; {:?} is {}",
                     definition.name, definition.data_type
                 )));

@@ -13,7 +13,7 @@ pub(super) fn declare_foreign_key(
     foreign_keys: &mut Vec<ForeignKey>,
 ) -> Result<()> {
     if saw_foreign_key[index] {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "duplicate {syntax} declaration for column {column:?}"
         )));
     }
@@ -37,7 +37,7 @@ pub(super) fn validate_foreign_key(
         catalog
             .table(&foreign_key.referenced_table)
             .ok_or_else(|| {
-                Error::schema(format!(
+                Error::Schema(format!(
                     "foreign key references unknown or later table {:?}",
                     foreign_key.referenced_table
                 ))
@@ -47,7 +47,7 @@ pub(super) fn validate_foreign_key(
         .primary_key
         .filter(|&index| referenced_schema.columns[index].name == foreign_key.referenced_column);
     let Some(referenced_primary_key) = referenced_primary_key else {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "foreign key target {:?}.{:?} is not its table's primary key",
             foreign_key.referenced_table, foreign_key.referenced_column
         )));
@@ -55,7 +55,7 @@ pub(super) fn validate_foreign_key(
     if schema.columns[foreign_key.column].data_type
         != referenced_schema.columns[referenced_primary_key].data_type
     {
-        return Err(Error::schema(format!(
+        return Err(Error::Schema(format!(
             "foreign-key columns {:?}.{:?} and {:?}.{:?} have different types",
             schema.name,
             schema.columns[foreign_key.column].name,

@@ -10,7 +10,7 @@ mod storage;
 mod value;
 
 pub use database::Database;
-pub use error::{Error, ErrorCode, Result, Span};
+pub use error::{Error, Result, Span};
 pub use limits::{Limits, Resource};
 pub use value::{ColumnOrigin, DataType, Outcome, ResultColumn, RowSet, SelectExplanation, Value};
 

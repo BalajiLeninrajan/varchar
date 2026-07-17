@@ -1,5 +1,5 @@
 use super::{Limits, Resource, check_limit};
-use crate::ErrorCode;
+use crate::Error;
 
 #[test]
 fn defaults_cover_every_resource_bound() {
@@ -23,48 +23,30 @@ fn defaults_cover_every_resource_bound() {
 fn check_limit_preserves_structured_resource_metadata() {
     assert!(check_limit(4, 4, Resource::JoinSteps).is_ok());
 
-    let error = check_limit(5, 4, Resource::JoinSteps).expect_err("one over the limit fails");
-    assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    assert_eq!(error.resource(), Some(Resource::JoinSteps));
-    assert_eq!(error.limit(), Some(4));
+    assert!(matches!(
+        check_limit(5, 4, Resource::JoinSteps),
+        Err(Error::ResourceLimit {
+            resource: Resource::JoinSteps,
+            limit: 4,
+        })
+    ));
 }
 
 #[test]
-fn resources_expose_machine_names_and_human_displays() {
+fn resources_have_human_readable_names() {
     let cases = [
-        (Resource::DatabaseBytes, "database_bytes", "database bytes"),
-        (Resource::SqlBytes, "sql_bytes", "SQL bytes"),
-        (
-            Resource::WherePredicates,
-            "where_predicates",
-            "WHERE predicates",
-        ),
-        (Resource::JoinSources, "join_sources", "JOIN sources"),
-        (
-            Resource::GeneratedRegexBytes,
-            "generated_regex_bytes",
-            "generated regex bytes",
-        ),
-        (
-            Resource::QueryWorkingBytes,
-            "query_working_bytes",
-            "query working bytes",
-        ),
-        (
-            Resource::QueryOutputBytes,
-            "query_output_bytes",
-            "query output bytes",
-        ),
-        (Resource::JoinSteps, "join_steps", "JOIN execution steps"),
-        (
-            Resource::RegexBacktracking,
-            "regex_backtracking",
-            "regex backtracking steps",
-        ),
+        (Resource::DatabaseBytes, "database bytes"),
+        (Resource::SqlBytes, "SQL bytes"),
+        (Resource::WherePredicates, "WHERE predicates"),
+        (Resource::JoinSources, "JOIN sources"),
+        (Resource::GeneratedRegexBytes, "generated regex bytes"),
+        (Resource::QueryWorkingBytes, "query working bytes"),
+        (Resource::QueryOutputBytes, "query output bytes"),
+        (Resource::JoinSteps, "JOIN execution steps"),
+        (Resource::RegexBacktracking, "regex backtracking steps"),
     ];
 
-    for (resource, machine_name, human_display) in cases {
-        assert_eq!(resource.as_str(), machine_name);
+    for (resource, human_display) in cases {
         assert_eq!(resource.to_string(), human_display);
     }
 }

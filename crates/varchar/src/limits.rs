@@ -30,24 +30,6 @@ pub enum Resource {
     RegexBacktracking,
 }
 
-impl Resource {
-    /// A stable machine-readable name for this resource.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::DatabaseBytes => "database_bytes",
-            Self::SqlBytes => "sql_bytes",
-            Self::WherePredicates => "where_predicates",
-            Self::JoinSources => "join_sources",
-            Self::GeneratedRegexBytes => "generated_regex_bytes",
-            Self::QueryWorkingBytes => "query_working_bytes",
-            Self::QueryOutputBytes => "query_output_bytes",
-            Self::JoinSteps => "join_steps",
-            Self::RegexBacktracking => "regex_backtracking",
-        }
-    }
-}
-
 impl fmt::Display for Resource {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -79,7 +61,7 @@ pub struct Limits {
     ///
     /// The regex compiler also receives this value as an approximate compiled
     /// delegate safeguard. Refusals from that safeguard remain
-    /// [`crate::ErrorCode::RegexCompile`]; [`Resource::GeneratedRegexBytes`]
+    /// [`crate::Error::RegexCompile`] errors; [`Resource::GeneratedRegexBytes`]
     /// describes generated pattern text, not compiled engine state.
     pub max_pattern_bytes: usize,
     /// Maximum logical `SELECT` working-state charge, in conservatively
@@ -125,7 +107,7 @@ impl Default for Limits {
 
 pub(crate) fn check_limit(actual: usize, limit: usize, resource: Resource) -> Result<()> {
     if actual > limit {
-        Err(Error::resource_limit(resource, limit))
+        Err(Error::ResourceLimit { resource, limit })
     } else {
         Ok(())
     }

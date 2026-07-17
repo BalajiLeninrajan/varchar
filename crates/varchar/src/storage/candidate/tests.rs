@@ -1,5 +1,4 @@
 use super::StorageState;
-use crate::ErrorCode;
 
 #[test]
 fn failed_splice_leaves_the_candidate_reusable() {
@@ -30,9 +29,9 @@ fn finish_rejects_an_invalid_replacement_state() {
         .splice(state.as_str().len()..state.as_str().len(), "garbage")
         .expect("unvalidated edit fits");
 
-    let error = candidate
-        .finish()
-        .expect_err("invalid candidate storage is rejected");
-    assert_eq!(error.code(), ErrorCode::CorruptStorage);
+    assert!(matches!(
+        candidate.finish(),
+        Err(crate::Error::CorruptStorage { .. })
+    ));
     assert_eq!(state.as_str(), "V2;");
 }
