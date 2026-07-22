@@ -5,10 +5,10 @@ use super::join::{ResolvedJoin, resolve_joins};
 use super::predicate::{ResolvedSourcePredicate, resolve_select_predicate};
 use super::projection::{expanded_len, resolve_projection};
 use super::source::resolve_sources;
-use crate::Result;
 use crate::limits::check_limit;
 use crate::sql::Select;
 use crate::storage::{Catalog, TableSchema};
+use crate::{Resource, Result};
 
 pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) sources: Vec<&'catalog TableSchema>,
@@ -34,7 +34,7 @@ pub(crate) fn select<'catalog, 'statement>(
     check_limit(
         statement.predicates.len(),
         max_predicates,
-        "WHERE predicates",
+        Resource::WherePredicates,
     )?;
     let predicates = statement
         .predicates

@@ -7,7 +7,7 @@ use crate::query::{self, SelectPlan};
 use crate::resolve;
 use crate::sql::{self, CreateTable, Delete, Insert, Select, Statement, Update};
 use crate::storage;
-use crate::{Error, Outcome, Result, SelectExplanation, Span};
+use crate::{Error, Outcome, Resource, Result, SelectExplanation, Span};
 
 /// An in-memory database whose sole authoritative state is one UTF-8 string.
 #[derive(Clone)]
@@ -20,7 +20,7 @@ impl fmt::Debug for Database {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Database")
-            .field("blob", &self.storage.as_str())
+            .field("blob_len", &self.storage.as_str().len())
             .field("limits", &self.limits)
             .finish()
     }
@@ -55,7 +55,11 @@ impl Database {
 
     /// Validate and load a database string with caller-supplied limits.
     pub fn from_string_with_limits(blob: String, limits: Limits) -> Result<Self> {
-        check_limit(blob.len(), limits.max_database_bytes, "database bytes")?;
+        check_limit(
+            blob.len(),
+            limits.max_database_bytes,
+            Resource::DatabaseBytes,
+        )?;
         let storage = storage::StorageState::load(blob)?;
         Ok(Self { storage, limits })
     }
@@ -105,7 +109,7 @@ impl Database {
             Statement::Select(statement) => self
                 .compile_select_ast(&statement)
                 .and_then(|plan| plan.into_explanation(self.limits.max_query_output_bytes)),
-            _ => Err(Error::parse(
+            _ => Err(Error::unsupported(
                 "explain_select expects a SELECT statement",
                 Span::new(0, sql.len()),
             )),
@@ -116,9 +120,9 @@ impl Database {
         check_limit(
             self.storage.as_str().len(),
             self.limits.max_database_bytes,
-            "database bytes",
+            Resource::DatabaseBytes,
         )?;
-        check_limit(sql.len(), self.limits.max_sql_bytes, "SQL bytes")
+        check_limit(sql.len(), self.limits.max_sql_bytes, Resource::SqlBytes)
     }
 
     fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {

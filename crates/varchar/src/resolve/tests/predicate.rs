@@ -1,7 +1,7 @@
 use super::{catalog, people_schema, select_statement};
 use crate::resolve::{predicate, select};
 use crate::sql::{ColumnRef, Predicate, PredicateOperator};
-use crate::{Error, Value};
+use crate::{Error, Resource, Value};
 
 #[test]
 fn predicate_resolution_preserves_name_and_operator_error_order() {
@@ -75,7 +75,7 @@ fn select_predicate_limit_is_enforced() {
     assert!(matches!(
         select(&catalog, &statement, 1, 1, usize::MAX),
         Err(Error::ResourceLimit {
-            resource: "WHERE predicates",
+            resource: Resource::WherePredicates,
             limit: 1,
         })
     ));

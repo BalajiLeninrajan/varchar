@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
+use varchar::{DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -677,7 +677,7 @@ fn join_fanout_obeys_the_query_output_byte_limit() {
              ON left_rows.join_key = right_rows.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 256
         })
     ));
@@ -700,7 +700,7 @@ fn join_source_count_has_its_own_limit() {
     assert!(matches!(
         limited.execute("SELECT * FROM a JOIN b ON a.id = b.id"),
         Err(Error::ResourceLimit {
-            resource: "JOIN sources",
+            resource: Resource::JoinSources,
             limit: 1,
         })
     ));
@@ -755,7 +755,7 @@ fn nonmatching_join_fanout_obeys_the_combination_limit() {
              JOIN c ON b.join_key = c.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
+            resource: Resource::JoinSteps,
             limit: 100
         })
     ));
@@ -786,7 +786,7 @@ fn each_join_condition_evaluation_consumes_the_work_budget() {
              AND a.join_key = b.join_key AND a.join_key = b.join_key"
         ),
         Err(Error::ResourceLimit {
-            resource: "JOIN execution steps",
+            resource: Resource::JoinSteps,
             limit: 50
         })
     ));
@@ -839,7 +839,7 @@ fn nonmatching_join_separates_working_memory_from_output_memory() {
     assert!(matches!(
         limited.execute(sql),
         Err(Error::ResourceLimit {
-            resource: "query working bytes",
+            resource: Resource::QueryWorkingBytes,
             limit: 8_000
         })
     ));
@@ -870,7 +870,7 @@ fn join_working_budget_accounts_for_source_bucket_spare_capacity() {
     assert!(matches!(
         limited.execute("SELECT a.id FROM a JOIN b ON a.id = b.id"),
         Err(Error::ResourceLimit {
-            resource: "query working bytes",
+            resource: Resource::QueryWorkingBytes,
             limit,
         }) if limit == formerly_undercharged_limit
     ));

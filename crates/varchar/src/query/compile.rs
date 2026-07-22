@@ -19,7 +19,12 @@ pub(super) fn select<'catalog>(
         predicates,
     } = resolved;
 
-    let mut predicates_by_source = Vec::with_capacity(sources.len());
+    let mut predicates_by_source = Vec::new();
+    predicates_by_source
+        .try_reserve_exact(sources.len())
+        .map_err(|_| Error::Allocation {
+            operation: "reserving query predicate buckets",
+        })?;
     predicates_by_source.resize_with(sources.len(), Vec::new);
     for resolved in predicates {
         predicates_by_source[resolved.source].push(resolved.predicate);

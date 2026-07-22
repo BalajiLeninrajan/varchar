@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use super::encode::encode_auto_increment_record;
 use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
-use crate::{Error, Result, Value};
+use crate::{Error, Resource, Result, Value};
 
 struct DeferredAutoIncrement<'a> {
     table: &'a str,
@@ -33,7 +33,7 @@ impl<'a> Candidate<'a> {
         let mut output = String::new();
         output
             .try_reserve(source.len())
-            .map_err(|_| limit_error(max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         Ok(Self {
             state,
             cursor: 0,
@@ -165,7 +165,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(additional)
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         self.output.push_str(gap);
         self.output.push_str(replacement);
         self.cursor = range.end;
@@ -190,7 +190,7 @@ impl<'a> Candidate<'a> {
         check_size(new_len, self.max_bytes)?;
         self.output
             .try_reserve(fragment.len())
-            .map_err(|_| limit_error(self.max_bytes))?;
+            .map_err(|_| allocation_error("reserving a storage edit candidate"))?;
         self.output.push_str(fragment);
         Ok(())
     }
@@ -206,9 +206,13 @@ fn check_size(actual: usize, limit: usize) -> Result<()> {
 
 fn limit_error(limit: usize) -> Error {
     Error::ResourceLimit {
-        resource: "database bytes",
+        resource: Resource::DatabaseBytes,
         limit,
     }
+}
+
+const fn allocation_error(operation: &'static str) -> Error {
+    Error::Allocation { operation }
 }
 
 fn invalid_range(offset: usize) -> Error {

@@ -1,3 +1,5 @@
+//! SQL values and engine-produced result snapshots.
+
 use std::fmt;
 
 use crate::{Error, Result};
@@ -5,8 +7,11 @@ use crate::{Error, Result};
 /// A column's SQL type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataType {
+    /// A UTF-8 text value.
     Text,
+    /// A signed 64-bit integer value.
     Integer,
+    /// A boolean value.
     Boolean,
 }
 
@@ -31,9 +36,13 @@ pub(crate) struct SchemaColumn {
 /// A typed database value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
+    /// A non-null `TEXT` value.
     Text(String),
+    /// A non-null `INTEGER` value.
     Integer(i64),
+    /// A non-null `BOOLEAN` value.
     Boolean(bool),
+    /// SQL `NULL`.
     Null,
 }
 
@@ -115,7 +124,10 @@ impl ResultColumn {
         self.data_type
     }
 
-    /// Whether this result column can contain `NULL`.
+    /// Whether the source column was declared nullable.
+    ///
+    /// This describes schema metadata, not the values in this particular
+    /// result. Predicates and inner joins may eliminate all `NULL` values.
     #[must_use]
     pub const fn nullable(&self) -> bool {
         self.nullable
@@ -202,9 +214,19 @@ impl SelectExplanation {
 /// The result of executing one statement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
+    /// A materialized `SELECT` result.
     Rows(RowSet),
-    Affected { rows: usize },
-    Created { table: String },
+    /// The result of an `INSERT`, `UPDATE`, or `DELETE`.
+    Affected {
+        /// Number of inserted, updated, or deleted rows.
+        rows: usize,
+    },
+    /// The result of `CREATE TABLE`.
+    Created {
+        /// Normalized name of the created table.
+        table: String,
+    },
+    /// A compiled `EXPLAIN REGEX` result.
     Explain(SelectExplanation),
 }
 

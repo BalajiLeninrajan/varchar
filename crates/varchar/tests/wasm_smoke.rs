@@ -1,6 +1,6 @@
 #![cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 
-use varchar::{Database, Error, Limits, Outcome, Value};
+use varchar::{Database, Error, Limits, Outcome, Resource, RowSet, SelectExplanation, Value};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 fn rows(outcome: Outcome) -> Vec<Vec<Value>> {
@@ -80,11 +80,61 @@ fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
     assert!(matches!(
         database.execute("CREATE TABLE t (id INTEGER)"),
         Err(Error::ResourceLimit {
-            resource: "SQL bytes",
+            resource: Resource::SqlBytes,
             limit: 4,
         })
     ));
     assert_eq!(database.as_str(), before);
+}
+
+#[wasm_bindgen_test]
+fn query_output_limits_cover_rows_and_explanations_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE t (id INTEGER NOT NULL)")
+        .unwrap();
+    database.execute("INSERT INTO t VALUES (1)").unwrap();
+    let blob = database.into_string();
+    let row_set_limit = std::mem::size_of::<RowSet>() - 1;
+    let limits = Limits {
+        max_query_output_bytes: row_set_limit,
+        ..Limits::default()
+    };
+    let mut database =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+
+    assert!(matches!(
+        database.execute("SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit,
+        }) if limit == row_set_limit
+    ));
+    assert_eq!(database.as_str(), blob);
+
+    let explanation_limit = std::mem::size_of::<SelectExplanation>() - 1;
+    let limits = Limits {
+        max_query_output_bytes: explanation_limit,
+        ..Limits::default()
+    };
+    let mut database =
+        Database::from_string_with_limits(blob.clone(), limits).expect("fixture reloads");
+    assert!(matches!(
+        database.explain_select("SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit,
+        }) if limit == explanation_limit
+    ));
+
+    assert!(matches!(
+        database.execute("EXPLAIN REGEX SELECT * FROM t"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit,
+        }) if limit == explanation_limit
+    ));
+    assert_eq!(database.as_str(), blob);
 }
 
 #[wasm_bindgen_test]

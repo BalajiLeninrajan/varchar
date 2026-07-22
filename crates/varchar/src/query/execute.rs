@@ -7,12 +7,7 @@ use crate::limits::{Limits, check_limit};
 use crate::resolve::ResolvedJoinCondition;
 use crate::storage::{self, Candidate, RowLayout, RowRecordRef};
 use crate::value::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation, Value};
-use crate::{Error, Result};
-
-const OUTPUT_RESOURCE: &str = "query output bytes";
-const WORKING_RESOURCE: &str = "query working bytes";
-const JOIN_RESOURCE: &str = "JOIN execution steps";
-const REGEX_RESOURCE: &str = "regex execution steps";
+use crate::{Error, Resource, Result};
 
 pub(super) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
     if plan.sources.len() == 1 {
@@ -26,7 +21,7 @@ pub(super) fn explain(
     plan: SelectPlan<'_>,
     max_query_output_bytes: usize,
 ) -> Result<SelectExplanation> {
-    let mut output_budget = ByteBudget::new(max_query_output_bytes, OUTPUT_RESOURCE);
+    let mut output_budget = ByteBudget::new(max_query_output_bytes, Resource::QueryOutputBytes);
     output_budget.charge(std::mem::size_of::<SelectExplanation>())?;
     output_budget.charge(plan.pattern.len())?;
 
@@ -39,10 +34,10 @@ pub(super) fn explain(
     let mut sources = Vec::new();
     sources
         .try_reserve_exact(plan.sources.len())
-        .map_err(|_| output_budget.limit_error())?;
+        .map_err(|_| allocation_error("reserving explanation sources"))?;
     for source in &plan.sources {
         output_budget.charge(source.name.len())?;
-        sources.push(clone_result_string(&source.name, &output_budget)?);
+        sources.push(clone_result_string(&source.name)?);
     }
 
     let columns = materialize_result_columns(&plan, &mut output_budget)?;
@@ -55,10 +50,12 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
         .first()
         .expect("a SELECT plan always has a root source");
     let layout = source.row_layout();
-    let mut output_budget = ByteBudget::new(limits.max_query_output_bytes, OUTPUT_RESOURCE);
+    let mut output_budget =
+        ByteBudget::new(limits.max_query_output_bytes, Resource::QueryOutputBytes);
     output_budget.charge(std::mem::size_of::<RowSet>())?;
     let columns = materialize_result_columns(plan, &mut output_budget)?;
-    let working_budget = ByteBudget::new(limits.max_query_working_bytes, WORKING_RESOURCE);
+    let working_budget =
+        ByteBudget::new(limits.max_query_working_bytes, Resource::QueryWorkingBytes);
 
     let mut rows = Vec::new();
     let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
@@ -88,15 +85,12 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
         output_budget.charge(row_charge)?;
 
         rows.try_reserve(1)
-            .map_err(|_| output_budget.limit_error())?;
+            .map_err(|_| allocation_error("reserving query result rows"))?;
         let mut row = Vec::new();
         row.try_reserve_exact(plan.projection.len())
-            .map_err(|_| output_budget.limit_error())?;
+            .map_err(|_| allocation_error("reserving query result values"))?;
         for location in &plan.projection {
-            row.push(clone_result_value(
-                &decoded[location.column],
-                &output_budget,
-            )?);
+            row.push(clone_result_value(&decoded[location.column])?);
         }
         rows.push(row);
     }
@@ -105,11 +99,13 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
 }
 
 fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
-    let mut output_budget = ByteBudget::new(limits.max_query_output_bytes, OUTPUT_RESOURCE);
+    let mut output_budget =
+        ByteBudget::new(limits.max_query_output_bytes, Resource::QueryOutputBytes);
     output_budget.charge(std::mem::size_of::<RowSet>())?;
     let columns = materialize_result_columns(plan, &mut output_budget)?;
 
-    let mut working_budget = ByteBudget::new(limits.max_query_working_bytes, WORKING_RESOURCE);
+    let mut working_budget =
+        ByteBudget::new(limits.max_query_working_bytes, Resource::QueryWorkingBytes);
     let source_slots = plan
         .sources
         .len()
@@ -119,7 +115,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
     let mut source_rows = Vec::new();
     source_rows
         .try_reserve_exact(plan.sources.len())
-        .map_err(|_| working_budget.limit_error())?;
+        .map_err(|_| allocation_error("reserving JOIN source buckets"))?;
     source_rows.resize_with(plan.sources.len(), Vec::new);
 
     for matched in plan.regex.find_iter(blob) {
@@ -138,7 +134,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
         let decoded = storage::decode_row(matched.as_str(), source.row_layout())?;
         source_rows[source_index]
             .try_reserve(1)
-            .map_err(|_| working_budget.limit_error())?;
+            .map_err(|_| allocation_error("retaining decoded JOIN rows"))?;
         source_rows[source_index].push(decoded);
     }
 
@@ -151,7 +147,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
     let mut chosen = Vec::new();
     chosen
         .try_reserve_exact(plan.sources.len())
-        .map_err(|_| working_budget.limit_error())?;
+        .map_err(|_| allocation_error("reserving the chosen JOIN row stack"))?;
     let mut rows = Vec::new();
     let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
     let mut output = JoinOutput {
@@ -203,14 +199,13 @@ fn emit_join_rows<'rows>(
         output
             .rows
             .try_reserve(1)
-            .map_err(|_| output.output_budget.limit_error())?;
+            .map_err(|_| allocation_error("reserving query result rows"))?;
         let mut row = Vec::new();
         row.try_reserve_exact(output.plan.projection.len())
-            .map_err(|_| output.output_budget.limit_error())?;
+            .map_err(|_| allocation_error("reserving query result values"))?;
         for location in &output.plan.projection {
             row.push(clone_result_value(
                 &chosen[location.source][location.column],
-                output.output_budget,
             )?);
         }
         output.rows.push(row);
@@ -259,7 +254,7 @@ fn join_conditions_match(
         *join_steps = join_steps
             .checked_add(comparison_cost)
             .ok_or_else(|| join_limit_error(limits))?;
-        check_limit(*join_steps, limits.max_join_steps, JOIN_RESOURCE)?;
+        check_limit(*join_steps, limits.max_join_steps, Resource::JoinSteps)?;
         if matches!(left, Value::Null) || matches!(right, Value::Null) || left != right {
             return Ok(false);
         }
@@ -281,16 +276,16 @@ fn materialize_result_columns(
     let mut columns = Vec::new();
     columns
         .try_reserve_exact(plan.projection.len())
-        .map_err(|_| output_budget.limit_error())?;
+        .map_err(|_| allocation_error("reserving query result columns"))?;
     for location in &plan.projection {
         let source = plan.sources[location.source];
         let column = &source.columns[location.column];
         output_budget.charge(column.name.len())?;
-        let label = clone_result_string(&column.name, output_budget)?;
+        let label = clone_result_string(&column.name)?;
         output_budget.charge(source.name.len())?;
-        let table = clone_result_string(&source.name, output_budget)?;
+        let table = clone_result_string(&source.name)?;
         output_budget.charge(column.name.len())?;
-        let source_column = clone_result_string(&column.name, output_budget)?;
+        let source_column = clone_result_string(&column.name)?;
         columns.push(ResultColumn::new(
             label,
             ColumnOrigin::new(table, source_column),
@@ -370,9 +365,8 @@ where
             layout,
             replacement.as_deref(),
         )?;
-        affected = affected.checked_add(1).ok_or(Error::ResourceLimit {
-            resource: "affected rows",
-            limit: usize::MAX,
+        affected = affected.checked_add(1).ok_or(Error::Capacity {
+            operation: "counting affected rows",
         })?;
     }
     Ok(affected)
@@ -385,20 +379,20 @@ fn value_payload_size(value: &Value) -> usize {
     }
 }
 
-fn clone_result_value(value: &Value, budget: &ByteBudget) -> Result<Value> {
+fn clone_result_value(value: &Value) -> Result<Value> {
     match value {
-        Value::Text(value) => Ok(Value::Text(clone_result_string(value, budget)?)),
+        Value::Text(value) => Ok(Value::Text(clone_result_string(value)?)),
         Value::Integer(value) => Ok(Value::Integer(*value)),
         Value::Boolean(value) => Ok(Value::Boolean(*value)),
         Value::Null => Ok(Value::Null),
     }
 }
 
-fn clone_result_string(value: &str, budget: &ByteBudget) -> Result<String> {
+fn clone_result_string(value: &str) -> Result<String> {
     let mut cloned = String::new();
     cloned
         .try_reserve_exact(value.len())
-        .map_err(|_| budget.limit_error())?;
+        .map_err(|_| allocation_error("cloning query output text"))?;
     cloned.push_str(value);
     Ok(cloned)
 }
@@ -406,11 +400,11 @@ fn clone_result_string(value: &str, budget: &ByteBudget) -> Result<String> {
 struct ByteBudget {
     used: usize,
     limit: usize,
-    resource: &'static str,
+    resource: Resource,
 }
 
 impl ByteBudget {
-    const fn new(limit: usize, resource: &'static str) -> Self {
+    const fn new(limit: usize, resource: Resource) -> Self {
         Self {
             used: 0,
             limit,
@@ -444,21 +438,26 @@ impl ByteBudget {
     }
 }
 
+const fn allocation_error(operation: &'static str) -> Error {
+    Error::Allocation { operation }
+}
+
 const fn join_limit_error(limits: &Limits) -> Error {
     Error::ResourceLimit {
-        resource: JOIN_RESOURCE,
+        resource: Resource::JoinSteps,
         limit: limits.max_join_steps,
     }
 }
 
 fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
     match error {
-        FancyError::RuntimeError(
-            RuntimeError::BacktrackLimitExceeded | RuntimeError::StackOverflow,
-        ) => Error::ResourceLimit {
-            resource: REGEX_RESOURCE,
+        FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded) => Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
             limit: limits.regex_backtrack_limit,
         },
         other => Error::RegexRuntime(other.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests;

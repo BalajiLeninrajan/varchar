@@ -1,7 +1,7 @@
 use super::{compile_scan, compile_select};
 use crate::sql::{self, Statement};
 use crate::storage::StorageState;
-use crate::{Error, Limits};
+use crate::{Error, Limits, Resource};
 
 #[test]
 fn select_plans_borrow_sources_while_mutation_scans_own_their_layout() {
@@ -42,7 +42,7 @@ fn select_explanations_obey_the_query_output_budget() {
     assert!(matches!(
         plan.into_explanation(0),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 0,
         })
     ));

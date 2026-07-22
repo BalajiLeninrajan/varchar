@@ -4,7 +4,7 @@ use super::column::{ColumnLocation, resolve_column};
 use crate::limits::check_limit;
 use crate::sql::{Projection, ProjectionItem};
 use crate::storage::TableSchema;
-use crate::{Error, Result};
+use crate::{Error, Resource, Result};
 
 pub(super) fn expanded_len(schemas: &[&TableSchema], projection: &Projection) -> Result<usize> {
     match projection {
@@ -39,13 +39,15 @@ pub(super) fn resolve_projection(
     check_limit(
         projection_bytes,
         max_query_output_bytes,
-        "query output bytes",
+        Resource::QueryOutputBytes,
     )?;
 
     let mut resolved = Vec::new();
     resolved
         .try_reserve_exact(projection_len)
-        .map_err(|_| query_output_limit_error(max_query_output_bytes))?;
+        .map_err(|_| Error::Allocation {
+            operation: "reserving resolved projection columns",
+        })?;
     match projection {
         Projection::All => {
             for (source, schema) in schemas.iter().enumerate() {
@@ -84,7 +86,7 @@ fn qualified_projection_source(schemas: &[&TableSchema], table: &str) -> Result<
 
 const fn query_output_limit_error(limit: usize) -> Error {
     Error::ResourceLimit {
-        resource: "query output bytes",
+        resource: Resource::QueryOutputBytes,
         limit,
     }
 }

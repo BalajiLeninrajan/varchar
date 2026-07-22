@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{DataType, Database, Error, Limits, Outcome, ResultColumn, RowSet, Value};
+use varchar::{DataType, Database, Error, Limits, Outcome, Resource, ResultColumn, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -278,7 +278,7 @@ fn select_compilation_preserves_error_precedence() {
     assert!(matches!(
         database.explain_select("SELECT id FROM t WHERE missing_predicate = 1 AND id = 'wrong'"),
         Err(Error::ResourceLimit {
-            resource: "WHERE predicates",
+            resource: Resource::WherePredicates,
             limit: 1,
         })
     ));
@@ -318,7 +318,7 @@ fn select_resolves_all_predicates_before_physical_pattern_limits() {
             pattern = sql_text(&oversized_pattern),
         )),
         Err(Error::ResourceLimit {
-            resource: "generated regex bytes",
+            resource: Resource::GeneratedRegexBytes,
             limit: 128,
         })
     ));
@@ -836,7 +836,7 @@ fn single_table_scan_charges_large_unprojected_values_to_working_memory() {
     assert!(matches!(
         limited.execute("SELECT id FROM records"),
         Err(Error::ResourceLimit {
-            resource: "query working bytes",
+            resource: Resource::QueryWorkingBytes,
             limit: 512,
         })
     ));
@@ -853,7 +853,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         database.execute("CREATE TABLE t (id INTEGER)"),
         Err(Error::ResourceLimit {
-            resource: "SQL bytes",
+            resource: Resource::SqlBytes,
             limit: 8,
         })
     ));
@@ -873,7 +873,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         database.explain_select("SELECT * FROM t WHERE id = 1 AND name = 'x'"),
         Err(Error::ResourceLimit {
-            resource: "WHERE predicates",
+            resource: Resource::WherePredicates,
             limit: 1,
         })
     ));
@@ -887,7 +887,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         database.explain_select("SELECT * FROM t"),
         Err(Error::ResourceLimit {
-            resource: "generated regex bytes",
+            resource: Resource::GeneratedRegexBytes,
             limit: 1,
         })
     ));
@@ -902,21 +902,21 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         database.execute("SELECT * FROM t"),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 1,
         })
     ));
     assert!(matches!(
         database.explain_select("SELECT * FROM t"),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 1,
         })
     ));
     assert!(matches!(
         database.execute("EXPLAIN REGEX SELECT * FROM t"),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 1,
         })
     ));
@@ -937,7 +937,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         null_database.execute("SELECT * FROM nulls"),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: 256
         })
     ));
@@ -949,7 +949,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
     assert!(matches!(
         Database::from_string_with_limits(blob.clone(), load_limits),
         Err(Error::ResourceLimit {
-            resource: "database bytes",
+            resource: Resource::DatabaseBytes,
             ..
         })
     ));
@@ -970,7 +970,7 @@ fn configurable_resource_limits_fail_without_partial_work() {
         assert!(matches!(
             database.execute(sql),
             Err(Error::ResourceLimit {
-                resource: "database bytes",
+                resource: Resource::DatabaseBytes,
                 limit,
             }) if limit == database_limit
         ));

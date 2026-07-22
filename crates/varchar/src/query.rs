@@ -11,7 +11,7 @@ use crate::resolve::{self, ColumnLocation, ResolvedJoin};
 use crate::sql::{Predicate, Select};
 use crate::storage::{Candidate, Catalog, TableSchema};
 use crate::value::{RowSet, SelectExplanation, Value};
-use crate::{Result, SchemaColumn};
+use crate::{Resource, Result, SchemaColumn};
 
 /// An owned mutation scan that remains valid while a candidate is assembled.
 pub(crate) struct ScanPlan {
@@ -58,7 +58,11 @@ pub(crate) fn compile_scan(
     predicates: &[Predicate],
     limits: &Limits,
 ) -> Result<ScanPlan> {
-    check_limit(predicates.len(), limits.max_predicates, "WHERE predicates")?;
+    check_limit(
+        predicates.len(),
+        limits.max_predicates,
+        Resource::WherePredicates,
+    )?;
     let resolved = predicates
         .iter()
         .map(|predicate| resolve::predicate(schema, predicate));

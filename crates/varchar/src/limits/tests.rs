@@ -1,4 +1,4 @@
-use super::{Limits, check_limit};
+use super::{Limits, Resource, check_limit};
 use crate::Error;
 
 #[test]
@@ -20,13 +20,33 @@ fn defaults_cover_every_resource_bound() {
 }
 
 #[test]
-fn check_limit_preserves_the_resource_label() {
-    assert!(check_limit(4, 4, "rows").is_ok());
+fn check_limit_preserves_structured_resource_metadata() {
+    assert!(check_limit(4, 4, Resource::JoinSteps).is_ok());
+
     assert!(matches!(
-        check_limit(5, 4, "rows"),
+        check_limit(5, 4, Resource::JoinSteps),
         Err(Error::ResourceLimit {
-            resource: "rows",
+            resource: Resource::JoinSteps,
             limit: 4,
         })
     ));
+}
+
+#[test]
+fn resources_have_human_readable_names() {
+    let cases = [
+        (Resource::DatabaseBytes, "database bytes"),
+        (Resource::SqlBytes, "SQL bytes"),
+        (Resource::WherePredicates, "WHERE predicates"),
+        (Resource::JoinSources, "JOIN sources"),
+        (Resource::GeneratedRegexBytes, "generated regex bytes"),
+        (Resource::QueryWorkingBytes, "query working bytes"),
+        (Resource::QueryOutputBytes, "query output bytes"),
+        (Resource::JoinSteps, "JOIN execution steps"),
+        (Resource::RegexBacktracking, "regex backtracking steps"),
+    ];
+
+    for (resource, human_display) in cases {
+        assert_eq!(resource.to_string(), human_display);
+    }
 }

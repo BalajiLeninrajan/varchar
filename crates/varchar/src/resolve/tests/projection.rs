@@ -1,6 +1,6 @@
 use super::{catalog, select_statement};
-use crate::Error;
 use crate::resolve::{ColumnLocation, select};
+use crate::{Error, Resource};
 
 #[test]
 fn select_projection_resolves_qualified_stars_and_unambiguous_names() {
@@ -28,7 +28,7 @@ fn expanded_select_projection_obeys_the_output_budget() {
     assert!(matches!(
         select(&catalog, &statement, 1, 0, limit),
         Err(Error::ResourceLimit {
-            resource: "query output bytes",
+            resource: Resource::QueryOutputBytes,
             limit: actual,
         }) if actual == limit
     ));

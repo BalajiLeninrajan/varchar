@@ -1,6 +1,6 @@
 use super::{catalog, select_statement};
-use crate::Error;
 use crate::resolve::select;
+use crate::{Error, Resource};
 
 #[test]
 fn repeated_select_sources_are_rejected_during_resolution() {
@@ -23,7 +23,7 @@ fn select_source_limit_is_enforced() {
     assert!(matches!(
         select(&catalog, &statement, 0, 2, usize::MAX),
         Err(Error::ResourceLimit {
-            resource: "JOIN sources",
+            resource: Resource::JoinSources,
             limit: 0,
         })
     ));

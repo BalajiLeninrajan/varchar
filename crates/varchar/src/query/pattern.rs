@@ -3,10 +3,9 @@
 use crate::limits::check_limit;
 use crate::resolve::{LikeAtom, ResolvedPredicate};
 use crate::storage::{ROW_PREFIX, encode_cell, encode_text_into};
-use crate::{DataType, Error, Result, SchemaColumn};
+use crate::{DataType, Error, Resource, Result, SchemaColumn};
 
 const TEXT_UNIT_PATTERN: &str = r"(?:%[0-9A-F]{6}|[^%|;~])";
-const PATTERN_RESOURCE: &str = "generated regex bytes";
 
 /// Build one complete row pattern, from its storage tag through its terminator.
 pub(super) fn row_scan_pattern(
@@ -177,10 +176,12 @@ impl PatternBuilder {
             .len()
             .checked_add(fragment.len())
             .ok_or_else(|| self.limit_error())?;
-        check_limit(new_len, self.limit, PATTERN_RESOURCE)?;
+        check_limit(new_len, self.limit, Resource::GeneratedRegexBytes)?;
         self.pattern
             .try_reserve(fragment.len())
-            .map_err(|_| self.limit_error())?;
+            .map_err(|_| Error::Allocation {
+                operation: "growing a query row pattern",
+            })?;
         self.pattern.push_str(fragment);
         Ok(())
     }
@@ -196,7 +197,7 @@ impl PatternBuilder {
 
     const fn limit_error(&self) -> Error {
         Error::ResourceLimit {
-            resource: PATTERN_RESOURCE,
+            resource: Resource::GeneratedRegexBytes,
             limit: self.limit,
         }
     }
