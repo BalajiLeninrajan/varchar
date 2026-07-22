@@ -1,4 +1,5 @@
-use super::{ColumnOrigin, DataType, ResultColumn, RowSet, SelectExplanation, Value};
+use super::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation};
+use crate::{DataType, Value};
 
 #[test]
 fn snapshots_expose_read_and_consuming_views() {
