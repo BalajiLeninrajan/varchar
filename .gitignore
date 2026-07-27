@@ -1,2 +1,3 @@
 /target/
 *.varchar.tmp
+/.claude/
