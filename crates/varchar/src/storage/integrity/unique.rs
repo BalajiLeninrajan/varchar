@@ -288,6 +288,12 @@ pub(super) fn validate<'a>(
         return Ok(());
     }
 
+    let table_bytes = table_count
+        .checked_mul(std::mem::size_of::<UniqueTable<'_>>())
+        .ok_or(Error::Capacity {
+            operation: "sizing tables with UNIQUE validation indexes",
+        })?;
+
     let mut tables = Vec::new();
     budget.reserve_exact(
         &mut tables,
@@ -308,71 +314,88 @@ pub(super) fn validate<'a>(
     }
     tables.sort_unstable_by(|left, right| left.schema.name.cmp(&right.schema.name));
 
-    let (mut values, _) = UniqueValues::new(blob.len(), index_count, budget)?;
+    // Every reservation and append reports the bytes it charged, and this is the ledger they
+    // accumulate into: it is what the release below hands back, so charge and release come from
+    // one place instead of from a capacity the allocator was free to round up.
+    let (mut values, mut value_bytes) = match UniqueValues::new(blob.len(), index_count, budget) {
+        Ok(values) => values,
+        Err(error) => {
+            budget.release(table_bytes);
+            return Err(ValidationError::Storage(error));
+        }
+    };
 
-    // The fill pass is spelled out rather than delegated to `for_each_row` because growing
-    // the values can exhaust the working budget, which is a storage error and not a row
-    // violation.
-    for row in row_records(blob, catalog.row_start) {
-        let row = row.map_err(ValidationError::Storage)?;
-        let Some(table) = table_index(&tables, row.table()).map(|index| &tables[index]) else {
-            continue;
-        };
-        let mut unique = 0;
-        for (column, value) in row.cells().enumerate() {
-            if unique == table.indexes.len() {
-                break;
+    let result = (|| -> ValidationResult<()> {
+        // The fill pass is spelled out rather than delegated to `for_each_row` because growing
+        // the values can exhaust the working budget, which is a storage error and not a row
+        // violation.
+        for row in row_records(blob, catalog.row_start) {
+            let row = row.map_err(ValidationError::Storage)?;
+            let Some(table) = table_index(&tables, row.table()).map(|index| &tables[index]) else {
+                continue;
+            };
+            let mut unique = 0;
+            for (column, value) in row.cells().enumerate() {
+                if unique == table.indexes.len() {
+                    break;
+                }
+                if table.schema.unique_columns[unique] != column {
+                    continue;
+                }
+                if value != "N" {
+                    value_bytes += values.push(
+                        table.indexes.start + unique,
+                        source_offset(blob, value),
+                        budget,
+                    )?;
+                }
+                unique += 1;
             }
-            if table.schema.unique_columns[unique] != column {
+            if unique != table.indexes.len() {
+                return Err(Violation::new(
+                    row.range().start,
+                    "UNIQUE cell is missing from a validated row",
+                )
+                .into());
+            }
+        }
+
+        let Some((index, occurrence)) = values.earliest_duplicate(blob) else {
+            return Ok(());
+        };
+        let table = tables
+            .iter()
+            .find(|table| table.indexes.contains(&index))
+            .expect("every UNIQUE value belongs to one of the indexed tables");
+        let column = table.schema.unique_columns[index - table.indexes.start];
+        for row in row_records(blob, catalog.row_start) {
+            let row = row.map_err(ValidationError::Storage)?;
+            if row.table() != table.schema.name {
                 continue;
             }
-            if value != "N" {
-                values.push(
-                    table.indexes.start + unique,
-                    source_offset(blob, value),
-                    budget,
-                )?;
+            let value = row
+                .cells()
+                .nth(column)
+                .expect("validated rows contain every UNIQUE cell");
+            if source_offset(blob, value) == occurrence {
+                return Err(Violation::new(
+                    row.range().start,
+                    format!(
+                        "duplicate UNIQUE value for table {:?} column {:?}",
+                        table.schema.name, table.schema.columns[column].name
+                    ),
+                )
+                .into());
             }
-            unique += 1;
         }
-        if unique != table.indexes.len() {
-            return Err(Violation::new(
-                row.range().start,
-                "UNIQUE cell is missing from a validated row",
-            )
-            .into());
-        }
-    }
-
-    let Some((index, occurrence)) = values.earliest_duplicate(blob) else {
-        return Ok(());
-    };
-    let table = tables
-        .iter()
-        .find(|table| table.indexes.contains(&index))
-        .expect("every UNIQUE value belongs to one of the indexed tables");
-    let column = table.schema.unique_columns[index - table.indexes.start];
-    for row in row_records(blob, catalog.row_start) {
-        let row = row.map_err(ValidationError::Storage)?;
-        if row.table() != table.schema.name {
-            continue;
-        }
-        let value = row
-            .cells()
-            .nth(column)
-            .expect("validated rows contain every UNIQUE cell");
-        if source_offset(blob, value) == occurrence {
-            return Err(Violation::new(
-                row.range().start,
-                format!(
-                    "duplicate UNIQUE value for table {:?} column {:?}",
-                    table.schema.name, table.schema.columns[column].name
-                ),
-            )
-            .into());
-        }
-    }
-    unreachable!("a duplicate UNIQUE occurrence belongs to a validated row")
+        unreachable!("a duplicate UNIQUE occurrence belongs to a validated row")
+    })();
+    // The values hand back exactly what their reservations and appends charged, alongside the
+    // table descriptors, before the CHECK pass reserves.
+    drop(values);
+    drop(tables);
+    budget.release(table_bytes + value_bytes);
+    result
 }
 
 #[cfg(test)]
@@ -511,9 +534,14 @@ mod tests {
         // Growth reserves two values and then three, so three values are charged exactly.
         let exact = TABLE + 3 * std::mem::size_of::<u32>();
 
+        let mut exact_budget = working_budget(exact);
         assert!(
-            validate(blob, &catalog, &mut working_budget(exact)).is_ok(),
+            validate(blob, &catalog, &mut exact_budget).is_ok(),
             "the exact UNIQUE index budget is sufficient"
+        );
+        assert!(
+            exact_budget.charge(exact).is_ok(),
+            "completed UNIQUE validation releases its temporary values"
         );
         assert!(matches!(
             validate(blob, &catalog, &mut working_budget(exact - 1)),
