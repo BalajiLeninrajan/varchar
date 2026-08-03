@@ -20,6 +20,8 @@ pub(crate) fn compile_select<'catalog, 'statement>(
         joins,
         where_clause,
         order_by,
+        limit,
+        offset,
     } = resolve::select(
         catalog,
         statement,
@@ -63,6 +65,8 @@ pub(crate) fn compile_select<'catalog, 'statement>(
         local_residuals: partition.local_residuals,
         cross_source_residual: partition.cross_source_residual,
         order_by,
+        limit,
+        offset,
     })
 }
 

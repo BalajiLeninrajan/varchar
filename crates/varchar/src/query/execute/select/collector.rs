@@ -12,13 +12,26 @@ use crate::{Error, Result};
 pub(super) struct RowCollector<'plan> {
     projection: &'plan [ColumnLocation],
     order_by: &'plan [ResolvedOrderTerm],
+    limit: Option<u64>,
+    offset: u64,
     output_budget: ByteBudget,
     row_structure: usize,
     state: CollectionState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CollectionStatus {
+    Continue,
+    Complete,
+}
+
 enum CollectionState {
-    Streaming(Vec<Vec<Value>>),
+    Complete,
+    Streaming {
+        rows: Vec<Vec<Value>>,
+        skipped: u64,
+        emitted: u64,
+    },
     Ordered {
         rows: Vec<PendingRow>,
         next_ordinal: u64,
@@ -33,9 +46,23 @@ struct PendingRow {
 
 impl<'plan> RowCollector<'plan> {
     pub(super) fn new(plan: &'plan SelectPlan<'_, '_>, output_budget: ByteBudget) -> Result<Self> {
-        let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
-        let state = if plan.order_by.is_empty() {
-            CollectionState::Streaming(Vec::new())
+        let offset = plan.offset.unwrap_or(0);
+        // `LIMIT 0` is the only window that can never gain a row, so it is also
+        // the only one that skips every scan, join, and materialization step.
+        let empty_window = plan.limit == Some(0);
+        let row_structure = if empty_window {
+            0
+        } else {
+            row_structure_charge(plan.projection.len(), &output_budget)?
+        };
+        let state = if empty_window {
+            CollectionState::Complete
+        } else if plan.order_by.is_empty() {
+            CollectionState::Streaming {
+                rows: Vec::new(),
+                skipped: 0,
+                emitted: 0,
+            }
         } else {
             CollectionState::Ordered {
                 rows: Vec::new(),
@@ -45,10 +72,16 @@ impl<'plan> RowCollector<'plan> {
         Ok(Self {
             projection: &plan.projection,
             order_by: &plan.order_by,
+            limit: plan.limit,
+            offset,
             output_budget,
             row_structure,
             state,
         })
+    }
+
+    pub(super) fn should_scan(&self) -> bool {
+        !matches!(self.state, CollectionState::Complete)
     }
 
     pub(super) fn collect(
@@ -56,10 +89,19 @@ impl<'plan> RowCollector<'plan> {
         sources: &[&[Value]],
         working_budget: &mut ByteBudget,
         transient_working_bytes: usize,
-    ) -> Result<()> {
+    ) -> Result<CollectionStatus> {
         match &mut self.state {
-            CollectionState::Streaming(rows) => collect_streaming(
+            CollectionState::Complete => Ok(CollectionStatus::Complete),
+            CollectionState::Streaming {
                 rows,
+                skipped,
+                emitted,
+            } => collect_streaming(
+                rows,
+                skipped,
+                emitted,
+                self.limit,
+                self.offset,
                 self.projection,
                 sources,
                 self.row_structure,
@@ -80,18 +122,21 @@ impl<'plan> RowCollector<'plan> {
     pub(super) fn finish(self, columns: Vec<ResultColumn>) -> Result<RowSet> {
         let Self {
             order_by,
+            limit,
+            offset,
             mut output_budget,
             row_structure,
             state,
             ..
         } = self;
         let rows = match state {
-            CollectionState::Streaming(rows) => rows,
+            CollectionState::Complete => Vec::new(),
+            CollectionState::Streaming { rows, .. } => rows,
             CollectionState::Ordered { mut rows, .. } => {
                 // `sort_unstable_by` is allocation-free. The monotonic ordinal is
                 // the final key, so physical/nested-loop order wins every tie.
                 rows.sort_unstable_by(|left, right| compare_pending(left, right, order_by));
-                materialize_ordered(rows, row_structure, &mut output_budget)?
+                materialize_ordered(rows, offset, limit, row_structure, &mut output_budget)?
             }
         };
         Ok(RowSet::new(columns, rows))
@@ -132,13 +177,31 @@ pub(super) fn materialize_result_columns(
     Ok(columns)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_streaming(
     rows: &mut Vec<Vec<Value>>,
+    skipped: &mut u64,
+    emitted: &mut u64,
+    limit: Option<u64>,
+    offset: u64,
     projection: &[ColumnLocation],
     sources: &[&[Value]],
     row_structure: usize,
     output_budget: &mut ByteBudget,
-) -> Result<()> {
+) -> Result<CollectionStatus> {
+    if *skipped < offset {
+        *skipped = skipped.checked_add(1).ok_or(Error::Capacity {
+            operation: "counting rows skipped by OFFSET",
+        })?;
+        return Ok(CollectionStatus::Continue);
+    }
+    if limit.is_some_and(|limit| *emitted >= limit) {
+        return Ok(CollectionStatus::Complete);
+    }
+    let following_emitted = emitted.checked_add(1).ok_or(Error::Capacity {
+        operation: "counting rows emitted through LIMIT",
+    })?;
+
     let payload_bytes = projected_payload_size(projection, sources, output_budget)?;
     let row_charge = row_structure
         .checked_add(payload_bytes)
@@ -157,7 +220,12 @@ fn collect_streaming(
         )?);
     }
     rows.push(row);
-    Ok(())
+    *emitted = following_emitted;
+    if limit == Some(*emitted) {
+        Ok(CollectionStatus::Complete)
+    } else {
+        Ok(CollectionStatus::Continue)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -169,7 +237,7 @@ fn collect_ordered(
     sources: &[&[Value]],
     working_budget: &mut ByteBudget,
     transient_working_bytes: usize,
-) -> Result<()> {
+) -> Result<CollectionStatus> {
     let following_ordinal = next_ordinal.checked_add(1).ok_or(Error::Capacity {
         operation: "assigning an ordered-row ordinal",
     })?;
@@ -221,16 +289,19 @@ fn collect_ordered(
         ordinal: *next_ordinal,
     });
     *next_ordinal = following_ordinal;
-    Ok(())
+    Ok(CollectionStatus::Continue)
 }
 
 fn materialize_ordered(
     pending: Vec<PendingRow>,
+    offset: u64,
+    limit: Option<u64>,
     row_structure: usize,
     output_budget: &mut ByteBudget,
 ) -> Result<Vec<Vec<Value>>> {
+    let (skip, take) = ordered_window(pending.len(), offset, limit)?;
     let mut rows = Vec::new();
-    for pending in pending {
+    for pending in pending.into_iter().skip(skip).take(take) {
         let payload = payload_size(pending.projected.iter(), output_budget)?;
         let charge = row_structure
             .checked_add(payload)
@@ -241,6 +312,22 @@ fn materialize_ordered(
         rows.push(pending.projected);
     }
     Ok(rows)
+}
+
+fn ordered_window(cardinality: usize, offset: u64, limit: Option<u64>) -> Result<(usize, usize)> {
+    let cardinality = u64::try_from(cardinality).map_err(|_| Error::Capacity {
+        operation: "representing ordered query cardinality",
+    })?;
+    let skip = offset.min(cardinality);
+    let remaining = cardinality - skip;
+    let take = limit.unwrap_or(remaining).min(remaining);
+    let skip = usize::try_from(skip).map_err(|_| Error::Capacity {
+        operation: "applying ordered query OFFSET",
+    })?;
+    let take = usize::try_from(take).map_err(|_| Error::Capacity {
+        operation: "applying ordered query LIMIT",
+    })?;
+    Ok((skip, take))
 }
 
 fn compare_pending(

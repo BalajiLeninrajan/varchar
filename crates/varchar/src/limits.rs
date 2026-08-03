@@ -83,7 +83,7 @@ pub struct Limits {
     /// so an exact boundary can differ between 32-bit and 64-bit builds.
     pub max_query_working_bytes: usize,
     /// Maximum conservatively accounted bytes for one materialized `SELECT`
-    /// result or `SELECT` explanation.
+    /// result after pagination or one `SELECT` explanation.
     ///
     /// The resolver also uses this value as an independent bound on the
     /// expanded projection-location plan before query compilation.

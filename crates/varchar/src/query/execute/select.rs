@@ -11,7 +11,7 @@ use crate::storage::{self, RowRecordRef};
 use crate::value::Value;
 use crate::{Error, Resource, Result};
 
-use self::collector::{RowCollector, materialize_result_columns};
+use self::collector::{CollectionStatus, RowCollector, materialize_result_columns};
 use super::super::SelectPlan;
 
 pub(crate) fn select(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result<RowSet> {
@@ -72,6 +72,9 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -
     output_budget.charge(std::mem::size_of::<RowSet>())?;
     let columns = materialize_result_columns(plan, &mut output_budget)?;
     let mut collector = RowCollector::new(plan, output_budget)?;
+    if !collector.should_scan() {
+        return collector.finish(columns);
+    }
     let mut working_budget =
         ByteBudget::new(limits.max_query_working_bytes, Resource::QueryWorkingBytes);
 
@@ -99,7 +102,11 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -
             continue;
         }
         let selected = [decoded.as_slice()];
-        collector.collect(&selected, &mut working_budget, decoded_charge)?;
+        if collector.collect(&selected, &mut working_budget, decoded_charge)?
+            == CollectionStatus::Complete
+        {
+            break;
+        }
     }
 
     collector.finish(columns)
@@ -111,6 +118,9 @@ fn select_join(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result
     output_budget.charge(std::mem::size_of::<RowSet>())?;
     let columns = materialize_result_columns(plan, &mut output_budget)?;
     let mut collector = RowCollector::new(plan, output_budget)?;
+    if !collector.should_scan() {
+        return collector.finish(columns);
+    }
 
     let mut working_budget =
         ByteBudget::new(limits.max_query_working_bytes, Resource::QueryWorkingBytes);
@@ -216,17 +226,16 @@ fn emit_join_rows<'rows>(
     chosen: &mut Vec<&'rows [Value]>,
     source_rows: &'rows [Vec<Vec<Value>>],
     output: &mut JoinOutput<'_, '_, '_, '_, '_>,
-) -> Result<()> {
+) -> Result<CollectionStatus> {
     if source == source_rows.len() {
         if let (Some(program), Some(evaluator)) = (
             &output.plan.cross_source_residual,
             &mut output.residual_evaluator,
         ) && !evaluator.evaluate_where(program, chosen)?
         {
-            return Ok(());
+            return Ok(CollectionStatus::Continue);
         }
-        output.collector.collect(chosen, output.working_budget, 0)?;
-        return Ok(());
+        return output.collector.collect(chosen, output.working_budget, 0);
     }
 
     for row in &source_rows[source] {
@@ -243,12 +252,17 @@ fn emit_join_rows<'rows>(
                 output.limits,
             )?
         };
-        if matches {
-            emit_join_rows(source + 1, chosen, source_rows, output)?;
-        }
+        let status = if matches {
+            emit_join_rows(source + 1, chosen, source_rows, output)?
+        } else {
+            CollectionStatus::Continue
+        };
         chosen.pop();
+        if status == CollectionStatus::Complete {
+            return Ok(status);
+        }
     }
-    Ok(())
+    Ok(CollectionStatus::Continue)
 }
 
 fn join_conditions_match(

@@ -1,6 +1,6 @@
 use super::{column_ref, parse, select};
 use crate::Error;
-use crate::sql::ast::{OrderDirection, OrderTerm, Projection, ProjectionItem};
+use crate::sql::ast::{OrderDirection, OrderTerm};
 
 fn assert_unsupported(sql: &str, expected_feature: &str, marker: &str) {
     let span_start = sql.rfind(marker).expect("fixture contains error marker");
@@ -119,22 +119,8 @@ fn asc_and_desc_are_reserved_and_cannot_be_used_as_identifiers() {
     }
 }
 
-#[test]
-fn offset_remains_a_contextual_identifier() {
-    let statement = select("SELECT offset FROM directions ORDER BY offset DESC");
-
-    assert_eq!(
-        statement.projection,
-        Projection::Items(vec![ProjectionItem::Column(column_ref(None, "offset"))])
-    );
-    assert_eq!(
-        statement.order_by,
-        vec![OrderTerm {
-            column: column_ref(None, "offset"),
-            direction: OrderDirection::Descending,
-        }]
-    );
-}
+// `OFFSET` was a contextual identifier until the pagination tail introduced it
+// as a keyword; its reservation is covered by the pagination parser tests.
 
 #[test]
 fn excluded_ordering_forms_have_order_specific_features_and_operator_spans() {

@@ -53,7 +53,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | Create | `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)` |
 | Insert | `INSERT INTO users VALUES (1, 'Ada', TRUE)` |
 | Insert by column | `INSERT INTO users (name) VALUES ('Grace')` |
-| Select | `SELECT * FROM users` or a named projection, optionally followed by `ORDER BY` |
+| Select | `SELECT * FROM users` or a named projection, optionally followed by `ORDER BY`, `LIMIT`, and `OFFSET` |
 | Join | `SELECT users.name, posts.body FROM users JOIN posts ON users.id = posts.user_id` |
 | Update | `UPDATE users SET active = FALSE WHERE id = 1` |
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
@@ -125,6 +125,14 @@ ORDER BY parents.created_at, children.name DESC;
 ```
 
 Aliases, ordinals, expressions, `COLLATE`, and configurable NULL placement are not supported as sort terms.
+
+A `SELECT` tail has the fixed shape `[ORDER BY ...] [LIMIT unsigned_integer] [OFFSET unsigned_integer]`. `OFFSET` is valid without `LIMIT`; both accept zero, leading zeroes, and values through `18446744073709551615`. Filtering and joins happen first, then ordering, then offset skipping, then limiting. An offset beyond the result cardinality returns the normal column metadata with no rows. Without `ORDER BY`, skipped rows are not cloned into the result and execution stops as soon as the limit is filled. An ordered query retains every qualifying row and applies the window to the sorted result. `LIMIT 0` still parses, resolves, validates, generates, and compiles the query plan and charges output-column metadata, but it performs no row scan, join comparisons, ordered-row retention, or sorting.
+
+```sql
+SELECT * FROM events LIMIT 25;
+SELECT * FROM events OFFSET 100;
+SELECT * FROM events ORDER BY created_at DESC LIMIT 25 OFFSET 50;
+```
 
 Each library result column includes its display label and the table/column it originated from. When a joined result contains the same label from different sources, the CLI qualifies those headers with their table names.
 
@@ -216,10 +224,10 @@ There is no public JavaScript/WASM package in v1. A future browser adapter can p
 
 The punchline is also the performance model:
 
-- Every query scans the database string once. Unordered single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts. Unordered results stream in qualifying order. For `r` qualifying rows, `ORDER BY` retains each projection plus one owned value per sort key and a tie-breaking ordinal, then adds **O(r log r)** row comparisons; each comparison may inspect multiple keys, and each TEXT-key comparison may scan a shared Unicode-scalar prefix. The sort is allocation-free and unstable internally, with the ordinal preserving input order on final ties.
+- Except for `LIMIT 0`, every executed query scans the database string once. Unordered single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts. Unordered results stream in qualifying order, apply `OFFSET` before cloning output values, and stop once `LIMIT` is full. For `r` qualifying rows, `ORDER BY` retains each projection plus one owned value per sort key and a tie-breaking ordinal, then adds **O(r log r)** row comparisons; each comparison may inspect multiple keys, and each TEXT-key comparison may scan a shared Unicode-scalar prefix. The sort is allocation-free and unstable internally, with the ordinal preserving input order on final ties; only then is the pagination window applied. `LIMIT 0` completes planning but skips the scan and join traversal.
 - Every mutation builds and validates a candidate string before replacing the old state. Inserts and schema changes copy the authoritative blob, while updates and deletes scan and finish a candidate even when no row matches, so all mutation paths are **O(n)** in database size. A zero-match update or delete installs a separately validated but byte-identical state.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, rows plus pointer state retained for joins, and every ordered pending-row descriptor, projected value, owned sort key, text payload, and `u64` ordinal before allocation. Ordered sorting itself uses no scratch allocation. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
+- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, rows plus pointer state retained for joins, and every ordered pending-row descriptor, projected value, owned sort key, text payload, and `u64` ordinal before allocation. Ordered sorting itself uses no scratch allocation. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and only the final rows remaining after pagination, or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 

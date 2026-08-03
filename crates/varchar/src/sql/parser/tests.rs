@@ -1,6 +1,7 @@
 mod create;
 mod expression;
 mod order_by;
+mod pagination;
 
 use super::parse;
 use crate::sql::ast::{
@@ -54,6 +55,8 @@ fn parsing_produces_the_exact_normalized_ast() {
                 }),
             ])),
             order_by: Vec::new(),
+            limit: None,
+            offset: None,
         })
     );
 }
@@ -104,6 +107,8 @@ fn parses_qualified_projection_inner_join_and_predicate_ast() {
                 },
             )])),
             order_by: Vec::new(),
+            limit: None,
+            offset: None,
         }
     );
 }
