@@ -4,7 +4,7 @@ use super::{Parser, TokenKind};
 use crate::sql::ast::{
     ColumnRef, Join, JoinCondition, OrderDirection, OrderTerm, Projection, ProjectionItem, Select,
 };
-use crate::{Error, Result};
+use crate::{Error, Result, Span};
 
 impl Parser {
     pub(super) fn parse_select(&mut self) -> Result<Select> {
@@ -51,6 +51,27 @@ impl Parser {
     }
 
     fn parse_order_term(&mut self) -> Result<OrderTerm> {
+        if matches!(self.current().kind, TokenKind::Number(_)) {
+            let span = self.current().span;
+            return Err(self.unsupported_order_by("ORDER BY ordinals", span));
+        }
+        if matches!(
+            self.current().kind,
+            TokenKind::LeftParen
+                | TokenKind::Star
+                | TokenKind::ExpressionOperator(_)
+                | TokenKind::Bang
+                | TokenKind::Equal
+                | TokenKind::NotEqual
+                | TokenKind::LessThan
+                | TokenKind::GreaterThan
+        ) {
+            let span = self
+                .current_order_expression_span()
+                .expect("matched ORDER BY expression syntax has a span");
+            return Err(self.unsupported_order_by("ORDER BY expressions", span));
+        }
+
         let column = self.parse_column_ref()?;
         let direction = if self.consume_keyword("ASC") {
             OrderDirection::Ascending
@@ -59,6 +80,18 @@ impl Parser {
         } else {
             OrderDirection::Ascending
         };
+
+        if self.current_word() == Some("COLLATE") {
+            let span = self.current().span;
+            return Err(self.unsupported_order_by("ORDER BY COLLATE", span));
+        }
+        if self.current_word() == Some("NULLS") {
+            let span = self.current().span;
+            return Err(self.unsupported_order_by("ORDER BY NULLS FIRST/LAST", span));
+        }
+        if let Some(span) = self.current_order_expression_span() {
+            return Err(self.unsupported_order_by("ORDER BY expressions", span));
+        }
 
         Ok(OrderTerm { column, direction })
     }
@@ -71,6 +104,37 @@ impl Parser {
             .current_word()
             .and_then(super::trailing_feature)
             .is_some()
+    }
+
+    fn current_order_expression_span(&self) -> Option<Span> {
+        match &self.current().kind {
+            TokenKind::Bang
+            | TokenKind::Equal
+            | TokenKind::NotEqual
+            | TokenKind::LessThan
+            | TokenKind::GreaterThan => Some(self.comparison_sequence(self.position).2),
+            TokenKind::LeftParen | TokenKind::Star | TokenKind::ExpressionOperator(_) => {
+                Some(self.current().span)
+            }
+            TokenKind::Number(value) if value.starts_with('-') => Some(Span::new(
+                self.current().span.start,
+                self.current().span.start + 1,
+            )),
+            TokenKind::Word(word)
+                if matches!(
+                    word.as_str(),
+                    "AND" | "BETWEEN" | "IN" | "IS" | "LIKE" | "NOT" | "OR"
+                ) =>
+            {
+                Some(self.current().span)
+            }
+            _ => None,
+        }
+    }
+
+    fn unsupported_order_by(&mut self, feature: &'static str, span: Span) -> Error {
+        self.claimed_order_error = Some(self.position);
+        Error::unsupported(feature, span)
     }
 
     fn parse_projection(&mut self) -> Result<Projection> {

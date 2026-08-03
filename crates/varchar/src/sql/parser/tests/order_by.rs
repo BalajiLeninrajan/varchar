@@ -2,6 +2,26 @@ use super::{column_ref, parse, select};
 use crate::Error;
 use crate::sql::ast::{OrderDirection, OrderTerm, Projection, ProjectionItem};
 
+fn assert_unsupported(sql: &str, expected_feature: &str, marker: &str) {
+    let span_start = sql.rfind(marker).expect("fixture contains error marker");
+    let span_end = span_start + marker.len();
+    match parse(sql) {
+        Err(Error::Unsupported {
+            feature,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(feature, expected_feature, "feature for {sql:?}");
+            assert_eq!(
+                (actual_start, actual_end),
+                (span_start, span_end),
+                "span for {sql:?}"
+            );
+        }
+        other => panic!("expected exact Unsupported error for {sql:?}, got {other:?}"),
+    }
+}
+
 fn assert_missing_comma(sql: &str, marker: &str) {
     let span_start = sql.rfind(marker).expect("fixture contains error marker");
     let span_end = span_start + marker.len();
@@ -114,6 +134,167 @@ fn offset_remains_a_contextual_identifier() {
             direction: OrderDirection::Descending,
         }]
     );
+}
+
+#[test]
+fn excluded_ordering_forms_have_order_specific_features_and_operator_spans() {
+    for (sql, feature, marker) in [
+        ("SELECT id FROM t ORDER BY 1", "ORDER BY ordinals", "1"),
+        (
+            "SELECT id FROM t ORDER BY (id + 1)",
+            "ORDER BY expressions",
+            "(",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id = 1",
+            "ORDER BY expressions",
+            "=",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id != 1",
+            "ORDER BY expressions",
+            "!=",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id < 1",
+            "ORDER BY expressions",
+            "<",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id <= 1",
+            "ORDER BY expressions",
+            "<=",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id > 1",
+            "ORDER BY expressions",
+            ">",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id >= 1",
+            "ORDER BY expressions",
+            ">=",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id <> 1",
+            "ORDER BY expressions",
+            "<>",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id IN (1)",
+            "ORDER BY expressions",
+            "IN",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id LIKE '1'",
+            "ORDER BY expressions",
+            "LIKE",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id IS NULL",
+            "ORDER BY expressions",
+            "IS",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id BETWEEN 0 AND 1",
+            "ORDER BY expressions",
+            "BETWEEN",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id + 1",
+            "ORDER BY expressions",
+            "+",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id-1",
+            "ORDER BY expressions",
+            "-",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id / 1",
+            "ORDER BY expressions",
+            "/",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id % 1",
+            "ORDER BY expressions",
+            "%",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id | 1",
+            "ORDER BY expressions",
+            "|",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id * 1",
+            "ORDER BY expressions",
+            "*",
+        ),
+        (
+            "SELECT id FROM t ORDER BY ABS(id)",
+            "ORDER BY expressions",
+            "(",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id COLLATE binary",
+            "ORDER BY COLLATE",
+            "COLLATE",
+        ),
+        (
+            "SELECT id FROM t ORDER BY id NULLS FIRST",
+            "ORDER BY NULLS FIRST/LAST",
+            "NULLS",
+        ),
+    ] {
+        assert_unsupported(sql, feature, marker);
+    }
+}
+
+#[test]
+fn lexical_errors_after_order_terms_keep_their_original_diagnostics() {
+    let sql = "SELECT id FROM t ORDER BY id -- comment";
+    let span_start = sql.find("--").expect("fixture contains SQL comment");
+    match parse(sql) {
+        Err(Error::Unsupported {
+            feature,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(feature, "SQL comments");
+            assert_eq!((actual_start, actual_end), (span_start, sql.len()));
+        }
+        other => panic!("expected SQL-comment diagnostic, got {other:?}"),
+    }
+
+    let sql = "SELECT id FROM t ORDER BY id \"x\"";
+    let span_start = sql.find('"').expect("fixture contains quoted identifier");
+    match parse(sql) {
+        Err(Error::Unsupported {
+            feature,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(feature, "quoted identifiers");
+            assert_eq!((actual_start, actual_end), (span_start, span_start + 1));
+        }
+        other => panic!("expected quoted-identifier diagnostic, got {other:?}"),
+    }
+
+    let sql = "SELECT id FROM t ORDER BY id @";
+    let span_start = sql
+        .find('@')
+        .expect("fixture contains unexpected character");
+    match parse(sql) {
+        Err(Error::Parse {
+            message,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(message, "unexpected character '@'");
+            assert_eq!((actual_start, actual_end), (span_start, span_start + 1));
+        }
+        other => panic!("expected unexpected-character diagnostic, got {other:?}"),
+    }
 }
 
 #[test]
