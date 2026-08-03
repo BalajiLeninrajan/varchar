@@ -430,7 +430,7 @@ impl Parser {
 
     fn parse_predicate_value(&mut self, context: ExpressionContext) -> Result<Value> {
         if matches!(self.current().kind, TokenKind::QuotedIdentifier(_))
-            || matches!(self.current().kind, TokenKind::Word(ref word) if !super::is_reserved(word))
+            || matches!(self.current().kind, TokenKind::Word(ref word) if !super::is_reserved_identifier(word))
         {
             return Err(Error::unsupported(
                 format!("column-to-column {} predicates", context.noun()),

@@ -1,6 +1,8 @@
+mod show_create;
+
 use crate::output::{ResultCell, ResultColumnSpec, RowSetBuilder};
 use crate::resolve::require_table;
-use crate::sql::DescribeTable;
+use crate::sql::{DescribeTable, ShowCreateTable};
 use crate::storage::Catalog;
 use crate::{DataType, Result, RowSet};
 
@@ -17,8 +19,48 @@ pub(super) fn show_tables(catalog: &Catalog, output_limit: usize) -> Result<RowS
     }];
     let mut result = RowSetBuilder::new(&columns, output_limit)?;
     for (table, _) in catalog.tables() {
-        result.push(&[ResultCell::Text(table)])?;
+        result.push([ResultCell::Text(table)])?;
     }
+    Ok(result.finish())
+}
+
+pub(super) fn show_create_table(
+    catalog: &Catalog,
+    statement: &ShowCreateTable,
+    output_limit: usize,
+) -> Result<RowSet> {
+    let table = require_table(catalog, &statement.table)?;
+    let columns = [
+        ResultColumnSpec {
+            label: "table_name",
+            origin_table: TABLES_ORIGIN,
+            origin_column: "table_name",
+            data_type: DataType::Text,
+            nullable: false,
+        },
+        ResultColumnSpec {
+            label: "create_statement",
+            origin_table: TABLES_ORIGIN,
+            origin_column: "create_statement",
+            data_type: DataType::Text,
+            nullable: false,
+        },
+    ];
+    let mut result = RowSetBuilder::new(&columns, output_limit)?;
+    let auto_increment = catalog.auto_increment(&statement.table);
+    let statement_length =
+        show_create::measure(table, auto_increment)?.ok_or_else(|| result.limit_error())?;
+    let payload_bytes = table
+        .name
+        .len()
+        .checked_add(statement_length)
+        .ok_or_else(|| result.limit_error())?;
+    result.preflight_row_payload(payload_bytes)?;
+    let create_statement = show_create::render(table, auto_increment, statement_length)?;
+    result.push([
+        ResultCell::Text(&table.name),
+        ResultCell::OwnedText(create_statement),
+    ])?;
     Ok(result.finish())
 }
 
@@ -47,7 +89,7 @@ pub(super) fn describe_table(
             .default
             .as_ref()
             .map_or(ResultCell::Null, ResultCell::DisplayValue);
-        result.push(&[
+        result.push([
             ResultCell::Text(&column.name),
             ResultCell::Text(data_type_name(column.data_type)),
             ResultCell::Boolean(column.nullable),

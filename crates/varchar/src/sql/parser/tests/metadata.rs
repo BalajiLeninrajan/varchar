@@ -1,12 +1,18 @@
 use super::super::parse;
 use crate::Error;
-use crate::sql::ast::{DescribeTable, Statement};
+use crate::sql::ast::{DescribeTable, ShowCreateTable, Statement};
 
 #[test]
-fn parses_show_tables_and_normalizes_describe_identifiers() {
+fn parses_schema_metadata_statements_and_normalizes_identifiers() {
     assert_eq!(
         parse("sHoW TaBlEs;").expect("SHOW TABLES parses"),
         Statement::ShowTables
+    );
+    assert_eq!(
+        parse("ShOw CrEaTe TaBlE Accounts;").expect("SHOW CREATE TABLE parses"),
+        Statement::ShowCreateTable(ShowCreateTable {
+            table: String::from("accounts"),
+        })
     );
     assert_eq!(
         parse("DeScRiBe Accounts").expect("DESCRIBE parses"),
@@ -19,12 +25,36 @@ fn parses_show_tables_and_normalizes_describe_identifiers() {
 #[test]
 fn metadata_statements_report_exact_missing_argument_spans() {
     assert!(matches!(
-        parse("SHOW CREATE"),
+        parse("SHOW widgets"),
         Err(Error::Parse {
             ref message,
             span_start: 5,
+            span_end: 12,
+        }) if message == "expected TABLES or CREATE TABLE after SHOW"
+    ));
+    assert!(matches!(
+        parse("SHOW CREATE"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 11,
             span_end: 11,
-        }) if message == "expected keyword TABLES"
+        }) if message == "expected keyword TABLE"
+    ));
+    assert!(matches!(
+        parse("SHOW CREATE widgets"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 12,
+            span_end: 19,
+        }) if message == "expected keyword TABLE"
+    ));
+    assert!(matches!(
+        parse("SHOW CREATE TABLE"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 17,
+            span_end: 17,
+        }) if message == "expected an identifier"
     ));
     assert!(matches!(
         parse("DESCRIBE"),
@@ -40,6 +70,12 @@ fn metadata_statements_report_exact_missing_argument_spans() {
 fn quoted_identifiers_disambiguate_reserved_words() {
     parse("CREATE TABLE \"select\" (\"from\" INTEGER, CHECK (\"from\" >= 0))")
         .expect("quoted reserved identifiers parse");
+    assert_eq!(
+        parse("SHOW CREATE TABLE \"SELECT\"").expect("quoted SHOW CREATE target parses"),
+        Statement::ShowCreateTable(ShowCreateTable {
+            table: String::from("select"),
+        })
+    );
     assert!(matches!(
         parse("CREATE TABLE \"1x\" (id INTEGER)"),
         Err(Error::Parse {
@@ -99,6 +135,12 @@ fn metadata_statement_words_are_reserved_and_cannot_be_used_as_identifiers() {
     assert_eq!(
         parse("DESCRIBE \"show\"").expect("a quoted SHOW is a DESCRIBE argument"),
         Statement::DescribeTable(DescribeTable {
+            table: String::from("show"),
+        })
+    );
+    assert_eq!(
+        parse("SHOW CREATE TABLE \"show\"").expect("a quoted SHOW is a SHOW CREATE argument"),
+        Statement::ShowCreateTable(ShowCreateTable {
             table: String::from("show"),
         })
     );

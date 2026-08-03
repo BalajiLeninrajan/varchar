@@ -75,7 +75,7 @@ fn metadata_statement_words_are_reserved_identifiers() {
         );
     }
 
-    // Quoting stays the escape hatch.
+    // Quoting stays the escape hatch, and SHOW CREATE TABLE replays it verbatim.
     execute(
         &mut database,
         "CREATE TABLE \"show\" (\"describe\" INTEGER, \"tables\" TEXT)",
@@ -95,6 +95,121 @@ fn metadata_statement_words_are_reserved_identifiers() {
     assert_eq!(
         row_set(&mut reloaded, "DESCRIBE \"show\"").rows()[0][0],
         Value::Text(String::from("describe"))
+    );
+    assert_eq!(
+        row_set(&mut reloaded, "SHOW CREATE TABLE \"show\"").rows()[0][1],
+        Value::Text(String::from(
+            "CREATE TABLE \"show\" (\"describe\" INTEGER, \"tables\" TEXT)",
+        ))
+    );
+}
+
+#[test]
+fn show_create_quotes_reserved_catalog_identifiers_for_replay() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE \"select\" (\"order\" INTEGER PRIMARY KEY)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE \"from\" (\
+            \"where\" INTEGER REFERENCES \"select\"(\"order\"), \
+            \"group\" TEXT, \
+            CHECK (\"group\" != '')\
+        )",
+    );
+
+    let parent = row_set(&mut database, "SHOW CREATE TABLE \"select\"").into_rows()[0][1].clone();
+    let child = row_set(&mut database, "SHOW CREATE TABLE \"from\"").into_rows()[0][1].clone();
+    assert_eq!(
+        parent,
+        Value::Text(String::from(
+            "CREATE TABLE \"select\" (\"order\" INTEGER NOT NULL PRIMARY KEY)"
+        ))
+    );
+    assert_eq!(
+        child,
+        Value::Text(String::from(
+            "CREATE TABLE \"from\" (\"where\" INTEGER REFERENCES \"select\"(\"order\") \
+             ON DELETE RESTRICT ON UPDATE RESTRICT, \"group\" TEXT, CHECK (\"group\" != ''))"
+        ))
+    );
+
+    let mut recreated = Database::new();
+    let Value::Text(parent) = parent else {
+        unreachable!("SHOW CREATE returns text")
+    };
+    let Value::Text(child) = child else {
+        unreachable!("SHOW CREATE returns text")
+    };
+    execute(&mut recreated, &parent);
+    execute(&mut recreated, &child);
+    assert_eq!(
+        row_set(&mut recreated, "SHOW CREATE TABLE \"from\"").rows()[0][1],
+        Value::Text(child)
+    );
+}
+
+#[test]
+fn show_create_replays_quoted_clause_words_beside_the_clauses_they_name() {
+    let mut database = Database::new();
+
+    // One predicate drives both consumers, so the words the parser refuses as
+    // bare identifiers are exactly the words the writer has to quote back.
+    assert!(
+        matches!(
+            database.execute("CREATE TABLE t (default TEXT DEFAULT 'pending')"),
+            Err(Error::Parse { ref message, .. })
+                if message == "reserved keyword `DEFAULT` cannot be used as an identifier"
+        ),
+        "expected DEFAULT to be reserved as a column name"
+    );
+
+    execute(
+        &mut database,
+        "CREATE TABLE \"check\" (\
+            \"default\" TEXT DEFAULT 'pending', \
+            \"unique\" INTEGER UNIQUE DEFAULT 0, \
+            \"offset\" INTEGER DEFAULT 5, \
+            CHECK (\"default\" != '')\
+        )",
+    );
+
+    let ddl = row_set(&mut database, "SHOW CREATE TABLE \"check\"").into_rows()[0][1].clone();
+    assert_eq!(
+        ddl,
+        Value::Text(String::from(
+            "CREATE TABLE \"check\" (\"default\" TEXT DEFAULT 'pending', \
+             \"unique\" INTEGER UNIQUE DEFAULT 0, \"offset\" INTEGER DEFAULT 5, \
+             CHECK (\"default\" != ''))"
+        ))
+    );
+
+    let Value::Text(ddl) = ddl else {
+        unreachable!("SHOW CREATE returns text")
+    };
+    let mut recreated = Database::new();
+    execute(&mut recreated, &ddl);
+    execute(
+        &mut recreated,
+        "INSERT INTO \"check\" (\"offset\") VALUES (9)",
+    );
+    assert_eq!(
+        row_set(
+            &mut recreated,
+            "SELECT \"default\", \"unique\", \"offset\" FROM \"check\""
+        )
+        .into_rows(),
+        vec![vec![
+            Value::Text(String::from("pending")),
+            Value::Integer(0),
+            Value::Integer(9),
+        ]]
+    );
+    assert_eq!(
+        row_set(&mut recreated, "SHOW CREATE TABLE \"check\"").rows()[0][1],
+        Value::Text(ddl)
     );
 }
 
@@ -258,12 +373,92 @@ fn describe_renders_defaults_as_sql_literals_rather_than_display_text() {
 }
 
 #[test]
-fn describe_uses_existing_unknown_table_diagnostic() {
+fn show_create_table_returns_canonical_roundtrippable_sql() {
     let mut database = Database::new();
-    assert!(matches!(
-        database.execute("DESCRIBE missing"),
-        Err(Error::Schema(message)) if message == "unknown table \"missing\""
-    ));
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE widgets (\
+            id INTEGER PRIMARY KEY AUTO_INCREMENT, \
+            email TEXT NOT NULL UNIQUE DEFAULT 'it''s', \
+            active BOOLEAN DEFAULT FALSE, \
+            note TEXT DEFAULT NULL, \
+            minimum INTEGER DEFAULT -9223372036854775808, \
+            parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL, \
+            code TEXT, \
+            CHECK ((active = TRUE OR note IS NULL) \
+                AND email != 'can''t' \
+                AND minimum IN (-9223372036854775808, 0) \
+                AND code LIKE 'a\\_\\%\\\\%')\
+        )",
+    );
+    execute(
+        &mut database,
+        "INSERT INTO widgets (email, code) VALUES ('live', 'a_%\\tail')",
+    );
+    let before = database.as_str().to_owned();
+
+    let result = row_set(&mut database, "sHoW CrEaTe TaBlE Widgets;");
+    assert_eq!(database.as_str(), before);
+    assert_eq!(result.columns().len(), 2);
+    assert_eq!(result.columns()[0].label(), "table_name");
+    assert_eq!(result.columns()[1].label(), "create_statement");
+    assert!(result.columns().iter().all(|column| {
+        column.origin().table() == "information_schema.tables"
+            && column.data_type() == DataType::Text
+            && !column.nullable()
+    }));
+    assert_eq!(result.columns()[0].origin().column(), "table_name");
+    assert_eq!(result.columns()[1].origin().column(), "create_statement");
+
+    let expected = "CREATE TABLE widgets (\
+        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \
+        email TEXT NOT NULL UNIQUE DEFAULT 'it''s', \
+        active BOOLEAN DEFAULT FALSE, \
+        note TEXT DEFAULT NULL, \
+        minimum INTEGER DEFAULT -9223372036854775808, \
+        parent_id INTEGER REFERENCES parents(id) ON DELETE SET NULL ON UPDATE CASCADE, \
+        code TEXT, \
+        CHECK (((active = TRUE OR note IS NULL) \
+            AND email != 'can''t' \
+            AND minimum IN (-9223372036854775808, 0) \
+            AND code LIKE 'a\\_\\%\\\\%'))\
+    )";
+    assert_eq!(
+        result.into_rows(),
+        vec![vec![
+            Value::Text(String::from("widgets")),
+            Value::Text(String::from(expected)),
+        ]]
+    );
+
+    let mut recreated = Database::new();
+    execute(
+        &mut recreated,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+    );
+    execute(&mut recreated, expected);
+    assert_eq!(
+        row_set(&mut recreated, "SHOW CREATE TABLE widgets").into_rows(),
+        vec![vec![
+            Value::Text(String::from("widgets")),
+            Value::Text(String::from(expected)),
+        ]]
+    );
+}
+
+#[test]
+fn metadata_statements_use_existing_unknown_table_diagnostic() {
+    let mut database = Database::new();
+    for sql in ["DESCRIBE missing", "SHOW CREATE TABLE missing"] {
+        assert!(matches!(
+            database.execute(sql),
+            Err(Error::Schema(message)) if message == "unknown table \"missing\""
+        ));
+    }
 }
 
 #[test]
@@ -276,7 +471,7 @@ fn metadata_results_obey_exact_output_boundaries_without_query_working_state() {
     );
     let source = database.into_string();
 
-    for sql in ["SHOW TABLES", "DESCRIBE first"] {
+    for sql in ["SHOW TABLES", "DESCRIBE first", "SHOW CREATE TABLE first"] {
         let exact = minimum_output_limit(&source, sql);
         let mut exact_database = Database::from_string_with_limits(
             source.clone(),

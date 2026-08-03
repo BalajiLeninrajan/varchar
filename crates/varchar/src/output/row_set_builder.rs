@@ -13,6 +13,7 @@ pub(crate) struct ResultColumnSpec<'a> {
 
 pub(crate) enum ResultCell<'a> {
     Text(&'a str),
+    OwnedText(String),
     Boolean(bool),
     Null,
     /// Renders a value as the SQL literal that parses back to it, so a TEXT
@@ -72,7 +73,19 @@ impl RowSetBuilder {
         })
     }
 
-    pub(crate) fn push(&mut self, cells: &[ResultCell<'_>]) -> Result<()> {
+    pub(crate) fn preflight_row_payload(&self, payload_bytes: usize) -> Result<()> {
+        self.output_budget
+            .check_transient(self.row_bytes(payload_bytes)?)
+    }
+
+    pub(crate) const fn limit_error(&self) -> Error {
+        self.output_budget.limit_error()
+    }
+
+    pub(crate) fn push<const WIDTH: usize>(
+        &mut self,
+        cells: [ResultCell<'_>; WIDTH],
+    ) -> Result<()> {
         if cells.len() != self.columns.len() {
             return Err(Error::Capacity {
                 operation: "materializing a result row with the declared width",
@@ -83,10 +96,7 @@ impl RowSetBuilder {
                 .checked_add(cell.payload_bytes())
                 .ok_or_else(|| self.output_budget.limit_error())
         })?;
-        let row_bytes = self
-            .row_structure_bytes
-            .checked_add(payload_bytes)
-            .ok_or_else(|| self.output_budget.limit_error())?;
+        let row_bytes = self.row_bytes(payload_bytes)?;
         self.output_budget.charge(row_bytes)?;
 
         self.rows
@@ -102,6 +112,12 @@ impl RowSetBuilder {
         Ok(())
     }
 
+    fn row_bytes(&self, payload_bytes: usize) -> Result<usize> {
+        self.row_structure_bytes
+            .checked_add(payload_bytes)
+            .ok_or_else(|| self.output_budget.limit_error())
+    }
+
     pub(crate) fn finish(self) -> RowSet {
         RowSet::new(self.columns, self.rows)
     }
@@ -111,15 +127,17 @@ impl ResultCell<'_> {
     fn payload_bytes(&self) -> usize {
         match self {
             Self::Text(value) => value.len(),
+            Self::OwnedText(value) => value.len(),
             Self::Boolean(_) | Self::Null => 0,
             Self::DisplayValue(value) => format_value_len(value),
         }
     }
 
-    fn materialize(&self) -> Result<Value> {
+    fn materialize(self) -> Result<Value> {
         match self {
             Self::Text(value) => clone_text_value(value),
-            Self::Boolean(value) => Ok(Value::Boolean(*value)),
+            Self::OwnedText(value) => Ok(Value::Text(value)),
+            Self::Boolean(value) => Ok(Value::Boolean(value)),
             Self::Null => Ok(Value::Null),
             Self::DisplayValue(value) => display_value(value).map(Value::Text),
         }

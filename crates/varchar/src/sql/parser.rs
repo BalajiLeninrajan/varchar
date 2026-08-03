@@ -10,6 +10,7 @@ mod select;
 use std::ops::Range;
 
 use super::ast::{ColumnRef, Statement};
+use super::is_reserved_identifier;
 use super::lexer::{
     Token, TokenKind, comparison_error, lex_for_parser, unexpected_character_error,
 };
@@ -249,7 +250,7 @@ impl Parser {
     fn expect_identifier(&mut self) -> Result<String> {
         let span = self.current().span;
         match self.current().kind.clone() {
-            TokenKind::Word(word) if !is_reserved(&word) => {
+            TokenKind::Word(word) if !is_reserved_identifier(&word) => {
                 self.advance();
                 Ok(word.to_ascii_lowercase())
             }
@@ -377,56 +378,6 @@ fn trailing_feature(word: &str) -> Option<&'static str> {
         "AS" => Some("aliases"),
         _ => None,
     }
-}
-
-fn is_reserved(word: &str) -> bool {
-    matches!(
-        word,
-        "CREATE"
-            | "TABLE"
-            | "INSERT"
-            | "INTO"
-            | "VALUES"
-            | "SELECT"
-            | "FROM"
-            | "WHERE"
-            | "UPDATE"
-            | "SET"
-            | "DELETE"
-            | "EXPLAIN"
-            | "REGEX"
-            | "AND"
-            | "OR"
-            | "IS"
-            | "IN"
-            | "NOT"
-            | "NULL"
-            | "LIKE"
-            | "TEXT"
-            | "INTEGER"
-            | "BOOLEAN"
-            | "TRUE"
-            | "FALSE"
-            | "AS"
-            | "JOIN"
-            | "ORDER"
-            | "BY"
-            | "ASC"
-            | "DESC"
-            | "GROUP"
-            | "LIMIT"
-            | "OFFSET"
-            | "ALTER"
-            | "DROP"
-            | "DEFAULT"
-            | "UNIQUE"
-            | "CHECK"
-            | "CASCADE"
-            | "RESTRICT"
-            | "SHOW"
-            | "DESCRIBE"
-            | "TABLES"
-    )
 }
 
 fn is_identifier(identifier: &str) -> bool {
