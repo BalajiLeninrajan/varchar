@@ -188,6 +188,34 @@ pub(super) fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize
     )
 }
 
+pub(super) fn validate_check_value_at(
+    encoded: &str,
+    data_type: DataType,
+    offset: usize,
+) -> Result<()> {
+    validate_typed_value_at(
+        encoded,
+        data_type,
+        true,
+        offset,
+        "NULL is invalid in this CHECK operand",
+    )
+}
+
+pub(super) fn decode_check_value_at(
+    encoded: &str,
+    data_type: DataType,
+    offset: usize,
+) -> Result<Value> {
+    decode_typed_value_at(
+        encoded,
+        data_type,
+        true,
+        offset,
+        "NULL is invalid in this CHECK operand",
+    )
+}
+
 fn validate_typed_value_at(
     encoded: &str,
     data_type: DataType,
@@ -208,7 +236,7 @@ fn validate_typed_value_at(
             let payload = encoded
                 .strip_prefix('T')
                 .ok_or_else(|| corrupt(offset, "cell type does not match TEXT column"))?;
-            scan_text(payload, offset + 1, |_| {})
+            scan_text(payload, offset + 1, |_, _| true)
         }
         DataType::Integer => {
             let payload = encoded
@@ -279,7 +307,10 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
     decoded
         .try_reserve(payload.len())
         .map_err(|_| allocation_error("reserving decoded text"))?;
-    scan_text(payload, offset, |character| decoded.push(character))?;
+    scan_text(payload, offset, |character, _| {
+        decoded.push(character);
+        true
+    })?;
     Ok(decoded)
 }
 

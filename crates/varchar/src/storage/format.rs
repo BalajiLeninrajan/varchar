@@ -194,7 +194,11 @@ pub(crate) fn encode_text_into(value: &str, encoded: &mut String) {
     }
 }
 
-pub(super) fn scan_text(payload: &str, offset: usize, mut accept: impl FnMut(char)) -> Result<()> {
+pub(super) fn scan_text(
+    payload: &str,
+    offset: usize,
+    mut accept: impl FnMut(char, usize) -> bool,
+) -> Result<()> {
     let bytes = payload.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -221,7 +225,9 @@ pub(super) fn scan_text(payload: &str, offset: usize, mut accept: impl FnMut(cha
                     "unnecessary noncanonical text escape",
                 ));
             }
-            accept(character);
+            if !accept(character, offset + index) {
+                return Ok(());
+            }
             index += 7;
             continue;
         }
@@ -233,7 +239,9 @@ pub(super) fn scan_text(payload: &str, offset: usize, mut accept: impl FnMut(cha
         if must_escape(character) {
             return Err(corrupt(offset + index, "unescaped structural character"));
         }
-        accept(character);
+        if !accept(character, offset + index) {
+            return Ok(());
+        }
         index += character.len_utf8();
     }
     Ok(())

@@ -120,14 +120,14 @@ fn persisted_check_numeric_fields_use_a_u32_grammar() {
         (MAX_U32, "CHECK column position is outside its table"),
         (ABOVE_U32, "invalid CHECK column position"),
     ] {
-        let program = format!("ISNULL|{column}");
+        let program = format!("EQ|{column}|I1");
         assert!(matches!(
             decode_program(
                 &schema,
                 CheckMetadata {
                     table: "t",
                     program: &program,
-                    program_offset: OFFSET - "ISNULL|".len(),
+                    program_offset: OFFSET - "EQ|".len(),
                 },
                 0,
                 usize::MAX,
@@ -142,9 +142,10 @@ fn persisted_check_numeric_fields_use_a_u32_grammar() {
 #[test]
 fn predicate_limit_is_checked_before_reconstruction_budget() {
     let schema = text_schema();
-    for (program, existing, max_predicates) in
-        [("ISNULL|0", 1, 1), ("AND|2|ISNULL|0|NOTNULL|0", 0, 1)]
-    {
+    for (program, existing, max_predicates) in [
+        ("IN|0|2|Tone|Ttwo", 1, 2),
+        ("AND|2|EQ|0|Tone|EQ|0|Ttwo", 0, 1),
+    ] {
         let error = decode_program(
             &schema,
             CheckMetadata {
@@ -171,7 +172,7 @@ fn predicate_limit_is_checked_before_reconstruction_budget() {
 #[test]
 fn malformed_programs_are_rejected_before_working_budget_is_consumed() {
     let schema = text_schema();
-    let program = "AND|3|ISNULL|0|NOTNULL|0|BAD";
+    let program = "AND|2|IN|0|3|Tone|Ttwo|Tthree|BAD";
     let error = decode_program(
         &schema,
         CheckMetadata {

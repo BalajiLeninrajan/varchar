@@ -42,7 +42,7 @@ pub(super) fn decode_program(
         "reserving decoded CHECK nodes",
     )?;
     while let Some(opcode) = fields.next() {
-        let (node, _) = decode_node(schema, opcode, &mut fields)?;
+        let (node, _) = decode_node(schema, opcode, &mut fields, budget)?;
         nodes.push(node);
     }
     Ok((CheckProgram::new(nodes), predicates))
