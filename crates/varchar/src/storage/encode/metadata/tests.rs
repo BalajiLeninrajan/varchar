@@ -1,4 +1,8 @@
-use super::{encode_table_metadata, measure_table_metadata};
+use super::{
+    encode_auto_increment_record, encode_auto_increment_record_prevalidated, encode_table_metadata,
+    encoded_auto_increment_record_len, encoded_auto_increment_record_len_prevalidated,
+    measure_table_metadata,
+};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::storage::{ForeignKey, TableSchema};
 use crate::{DataType, SchemaColumn, Value};
@@ -166,4 +170,106 @@ fn highly_escaped_check_like_literals_have_exact_canonical_expansion() {
         encode_table_metadata(&schema, None, measured).expect("metadata encodes"),
         expected
     );
+}
+
+#[test]
+fn auto_increment_measurement_matches_encoding_with_v3_check_metadata() {
+    let schema = TableSchema {
+        name: String::from("checked_ids"),
+        columns: vec![column("id", DataType::Integer, false, None)],
+        primary_key: Some(0),
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: vec![predicate(CheckPredicate::GreaterThanOrEqual {
+            column: 0,
+            value: Value::Integer(0),
+        })],
+    };
+
+    for last in [9, 10, i64::MAX] {
+        let encoded = encode_auto_increment_record(&schema, 0, last)
+            .expect("auto-increment metadata encodes");
+        let prevalidated = encode_auto_increment_record_prevalidated(&schema, 0, last)
+            .expect("catalog-backed auto-increment metadata encodes");
+        assert_eq!(prevalidated, encoded);
+        assert_eq!(
+            encoded_auto_increment_record_len(&schema, 0, last)
+                .expect("auto-increment metadata measures"),
+            encoded.len()
+        );
+        assert_eq!(
+            encoded_auto_increment_record_len_prevalidated(&schema, 0, last)
+                .expect("catalog-backed auto-increment metadata measures"),
+            encoded.len()
+        );
+    }
+}
+
+#[test]
+fn prevalidated_auto_increment_matches_legacy_schema_bytes() {
+    let schema = TableSchema {
+        name: String::from("ids"),
+        columns: vec![column("id", DataType::Integer, false, None)],
+        primary_key: Some(0),
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: Vec::new(),
+    };
+
+    for last in [0, 9, 10, 99, 100] {
+        assert_eq!(
+            encode_auto_increment_record_prevalidated(&schema, 0, last)
+                .expect("catalog-backed metadata encodes"),
+            encode_auto_increment_record(&schema, 0, last).expect("full metadata encodes")
+        );
+    }
+}
+
+#[test]
+fn prevalidated_auto_increment_ignores_unrelated_invalid_check_metadata() {
+    let schema = TableSchema {
+        name: String::from("checked_ids"),
+        columns: vec![column("id", DataType::Integer, false, None)],
+        primary_key: Some(0),
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: vec![predicate(CheckPredicate::GreaterThanOrEqual {
+            column: 1,
+            value: Value::Integer(0),
+        })],
+    };
+
+    assert!(encode_auto_increment_record(&schema, 0, 10).is_err());
+    let encoded = encode_auto_increment_record_prevalidated(&schema, 0, 10)
+        .expect("valid sequence facts are sufficient on a validated catalog path");
+    assert_eq!(encoded, "~A|checked_ids|id|I10;");
+    assert_eq!(
+        encoded_auto_increment_record_len_prevalidated(&schema, 0, 10)
+            .expect("catalog-backed sequence measures"),
+        encoded.len()
+    );
+}
+
+#[test]
+fn prevalidated_auto_increment_rejects_invalid_sequence_facts_without_panicking() {
+    let integer_schema = TableSchema {
+        name: String::from("items"),
+        columns: vec![column("id", DataType::Integer, false, None)],
+        primary_key: Some(0),
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: Vec::new(),
+    };
+    assert!(encoded_auto_increment_record_len_prevalidated(&integer_schema, 1, 0).is_err());
+    assert!(encoded_auto_increment_record_len_prevalidated(&integer_schema, 0, -1).is_err());
+
+    let text_schema = TableSchema {
+        name: String::from("items"),
+        columns: vec![column("id", DataType::Text, false, None)],
+        primary_key: Some(0),
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: Vec::new(),
+    };
+    assert!(encode_auto_increment_record_prevalidated(&text_schema, 0, 0).is_err());
 }

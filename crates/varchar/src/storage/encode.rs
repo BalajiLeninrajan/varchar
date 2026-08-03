@@ -6,7 +6,7 @@ mod metadata;
 mod tests;
 
 pub(super) use metadata::{
-    encode_auto_increment_record, encode_table_metadata, measure_table_metadata,
+    encode_auto_increment_record_prevalidated, encode_table_metadata, measure_table_metadata,
 };
 
 use std::fmt::Write as _;
