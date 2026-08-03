@@ -48,8 +48,7 @@ impl RowIdentity {
 }
 
 #[derive(Debug)]
-struct DirectOverlay {
-    column: usize,
+struct UpdateOverlay {
     value: Value,
 }
 
@@ -81,31 +80,28 @@ impl<'assignments> PreparedDirectUpdate<'assignments> {
         self.assignments
     }
 
+    #[cfg(test)]
     fn value_at<'values>(
         &'values self,
         original_values: &'values [Value],
         column: usize,
-        next_assignment: &Cell<usize>,
     ) -> Option<&'values Value> {
-        let position = next_assignment.get();
-        if let Some((assigned, value)) = self.assignments.get(position) {
-            if *assigned == column {
-                next_assignment.set(position + 1);
-                return Some(value);
-            }
-            debug_assert!(*assigned > column);
-        }
-        original_values.get(column)
+        self.assignments
+            .binary_search_by_key(&column, |(assigned, _)| *assigned)
+            .ok()
+            .map_or_else(
+                || original_values.get(column),
+                |position| Some(&self.assignments[position].1),
+            )
     }
 }
 
 #[derive(Debug)]
 enum MutationState {
     Fresh,
-    MeasuredUpdate,
-    InstalledUpdate {
-        direct_overlays: Vec<DirectOverlay>,
-        overlay_working_bytes: usize,
+    PendingUpdate {
+        overlays: Vec<Option<UpdateOverlay>>,
+        working_bytes: usize,
     },
     PendingSetNull {
         columns: Vec<usize>,
@@ -144,20 +140,18 @@ impl FrozenRow {
         self.original_values.get(column)
     }
 
+    #[cfg(test)]
     pub(super) fn measure_direct_update<'brand>(
-        &mut self,
+        &self,
         update: &PreparedDirectUpdate<'_>,
         encoder: &ValidatedRowEncoder<'_, 'brand>,
     ) -> Result<MeasuredRowEncoding<'brand>> {
         if !matches!(self.mutation, MutationState::Fresh) {
             return Err(direct_conflict(self.identity));
         }
-        let next_assignment = Cell::new(0);
-        let measured = encoder.measure(self.original_values.len(), |column| {
-            update.value_at(&self.original_values, column, &next_assignment)
-        })?;
-        self.mutation = MutationState::MeasuredUpdate;
-        Ok(measured)
+        encoder.measure(self.original_values.len(), |column| {
+            update.value_at(&self.original_values, column)
+        })
     }
 
     pub(super) fn install_direct_update(
@@ -165,51 +159,60 @@ impl FrozenRow {
         update: &PreparedDirectUpdate<'_>,
         budget: &mut WorkingBudget,
     ) -> Result<()> {
-        if !matches!(self.mutation, MutationState::MeasuredUpdate) {
+        if !matches!(self.mutation, MutationState::Fresh) {
             return Err(direct_conflict(self.identity));
         }
 
-        let assignments = update.assignments();
-        let payload_bytes = assignments.iter().try_fold(0_usize, |total, (_, value)| {
-            total
-                .checked_add(value_payload_bytes(value))
-                .ok_or_else(|| budget.limit_error())
-        })?;
-        let mut direct_overlays = Vec::new();
-        let descriptor_bytes = budget.reserve_exact(
-            &mut direct_overlays,
-            assignments.len(),
-            "reserving direct mutation overlays",
-        )?;
+        let (mut overlays, descriptor_bytes) = self.allocate_update_overlays(budget)?;
+        let payload_bytes =
+            update
+                .assignments()
+                .iter()
+                .try_fold(0_usize, |total, (_, value)| {
+                    total
+                        .checked_add(value_payload_bytes(value))
+                        .ok_or_else(|| budget.limit_error())
+                })?;
         if let Err(error) = budget.charge(payload_bytes) {
-            drop(direct_overlays);
+            drop(overlays);
             budget.release(descriptor_bytes);
             return Err(error);
         }
 
-        for (column, value) in assignments {
+        for (column, value) in update.assignments() {
             let value = match clone_value(value) {
                 Ok(value) => value,
                 Err(error) => {
-                    drop(direct_overlays);
+                    drop(overlays);
                     budget.release(payload_bytes);
                     budget.release(descriptor_bytes);
                     return Err(error);
                 }
             };
-            direct_overlays.push(DirectOverlay {
-                column: *column,
-                value,
-            });
+            overlays[*column] = Some(UpdateOverlay { value });
         }
-        let overlay_working_bytes = descriptor_bytes
+        let working_bytes = descriptor_bytes
             .checked_add(payload_bytes)
             .expect("successful storage-working charges fit in usize");
-        self.mutation = MutationState::InstalledUpdate {
-            direct_overlays,
-            overlay_working_bytes,
+        self.mutation = MutationState::PendingUpdate {
+            overlays,
+            working_bytes,
         };
         Ok(())
+    }
+
+    fn allocate_update_overlays(
+        &self,
+        budget: &mut WorkingBudget,
+    ) -> Result<(Vec<Option<UpdateOverlay>>, usize)> {
+        let mut overlays = Vec::new();
+        let working_bytes = budget.reserve_exact(
+            &mut overlays,
+            self.original_values.len(),
+            "reserving mutation update overlays",
+        )?;
+        overlays.resize_with(self.original_values.len(), || None);
+        Ok((overlays, working_bytes))
     }
 
     pub(super) fn request_delete(&mut self, budget: &mut WorkingBudget) -> Result<bool> {
@@ -226,9 +229,9 @@ impl FrozenRow {
                 Ok(true)
             }
             MutationState::Deleted => Ok(false),
-            MutationState::MeasuredUpdate
-            | MutationState::InstalledUpdate { .. }
-            | MutationState::EncodedUpdate(_) => Err(direct_conflict(self.identity)),
+            MutationState::PendingUpdate { .. } | MutationState::EncodedUpdate(_) => {
+                Err(direct_conflict(self.identity))
+            }
         }
     }
 
@@ -269,9 +272,9 @@ impl FrozenRow {
                 Ok(())
             }
             MutationState::Deleted => Ok(()),
-            MutationState::MeasuredUpdate
-            | MutationState::InstalledUpdate { .. }
-            | MutationState::EncodedUpdate(_) => Err(direct_conflict(self.identity)),
+            MutationState::PendingUpdate { .. } | MutationState::EncodedUpdate(_) => {
+                Err(direct_conflict(self.identity))
+            }
         }
     }
 
@@ -316,29 +319,35 @@ impl FrozenRow {
         matches!(self.mutation, MutationState::PendingSetNull { .. })
     }
 
+    pub(super) fn measure_effective_update<'brand>(
+        &self,
+        encoder: &ValidatedRowEncoder<'_, 'brand>,
+    ) -> Result<MeasuredRowEncoding<'brand>> {
+        let MutationState::PendingUpdate { overlays, .. } = &self.mutation else {
+            return Err(direct_conflict(self.identity));
+        };
+        encoder.measure(self.original_values.len(), |column| {
+            effective_update_value(&self.original_values, overlays, column)
+        })
+    }
+
     pub(super) fn encode_effective_update<'brand>(
         &mut self,
         encoder: &ValidatedRowEncoder<'_, 'brand>,
         measured: MeasuredRowEncoding<'brand>,
         budget: &mut WorkingBudget,
     ) -> Result<()> {
-        let (direct_overlays, overlay_working_bytes) = match &self.mutation {
-            MutationState::InstalledUpdate {
-                direct_overlays,
-                overlay_working_bytes,
-            } => (direct_overlays, *overlay_working_bytes),
+        let (overlays, overlay_working_bytes) = match &self.mutation {
+            MutationState::PendingUpdate {
+                overlays,
+                working_bytes,
+            } => (overlays, *working_bytes),
             _ => return Err(direct_conflict(self.identity)),
         };
         let encoded_len = measured.encoded_len();
         budget.charge(encoded_len)?;
-        let next_overlay = Cell::new(0);
         let encoded = match encoder.encode(measured, |column| {
-            effective_value(
-                &self.original_values,
-                direct_overlays,
-                column,
-                &next_overlay,
-            )
+            effective_update_value(&self.original_values, overlays, column)
         }) {
             Ok(encoded) => encoded,
             Err(error) => {
@@ -358,8 +367,7 @@ impl FrozenRow {
             MutationState::EncodedUpdate(encoded) => Ok(Some(encoded)),
             MutationState::Deleted => Ok(None),
             MutationState::Fresh
-            | MutationState::MeasuredUpdate
-            | MutationState::InstalledUpdate { .. }
+            | MutationState::PendingUpdate { .. }
             | MutationState::PendingSetNull { .. } => Err(Error::Capacity {
                 operation: "reading a planned row replacement",
             }),
@@ -382,21 +390,15 @@ fn effective_set_null_value<'values>(
     original_values.get(column)
 }
 
-fn effective_value<'values>(
+fn effective_update_value<'values>(
     original_values: &'values [Value],
-    direct_overlays: &'values [DirectOverlay],
+    overlays: &'values [Option<UpdateOverlay>],
     column: usize,
-    next_overlay: &Cell<usize>,
 ) -> Option<&'values Value> {
-    let position = next_overlay.get();
-    if let Some(overlay) = direct_overlays.get(position) {
-        if overlay.column == column {
-            next_overlay.set(position + 1);
-            return Some(&overlay.value);
-        }
-        debug_assert!(overlay.column > column);
-    }
-    original_values.get(column)
+    overlays.get(column).and_then(Option::as_ref).map_or_else(
+        || original_values.get(column),
+        |overlay| Some(&overlay.value),
+    )
 }
 
 pub(super) struct WorkingBudget {

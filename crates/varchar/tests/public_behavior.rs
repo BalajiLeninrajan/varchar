@@ -910,6 +910,11 @@ fn configurable_resource_limits_fail_without_partial_work() {
     let mut database = Database::new();
     execute(&mut database, "CREATE TABLE t (id INTEGER, name TEXT)");
     execute(&mut database, "INSERT INTO t VALUES (12345, 'a result')");
+    execute(&mut database, "CREATE TABLE padding (value TEXT NOT NULL)");
+    execute(
+        &mut database,
+        &format!("INSERT INTO padding VALUES ('{}')", "x".repeat(1_024)),
+    );
     let blob = database.into_string();
 
     let predicate_limits = Limits {

@@ -15,10 +15,9 @@ use referential::{ReferentialIndex, enforce_update_restrict};
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
 use crate::query::{self, ScanPlan};
-use crate::storage::{
-    self, Candidate, Catalog, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
-    with_validated_row_encoder,
-};
+use crate::storage::{self, Candidate, Catalog, RowLayout, with_validated_row_encoder};
+#[cfg(test)]
+use crate::storage::{MeasuredRowEncoding, ValidatedRowEncoder};
 use crate::{Error, Resource, Result, Value};
 
 pub(super) struct MutationPlan {
@@ -51,6 +50,10 @@ impl MutationPlan {
         let layout = scan.validated_row_layout();
         let update =
             PreparedDirectUpdate::new(assignments, layout.column_count(), rows[0].identity())?;
+        for row in &mut rows {
+            row.install_direct_update(&update, &mut budget)?;
+        }
+
         let parent_schema = candidate
             .catalog()
             .table(scan.row_layout().table)
@@ -63,25 +66,15 @@ impl MutationPlan {
             &update,
             &mut budget,
         )?;
-        with_validated_row_encoder(layout, |encoder| -> Result<()> {
-            let (measurements, measurement_working_bytes) = measure_and_check_update_database_size(
-                blob.len(),
-                limits.max_database_bytes,
-                &mut rows,
-                &encoder,
-                &update,
-                sequence_edit_lengths,
-                &mut budget,
-            )?;
-            for row in &mut rows {
-                row.install_direct_update(&update, &mut budget)?;
-            }
-            for (row, measured) in rows.iter_mut().zip(measurements) {
-                row.encode_effective_update(&encoder, measured, &mut budget)?;
-            }
-            budget.release(measurement_working_bytes);
-            Ok(())
-        })?;
+
+        encode_and_check_updates(
+            candidate.catalog(),
+            blob,
+            limits,
+            &mut rows,
+            sequence_edit_lengths,
+            &mut budget,
+        )?;
         if let Some((_, sequence_replacement_bytes)) = sequence_edit_lengths {
             budget.check_transient(sequence_replacement_bytes)?;
         }
@@ -266,6 +259,7 @@ fn freeze_direct_targets(
     Ok((rows, direct_affected, budget))
 }
 
+#[cfg(test)]
 fn measure_and_check_update_database_size<'brand>(
     source_bytes: usize,
     limit: usize,
@@ -297,6 +291,62 @@ fn measure_and_check_update_database_size<'brand>(
     }
     check_limit(projected, limit, Resource::DatabaseBytes)?;
     Ok((measurements, measurement_working_bytes))
+}
+
+fn encode_and_check_updates(
+    catalog: &Catalog,
+    blob: &str,
+    limits: &Limits,
+    rows: &mut [FrozenRow],
+    sequence_edit_lengths: Option<(usize, usize)>,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let mut projected = blob.len();
+    if let Some((original, replacement)) = sequence_edit_lengths {
+        projected =
+            replace_projected_bytes(projected, original, replacement, limits.max_database_bytes)?;
+    }
+    for row in rows.iter() {
+        let record = row_record_for_identity(blob, row.identity())?;
+        let table =
+            catalog
+                .validated_table(record.table())
+                .ok_or_else(|| Error::CorruptStorage {
+                    offset: row.identity().start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                })?;
+        let encoded_len = with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+            row.measure_effective_update(&encoder)
+                .map(|measured| measured.encoded_len())
+        })?;
+        projected = replace_projected_bytes(
+            projected,
+            row.identity().len(),
+            encoded_len,
+            limits.max_database_bytes,
+        )?;
+    }
+    check_limit(
+        projected,
+        limits.max_database_bytes,
+        Resource::DatabaseBytes,
+    )?;
+
+    for row in rows {
+        let record = row_record_for_identity(blob, row.identity())?;
+        let table =
+            catalog
+                .validated_table(record.table())
+                .ok_or_else(|| Error::CorruptStorage {
+                    offset: row.identity().start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                })?;
+        with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+            let measured = row.measure_effective_update(&encoder)?;
+            row.encode_effective_update(&encoder, measured, budget)
+        })?;
+    }
+    Ok(())
 }
 
 fn replace_projected_bytes(

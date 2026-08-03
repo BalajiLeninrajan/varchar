@@ -219,6 +219,11 @@ fn database_size_failure_rolls_back_rows_and_sequence_state() {
         "CREATE TABLE ids (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
     );
     execute(&mut database, "INSERT INTO ids (body) VALUES ('one')");
+    execute(&mut database, "CREATE TABLE padding (body TEXT NOT NULL)");
+    execute(
+        &mut database,
+        &format!("INSERT INTO padding VALUES ('{}')", "x".repeat(1_024)),
+    );
 
     let blob = database.into_string();
     let limit = blob.len();
@@ -229,16 +234,20 @@ fn database_size_failure_rolls_back_rows_and_sequence_state() {
     let mut limited = Database::from_string_with_limits(blob.clone(), limits)
         .expect("the source exactly fits its database limit");
 
-    assert!(matches!(
-        atomic_error(
-            &mut limited,
-            "UPDATE ids SET id = 100, body = 'a much longer replacement' WHERE id = 1",
+    let error = atomic_error(
+        &mut limited,
+        "UPDATE ids SET id = 100, body = 'a much longer replacement' WHERE id = 1",
+    );
+    assert!(
+        matches!(
+            error,
+            Error::ResourceLimit {
+                resource: Resource::DatabaseBytes,
+                limit: actual,
+            } if actual == limit
         ),
-        Error::ResourceLimit {
-            resource: Resource::DatabaseBytes,
-            limit: actual,
-        } if actual == limit
-    ));
+        "unexpected update failure: {error:?}"
+    );
     assert_eq!(limited.as_str(), blob);
 
     let mut reloaded =
