@@ -8,10 +8,11 @@ mod tests;
 use std::fmt::Write as _;
 
 use super::super::format::{
-    AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
-    UNIQUE_PREFIX, encode_text_into, encoded_text_len, type_tag,
+    AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
+    SCHEMA_PREFIX, UNIQUE_PREFIX, encode_text_into, encoded_text_len, type_tag,
 };
 use super::super::{TableSchema, validate_schema_for_write};
+use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::{DataType, Error, Result, Value};
 
 use self::validation::{validate_auto_increment_record, validate_table_metadata};
@@ -88,6 +89,7 @@ trait MetadataSink {
     fn push_str(&mut self, value: &str) -> Result<()>;
     fn push_char(&mut self, value: char) -> Result<()>;
     fn push_text(&mut self, value: &str) -> Result<()>;
+    fn push_usize(&mut self, value: usize) -> Result<()>;
     fn push_i64(&mut self, value: i64) -> Result<()>;
 }
 
@@ -121,6 +123,16 @@ impl MetadataSink for EncodedLength {
         self.add(encoded_text_len(value)?)
     }
 
+    fn push_usize(&mut self, mut value: usize) -> Result<()> {
+        loop {
+            self.add(1)?;
+            if value < 10 {
+                return Ok(());
+            }
+            value /= 10;
+        }
+    }
+
     fn push_i64(&mut self, value: i64) -> Result<()> {
         if value < 0 {
             self.add(1)?;
@@ -151,6 +163,11 @@ impl MetadataSink for EncodedString<'_> {
 
     fn push_text(&mut self, value: &str) -> Result<()> {
         encode_text_into(value, self.0);
+        Ok(())
+    }
+
+    fn push_usize(&mut self, value: usize) -> Result<()> {
+        let _ = write!(&mut *self.0, "{value}");
         Ok(())
     }
 
@@ -226,6 +243,10 @@ fn stream_table_metadata(
         encoded.push_str(&definition.name)?;
         encoded.push_char(';')?;
     }
+
+    for check in &schema.checks {
+        stream_check_record(schema, check, encoded)?;
+    }
     Ok(())
 }
 
@@ -243,6 +264,108 @@ fn stream_auto_increment_record(
     encoded.push_str("|I")?;
     encoded.push_i64(last)?;
     encoded.push_char(';')
+}
+
+fn stream_check_record(
+    schema: &TableSchema,
+    check: &CheckProgram,
+    encoded: &mut impl MetadataSink,
+) -> Result<()> {
+    encoded.push_str(CHECK_PREFIX)?;
+    encoded.push_str(&schema.name)?;
+    for node in check.nodes() {
+        match node {
+            CheckProgramNode::And { children } => {
+                push_field(encoded, "AND")?;
+                push_usize_field(encoded, *children)?;
+            }
+            CheckProgramNode::Or { children } => {
+                push_field(encoded, "OR")?;
+                push_usize_field(encoded, *children)?;
+            }
+            CheckProgramNode::Predicate(predicate) => {
+                stream_check_predicate(encoded, schema, predicate)?;
+            }
+        }
+    }
+    encoded.push_char(';')
+}
+
+fn stream_check_predicate(
+    encoded: &mut impl MetadataSink,
+    schema: &TableSchema,
+    predicate: &CheckPredicate,
+) -> Result<()> {
+    let column_index = predicate.column();
+    let column = &schema.columns[column_index];
+    match predicate {
+        CheckPredicate::Equal { value, .. } => {
+            stream_comparison(encoded, "EQ", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::NotEqual { value, .. } => {
+            stream_comparison(encoded, "NE", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::LessThan { value, .. } => {
+            stream_comparison(encoded, "LT", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::LessThanOrEqual { value, .. } => {
+            stream_comparison(encoded, "LE", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::GreaterThan { value, .. } => {
+            stream_comparison(encoded, "GT", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::GreaterThanOrEqual { value, .. } => {
+            stream_comparison(encoded, "GE", column_index, value, column.data_type)?;
+        }
+        CheckPredicate::Like { atoms, .. } => {
+            push_field(encoded, "LIKE")?;
+            push_usize_field(encoded, column_index)?;
+            push_usize_field(encoded, atoms.len())?;
+            for atom in atoms {
+                encoded.push_char('|')?;
+                match atom {
+                    LikeAtom::AnySequence => encoded.push_char('M')?,
+                    LikeAtom::AnyScalar => encoded.push_char('S')?,
+                    LikeAtom::Literal(character) => {
+                        encoded.push_char('L')?;
+                        let mut buffer = [0_u8; 4];
+                        encoded.push_text(character.encode_utf8(&mut buffer))?;
+                    }
+                }
+            }
+        }
+        CheckPredicate::IsNull { .. } => {
+            push_field(encoded, "ISNULL")?;
+            push_usize_field(encoded, column_index)?;
+        }
+        CheckPredicate::IsNotNull { .. } => {
+            push_field(encoded, "NOTNULL")?;
+            push_usize_field(encoded, column_index)?;
+        }
+        CheckPredicate::In { values, .. } => {
+            push_field(encoded, "IN")?;
+            push_usize_field(encoded, column_index)?;
+            push_usize_field(encoded, values.len())?;
+            for value in values {
+                encoded.push_char('|')?;
+                stream_typed_value(value, column.data_type, encoded)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stream_comparison(
+    encoded: &mut impl MetadataSink,
+    opcode: &'static str,
+    column: usize,
+    value: &Value,
+    data_type: DataType,
+) -> Result<()> {
+    push_field(encoded, opcode)?;
+    push_usize_field(encoded, column)?;
+    encoded.push_char('|')?;
+    stream_typed_value(value, data_type, encoded)
 }
 
 fn stream_typed_value(
@@ -264,4 +387,14 @@ fn stream_typed_value(
         (Value::Boolean(true), DataType::Boolean) => encoded.push_str("B1"),
         _ => unreachable!("metadata validation guarantees typed values"),
     }
+}
+
+fn push_field(encoded: &mut impl MetadataSink, field: &str) -> Result<()> {
+    encoded.push_char('|')?;
+    encoded.push_str(field)
+}
+
+fn push_usize_field(encoded: &mut impl MetadataSink, value: usize) -> Result<()> {
+    encoded.push_char('|')?;
+    encoded.push_usize(value)
 }

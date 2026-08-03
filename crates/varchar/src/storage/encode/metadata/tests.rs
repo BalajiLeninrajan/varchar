@@ -1,4 +1,5 @@
 use super::{encode_table_metadata, measure_table_metadata};
+use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::storage::{ForeignKey, TableSchema};
 use crate::{DataType, SchemaColumn, Value};
 
@@ -11,8 +12,12 @@ fn column(name: &str, data_type: DataType, nullable: bool, default: Option<Value
     }
 }
 
+fn predicate(predicate: CheckPredicate) -> CheckProgram {
+    CheckProgram::new(vec![CheckProgramNode::Predicate(predicate)])
+}
+
 #[test]
-fn exact_measurement_preserves_every_metadata_phase() {
+fn exact_measurement_preserves_every_metadata_phase_and_check_value_shape() {
     let schema = TableSchema {
         name: String::from("all_meta"),
         columns: vec![
@@ -39,7 +44,71 @@ fn exact_measurement_preserves_every_metadata_phase() {
             referenced_table: String::from("parent"),
             referenced_column: String::from("id"),
         }],
-        checks: Vec::new(),
+        checks: vec![
+            CheckProgram::new(vec![
+                CheckProgramNode::And { children: 2 },
+                CheckProgramNode::Predicate(CheckPredicate::Equal {
+                    column: 0,
+                    value: Value::Integer(i64::MIN),
+                }),
+                CheckProgramNode::Or { children: 2 },
+                CheckProgramNode::Predicate(CheckPredicate::NotEqual {
+                    column: 2,
+                    value: Value::Text(String::from("x|")),
+                }),
+                CheckProgramNode::Predicate(CheckPredicate::LessThan {
+                    column: 3,
+                    value: Value::Boolean(true),
+                }),
+            ]),
+            predicate(CheckPredicate::LessThanOrEqual {
+                column: 0,
+                value: Value::Integer(0),
+            }),
+            predicate(CheckPredicate::GreaterThan {
+                column: 0,
+                value: Value::Integer(-1),
+            }),
+            predicate(CheckPredicate::GreaterThanOrEqual {
+                column: 0,
+                value: Value::Integer(i64::MAX),
+            }),
+            predicate(CheckPredicate::Like {
+                column: 2,
+                atoms: vec![
+                    LikeAtom::AnySequence,
+                    LikeAtom::AnyScalar,
+                    LikeAtom::Literal('%'),
+                    LikeAtom::Literal('|'),
+                    LikeAtom::Literal('é'),
+                    LikeAtom::Literal('\u{2028}'),
+                    LikeAtom::Literal('\0'),
+                    LikeAtom::Literal(';'),
+                    LikeAtom::Literal('~'),
+                    LikeAtom::Literal('\u{2029}'),
+                    LikeAtom::Literal('\\'),
+                    LikeAtom::Literal('a'),
+                ],
+            }),
+            predicate(CheckPredicate::IsNull { column: 4 }),
+            predicate(CheckPredicate::IsNotNull { column: 2 }),
+            predicate(CheckPredicate::In {
+                column: 2,
+                values: vec![
+                    Value::Null,
+                    Value::Text(String::from("a;")),
+                    Value::Text(String::from("💾")),
+                ],
+            }),
+            predicate(CheckPredicate::In {
+                column: 0,
+                values: vec![Value::Integer(i64::MIN), Value::Integer(i64::MAX)],
+            }),
+            predicate(CheckPredicate::In {
+                column: 3,
+                values: vec![Value::Boolean(false), Value::Null, Value::Boolean(true)],
+            }),
+        ],
     };
     let expected = concat!(
         "~S|all_meta|id:I:!|parent_id:I:?|text:T:?|flag:B:?|note:T:?;",
@@ -52,12 +121,49 @@ fn exact_measurement_preserves_every_metadata_phase() {
         "~D|all_meta|note|N;",
         "~U|all_meta|text;",
         "~U|all_meta|flag;",
+        "~C|all_meta|AND|2|EQ|0|I-9223372036854775808|OR|2|NE|2|Tx%00007C|LT|3|B1;",
+        "~C|all_meta|LE|0|I0;",
+        "~C|all_meta|GT|0|I-1;",
+        "~C|all_meta|GE|0|I9223372036854775807;",
+        "~C|all_meta|LIKE|2|12|M|S|L%000025|L%00007C|Lé|L%002028|L%000000|L%00003B|L%00007E|L%002029|L\\|La;",
+        "~C|all_meta|ISNULL|4;",
+        "~C|all_meta|NOTNULL|2;",
+        "~C|all_meta|IN|2|3|N|Ta%00003B|T💾;",
+        "~C|all_meta|IN|0|2|I-9223372036854775808|I9223372036854775807;",
+        "~C|all_meta|IN|3|3|B0|N|B1;",
     );
 
     let measured = measure_table_metadata(&schema, Some((0, 0))).expect("metadata measures");
     assert_eq!(measured.encoded_len(), expected.len());
     assert_eq!(
         encode_table_metadata(&schema, Some((0, 0)), measured).expect("metadata encodes"),
+        expected
+    );
+}
+
+#[test]
+fn highly_escaped_check_like_literals_have_exact_canonical_expansion() {
+    let raw = "%~|;\0\u{1f}\u{2028}\u{2029}é💾";
+    let schema = TableSchema {
+        name: String::from("escaped"),
+        columns: vec![column("value", DataType::Text, true, None)],
+        primary_key: None,
+        unique_columns: Vec::new(),
+        foreign_keys: Vec::new(),
+        checks: vec![predicate(CheckPredicate::Like {
+            column: 0,
+            atoms: raw.chars().map(LikeAtom::Literal).collect(),
+        })],
+    };
+    let expected = concat!(
+        "~S|escaped|value:T:?;",
+        "~C|escaped|LIKE|0|10|L%000025|L%00007E|L%00007C|L%00003B|L%000000|L%00001F|L%002028|L%002029|Lé|L💾;",
+    );
+
+    let measured = measure_table_metadata(&schema, None).expect("metadata measures");
+    assert_eq!(measured.encoded_len(), expected.len());
+    assert_eq!(
+        encode_table_metadata(&schema, None, measured).expect("metadata encodes"),
         expected
     );
 }

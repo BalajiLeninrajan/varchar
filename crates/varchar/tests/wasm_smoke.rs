@@ -593,3 +593,130 @@ fn all_null_unique_columns_fit_the_exact_wasm_database_limit() {
     let database = Database::from_string_with_limits(blob.clone(), limits).unwrap();
     assert_eq!(database.as_str(), blob);
 }
+
+#[wasm_bindgen_test]
+fn check_like_work_limits_mutation_and_reload_inside_wasm() {
+    // An interior literal run is retried at every candidate start, so it is the
+    // shape that charges the backtracking budget. Anchored prefixes and
+    // suffixes are matched in one pass and deliberately cost nothing.
+    const CHECKED: &str =
+        "CREATE TABLE patterns (value TEXT CHECK (value LIKE '%aaaaaaaaaab%' OR value = 'exempt'))";
+    let limits = Limits {
+        regex_backtrack_limit: 10,
+        ..Limits::default()
+    };
+    let mut value = "a".repeat(4_096);
+    value.push('b');
+    let insert = format!("INSERT INTO patterns VALUES ('{value}')");
+
+    let mut database = Database::with_limits(limits.clone());
+    database.execute(CHECKED).unwrap();
+    let before = database.as_str().to_owned();
+    assert!(matches!(
+        database.execute(&insert),
+        Err(Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: 10,
+        })
+    ));
+    assert_eq!(database.as_str(), before);
+
+    let mut permissive = Database::new();
+    permissive.execute(CHECKED).unwrap();
+    permissive.execute(&insert).unwrap();
+    assert!(matches!(
+        Database::from_string_with_limits(permissive.into_string(), limits),
+        Err(Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: 10,
+        })
+    ));
+}
+
+#[wasm_bindgen_test]
+fn check_constraints_persist_validate_and_rollback_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT CHECK (id > 0), \
+             state TEXT DEFAULT 'queued', \
+             attempts INTEGER CHECK (attempts >= 0 OR attempts IS NULL), \
+             CHECK (state IN ('queued', 'running') AND state LIKE '%'))",
+        )
+        .unwrap();
+    database
+        .execute("INSERT INTO tasks (attempts) VALUES (NULL)")
+        .unwrap();
+    database
+        .execute("INSERT INTO tasks (state, attempts) VALUES ('running', 2)")
+        .unwrap();
+
+    let before_failed_insert = database.as_str().to_owned();
+    assert!(matches!(
+        database.execute("INSERT INTO tasks (attempts) VALUES (-1)"),
+        Err(Error::Constraint(_))
+    ));
+    assert_eq!(database.as_str(), before_failed_insert);
+
+    let blob = database.into_string();
+    let mut reloaded = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(reloaded.as_str(), blob);
+    assert!(reloaded.as_str().contains("~C|tasks|"));
+
+    assert!(matches!(
+        reloaded.execute("UPDATE tasks SET state = 'stopped' WHERE id = 2"),
+        Err(Error::Constraint(_))
+    ));
+    assert_eq!(reloaded.as_str(), blob);
+    assert_eq!(
+        rows(
+            reloaded
+                .execute("SELECT id, state, attempts FROM tasks")
+                .unwrap()
+        ),
+        vec![
+            vec![
+                Value::Integer(1),
+                Value::Text("queued".to_owned()),
+                Value::Null
+            ],
+            vec![
+                Value::Integer(2),
+                Value::Text("running".to_owned()),
+                Value::Integer(2),
+            ],
+        ]
+    );
+}
+
+#[wasm_bindgen_test]
+fn escaped_check_create_honors_exact_and_one_under_database_limits_in_wasm() {
+    let sql =
+        "CREATE TABLE escape_bound (value TEXT CHECK (value LIKE '\\%\\_\\\\|;~\u{2028}\u{2029}'))";
+    let mut probe = Database::new();
+    probe.execute(sql).unwrap();
+    let expected = probe.into_string();
+
+    let mut exact = Database::with_limits(Limits {
+        max_database_bytes: expected.len(),
+        ..Limits::default()
+    });
+    exact.execute(sql).unwrap();
+    assert_eq!(exact.as_str(), expected);
+
+    let lower_limit = expected.len() - 1;
+    let mut lower = Database::with_limits(Limits {
+        max_database_bytes: lower_limit,
+        ..Limits::default()
+    });
+    assert!(matches!(
+        lower.execute(sql),
+        Err(Error::ResourceLimit {
+            resource: Resource::DatabaseBytes,
+            limit,
+        }) if limit == lower_limit
+    ));
+    assert_eq!(lower.as_str(), "V2;");
+    lower.execute("CREATE TABLE ok (id INTEGER)").unwrap();
+    assert_eq!(lower.as_str(), "V2;~S|ok|id:I:?;");
+}

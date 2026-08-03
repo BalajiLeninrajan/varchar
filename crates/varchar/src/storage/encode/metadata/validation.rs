@@ -1,5 +1,6 @@
 use crate::storage::TableSchema;
 use crate::storage::format::is_valid_identifier;
+use crate::storage::schema::validate_check_against_schema;
 use crate::{DataType, Error, Result, Value};
 
 pub(super) fn validate_table_metadata(
@@ -100,10 +101,8 @@ fn validate_schema_for_metadata(schema: &TableSchema) -> Result<()> {
         }
     }
 
-    if !schema.checks.is_empty() {
-        return Err(Error::Schema(String::from(
-            "CHECK metadata requires a persisted program",
-        )));
+    for check in &schema.checks {
+        validate_check_against_schema(schema, check)?;
     }
 
     let mut previous_foreign_key_column = None;

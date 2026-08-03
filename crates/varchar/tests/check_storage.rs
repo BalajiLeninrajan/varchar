@@ -26,6 +26,38 @@ fn assert_corrupt(blob: &str) {
 }
 
 #[test]
+fn check_metadata_uses_canonical_flat_programs_in_declaration_order() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE encoded_checks (number INTEGER, text_value TEXT, flag BOOLEAN, \
+             CHECK (number = 1), CHECK (number != 2), CHECK (number < 3), \
+             CHECK (number <= 4), CHECK (number > -1), CHECK (number >= 0), \
+             CHECK (text_value LIKE 'a_%'), CHECK (number IS NULL), \
+             CHECK (number IS NOT NULL), CHECK (number IN (1, NULL, 2)), \
+             CHECK (flag >= FALSE))",
+        )
+        .expect("all CHECK forms resolve");
+
+    let expected = "V3;~S|encoded_checks|number:I:?|text_value:T:?|flag:B:?;\
+~C|encoded_checks|EQ|0|I1;\
+~C|encoded_checks|NE|0|I2;\
+~C|encoded_checks|LT|0|I3;\
+~C|encoded_checks|LE|0|I4;\
+~C|encoded_checks|GT|0|I-1;\
+~C|encoded_checks|GE|0|I0;\
+~C|encoded_checks|LIKE|1|3|La|S|M;\
+~C|encoded_checks|ISNULL|0;\
+~C|encoded_checks|NOTNULL|0;\
+~C|encoded_checks|IN|0|3|I1|N|I2;\
+~C|encoded_checks|GE|2|B0;";
+    assert_eq!(database.as_str(), expected);
+
+    let reloaded = Database::from_string(database.into_string()).expect("CHECK programs reload");
+    assert_eq!(reloaded.as_str(), expected);
+}
+
+#[test]
 fn v2_and_metadata_phase_violations_anchor_at_the_offending_record() {
     let v2 = "V2;~S|t|value:I:?;~C|t|GT|0|I0;";
     assert_corrupt_at(v2, "~C|", "V3 metadata is invalid under a V2 header");

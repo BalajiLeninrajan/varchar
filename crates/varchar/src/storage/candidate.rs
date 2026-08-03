@@ -61,7 +61,8 @@ impl<'a> Candidate<'a> {
         auto_increment: Option<usize>,
     ) -> Result<()> {
         let requires_v3 = schema.columns.iter().any(|column| column.default.is_some())
-            || !schema.unique_columns.is_empty();
+            || !schema.unique_columns.is_empty()
+            || !schema.checks.is_empty();
         let auto_increment = auto_increment.map(|column| (column, 0));
         let measured = measure_table_metadata(schema, auto_increment)?;
         let upgrade_to_v3 = requires_v3 && self.format == FormatVersion::V2;
