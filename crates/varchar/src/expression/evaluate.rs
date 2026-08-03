@@ -6,20 +6,44 @@ use crate::resolve::ColumnLocation;
 use crate::{Error, Result, Value};
 
 use super::like::{self, LikeWork};
-use super::program::{Predicate, Program, ProgramNode};
+use super::program::{Predicate, Program};
+use super::tree::{LogicalOperator, Node};
 use super::truth::Truth;
-
-#[derive(Clone, Copy)]
-enum LogicalOperator {
-    And,
-    Or,
-}
 
 struct Frame {
     operator: LogicalOperator,
     remaining: usize,
     value: Truth,
 }
+
+/// The operation labels one pipeline reports its evaluation failures under.
+///
+/// The `WHERE` and `CHECK` pipelines run the same driver but keep their own
+/// wording, so sharing the driver leaves every diagnostic unchanged.
+#[derive(Clone, Copy)]
+struct EvaluationLabels {
+    undersized_stack: &'static str,
+    read_node: &'static str,
+    advance: &'static str,
+    finish: &'static str,
+    count_children: &'static str,
+    skip_node: &'static str,
+    skip_children: &'static str,
+    skip_descendants: &'static str,
+    skip_advance: &'static str,
+}
+
+const WHERE_LABELS: EvaluationLabels = EvaluationLabels {
+    undersized_stack: "evaluating an expression with an undersized stack",
+    read_node: "evaluating a resolved expression program",
+    advance: "advancing through a resolved expression program",
+    finish: "finishing a resolved expression program",
+    count_children: "counting evaluated expression children",
+    skip_node: "short-circuiting a resolved expression program",
+    skip_children: "counting skipped expression children",
+    skip_descendants: "counting skipped expression descendants",
+    skip_advance: "advancing over skipped expression descendants",
+};
 
 #[derive(Clone, Copy)]
 enum EvaluationRows<'rows, 'values> {
@@ -86,78 +110,97 @@ impl Evaluator {
     }
 
     fn evaluate(&mut self, program: &Program<'_>, rows: EvaluationRows<'_, '_>) -> Result<Truth> {
-        self.frames.clear();
-        if self.frames.capacity() < program.logical_node_count() {
-            return Err(Error::Capacity {
-                operation: "evaluating an expression with an undersized stack",
-            });
-        }
-        let nodes = program.nodes();
-        let mut cursor = 0_usize;
+        let Self { frames, like_work } = self;
+        run(
+            frames,
+            program.nodes(),
+            program.logical_node_count(),
+            WHERE_LABELS,
+            |predicate| evaluate_predicate(predicate, rows, like_work),
+        )
+    }
+}
+
+/// Evaluate one flat preorder program with an explicit, preallocated stack.
+///
+/// `frames` is reused across rows, so evaluation neither recurses nor allocates
+/// once the caller has reserved one frame per logical node. Short-circuiting
+/// skips whole subtrees rather than evaluating and discarding their leaves.
+fn run<Payload>(
+    frames: &mut Vec<Frame>,
+    nodes: &[Node<Payload>],
+    logical_nodes: usize,
+    labels: EvaluationLabels,
+    mut evaluate_leaf: impl FnMut(&Payload) -> Result<Truth>,
+) -> Result<Truth> {
+    frames.clear();
+    if frames.capacity() < logical_nodes {
+        return Err(Error::Capacity {
+            operation: labels.undersized_stack,
+        });
+    }
+    let mut cursor = 0_usize;
+
+    loop {
+        let node = nodes.get(cursor).ok_or(Error::Capacity {
+            operation: labels.read_node,
+        })?;
+        cursor = cursor.checked_add(1).ok_or(Error::Capacity {
+            operation: labels.advance,
+        })?;
+
+        let mut value = match node.logical() {
+            Some((operator, children)) => {
+                frames.push(Frame {
+                    operator,
+                    remaining: children,
+                    value: match operator {
+                        LogicalOperator::And => Truth::True,
+                        LogicalOperator::Or => Truth::False,
+                    },
+                });
+                continue;
+            }
+            None => {
+                let payload = node.leaf().ok_or(Error::Capacity {
+                    operation: labels.read_node,
+                })?;
+                evaluate_leaf(payload)?
+            }
+        };
 
         loop {
-            let node = nodes.get(cursor).ok_or(Error::Capacity {
-                operation: "evaluating a resolved expression program",
-            })?;
-            cursor = cursor.checked_add(1).ok_or(Error::Capacity {
-                operation: "advancing through a resolved expression program",
-            })?;
-
-            let mut value = match node {
-                ProgramNode::And { children } => {
-                    self.frames.push(Frame {
-                        operator: LogicalOperator::And,
-                        remaining: *children,
-                        value: Truth::True,
+            let Some(frame) = frames.last_mut() else {
+                if cursor != nodes.len() {
+                    return Err(Error::Capacity {
+                        operation: labels.finish,
                     });
-                    continue;
                 }
-                ProgramNode::Or { children } => {
-                    self.frames.push(Frame {
-                        operator: LogicalOperator::Or,
-                        remaining: *children,
-                        value: Truth::False,
-                    });
-                    continue;
-                }
-                ProgramNode::Predicate(predicate) => {
-                    evaluate_predicate(predicate, rows, &mut self.like_work)?
-                }
+                return Ok(value);
             };
 
-            loop {
-                let Some(frame) = self.frames.last_mut() else {
-                    if cursor != nodes.len() {
-                        return Err(Error::Capacity {
-                            operation: "finishing a resolved expression program",
-                        });
-                    }
-                    return Ok(value);
-                };
-
-                frame.remaining = frame.remaining.checked_sub(1).ok_or(Error::Capacity {
-                    operation: "counting evaluated expression children",
-                })?;
-                frame.value = match frame.operator {
-                    LogicalOperator::And => frame.value.and(value),
-                    LogicalOperator::Or => frame.value.or(value),
-                };
-                let short_circuits = matches!(
-                    (frame.operator, frame.value),
-                    (LogicalOperator::And, Truth::False) | (LogicalOperator::Or, Truth::True)
-                );
-                let skipped = if short_circuits { frame.remaining } else { 0 };
-                if skipped > 0 {
-                    frame.remaining = 0;
-                    cursor = skip_subtrees(nodes, cursor, skipped)?;
-                }
-
-                if frame.remaining > 0 {
-                    break;
-                }
-                value = frame.value;
-                self.frames.pop();
+            frame.remaining = frame.remaining.checked_sub(1).ok_or(Error::Capacity {
+                operation: labels.count_children,
+            })?;
+            frame.value = match frame.operator {
+                LogicalOperator::And => frame.value.and(value),
+                LogicalOperator::Or => frame.value.or(value),
+            };
+            let short_circuits = matches!(
+                (frame.operator, frame.value),
+                (LogicalOperator::And, Truth::False) | (LogicalOperator::Or, Truth::True)
+            );
+            let skipped = if short_circuits { frame.remaining } else { 0 };
+            if skipped > 0 {
+                frame.remaining = 0;
+                cursor = skip_subtrees(nodes, cursor, skipped, labels)?;
             }
+
+            if frame.remaining > 0 {
+                break;
+            }
+            value = frame.value;
+            frames.pop();
         }
     }
 }
@@ -290,22 +333,28 @@ const fn truth(value: bool) -> Truth {
     if value { Truth::True } else { Truth::False }
 }
 
-fn skip_subtrees(nodes: &[ProgramNode<'_>], mut cursor: usize, count: usize) -> Result<usize> {
+/// Advance `cursor` past `count` whole preorder subtrees.
+fn skip_subtrees<Payload>(
+    nodes: &[Node<Payload>],
+    mut cursor: usize,
+    count: usize,
+    labels: EvaluationLabels,
+) -> Result<usize> {
     let mut pending = count;
     while pending > 0 {
         let node = nodes.get(cursor).ok_or(Error::Capacity {
-            operation: "short-circuiting a resolved expression program",
+            operation: labels.skip_node,
         })?;
         pending = pending.checked_sub(1).ok_or(Error::Capacity {
-            operation: "counting skipped expression children",
+            operation: labels.skip_children,
         })?;
         pending = pending
             .checked_add(node.child_count())
             .ok_or(Error::Capacity {
-                operation: "counting skipped expression descendants",
+                operation: labels.skip_descendants,
             })?;
         cursor = cursor.checked_add(1).ok_or(Error::Capacity {
-            operation: "advancing over skipped expression descendants",
+            operation: labels.skip_advance,
         })?;
     }
     Ok(cursor)
