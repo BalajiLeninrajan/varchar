@@ -26,7 +26,7 @@ pub enum Resource {
     GeneratedRegexBytes,
     /// Conservatively accounted transient and retained working state for `SELECT`.
     QueryWorkingBytes,
-    /// Returned query data, explanations, and resolved-projection planning.
+    /// Returned tabular data, explanations, and resolved-projection planning.
     QueryOutputBytes,
     /// Value-comparison work performed by a join.
     JoinSteps,
@@ -94,11 +94,11 @@ pub struct Limits {
     /// target-layout sizes, so an exact boundary can differ between 32-bit and
     /// 64-bit builds.
     pub max_query_working_bytes: usize,
-    /// Maximum conservatively accounted bytes for one materialized `SELECT`
-    /// result after pagination or one `SELECT` explanation.
+    /// Maximum conservatively accounted bytes for one materialized tabular
+    /// result or one `SELECT` explanation.
     ///
-    /// The resolver also uses this value as an independent bound on the
-    /// expanded projection-location plan before query compilation.
+    /// For `SELECT`, the resolver also uses this value as an independent bound
+    /// on the expanded projection-location plan before query compilation.
     ///
     /// Charges include target-layout sizes, so an exact boundary can differ
     /// between 32-bit and 64-bit builds.

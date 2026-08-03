@@ -1,5 +1,6 @@
 mod create;
 mod expression;
+mod metadata;
 mod order_by;
 mod pagination;
 

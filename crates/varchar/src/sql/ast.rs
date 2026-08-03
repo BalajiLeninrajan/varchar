@@ -13,6 +13,7 @@ pub(crate) enum Statement {
     Select(Select),
     Update(Update),
     Delete(Delete),
+    ShowTables,
     ExplainRegex(Select),
 }
 

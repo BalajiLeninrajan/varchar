@@ -2,6 +2,7 @@
 
 mod create;
 mod expression;
+mod metadata;
 mod mutation;
 mod pagination;
 mod select;
@@ -52,6 +53,7 @@ impl Parser {
             Some("SELECT") => Statement::Select(self.parse_select()?),
             Some("UPDATE") => Statement::Update(self.parse_update()?),
             Some("DELETE") => Statement::Delete(self.parse_delete()?),
+            Some("SHOW") => self.parse_show()?,
             Some("EXPLAIN") => Statement::ExplainRegex(self.parse_explain()?),
             Some(keyword) => {
                 return Err(Error::unsupported(
@@ -412,6 +414,8 @@ fn is_reserved(word: &str) -> bool {
             | "CHECK"
             | "CASCADE"
             | "RESTRICT"
+            | "SHOW"
+            | "TABLES"
     )
 }
 

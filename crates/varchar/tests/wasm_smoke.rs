@@ -951,3 +951,39 @@ fn referential_actions_execute_rollback_and_reload_inside_wasm() {
         vec![vec![Value::Integer(44)]]
     );
 }
+
+#[wasm_bindgen_test]
+fn schema_metadata_results_are_bounded_and_reload_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT 'seed')",
+        )
+        .unwrap();
+    let source = database.into_string();
+    let mut reloaded = Database::from_string(source.clone()).unwrap();
+
+    assert_eq!(
+        rows(reloaded.execute("SHOW TABLES").unwrap()),
+        vec![vec![Value::Text(String::from("accounts"))]]
+    );
+    assert_eq!(reloaded.as_str(), source);
+
+    let limit = std::mem::size_of::<RowSet>() - 1;
+    let mut limited = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_query_output_bytes: limit,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        limited.execute("SHOW TABLES"),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: actual,
+        }) if actual == limit
+    ));
+    assert_eq!(limited.as_str(), source);
+}

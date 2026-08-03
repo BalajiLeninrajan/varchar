@@ -1,6 +1,9 @@
 use crate::value::DataType;
 
-/// Engine-produced provenance for a projected result column.
+/// Engine-produced provenance for a result column.
+///
+/// Physical projections name their source table and column. Statement-defined
+/// virtual columns use a stable synthetic origin.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColumnOrigin {
     table: String,
@@ -12,20 +15,20 @@ impl ColumnOrigin {
         Self { table, column }
     }
 
-    /// The source table name.
+    /// The physical or synthetic origin table name.
     #[must_use]
     pub fn table(&self) -> &str {
         &self.table
     }
 
-    /// The source column name.
+    /// The physical or synthetic origin column name.
     #[must_use]
     pub fn column(&self) -> &str {
         &self.column
     }
 }
 
-/// Engine-produced metadata for one projected result column.
+/// Engine-produced metadata for one result column.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResultColumn {
     label: String,
@@ -55,7 +58,7 @@ impl ResultColumn {
         &self.label
     }
 
-    /// The table column that supplied this result column.
+    /// The physical or synthetic origin of this result column.
     #[must_use]
     pub fn origin(&self) -> &ColumnOrigin {
         &self.origin
@@ -67,10 +70,11 @@ impl ResultColumn {
         self.data_type
     }
 
-    /// Whether the source column was declared nullable.
+    /// Whether this result column can contain `NULL`.
     ///
-    /// This describes schema metadata, not the values in this particular
-    /// result. Predicates and inner joins may eliminate all `NULL` values.
+    /// For a physical projection, this follows the source schema even when
+    /// predicates or inner joins eliminate `NULL` from a particular result.
+    /// Statement-defined virtual columns declare their result nullability.
     #[must_use]
     pub const fn nullable(&self) -> bool {
         self.nullable

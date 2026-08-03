@@ -3,7 +3,7 @@ use super::{RowSet, SelectExplanation};
 /// The result of executing one statement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// A materialized `SELECT` result.
+    /// A materialized tabular result, such as `SELECT` or schema metadata.
     Rows(RowSet),
     /// The result of an `INSERT`, `UPDATE`, or `DELETE`.
     Affected {
