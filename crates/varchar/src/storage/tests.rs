@@ -1,10 +1,10 @@
 mod state;
 
+use super::budget::{reset_working_string_comparisons, working_limit, working_string_comparisons};
 use super::decode::{blob_row_scans, reset_blob_row_scans};
-use super::integrity::{reset_working_string_comparisons, working_string_comparisons};
 use super::validate::validate_and_catalog;
 use super::{StorageState, TableSchema};
-use crate::{DataType, Error, SchemaColumn, Value};
+use crate::{DataType, Error, Resource, SchemaColumn, Value};
 
 #[test]
 fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
@@ -29,7 +29,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
 
     let next = candidate.finish().expect("candidate validates");
     let reconstructed =
-        validate_and_catalog(next.as_str()).expect("finished candidate remains valid");
+        validate_and_catalog(next.as_str(), usize::MAX).expect("finished candidate remains valid");
 
     assert_eq!(state.as_str(), "V2;");
     assert_eq!(next.catalog(), &reconstructed);
@@ -48,7 +48,7 @@ fn primary_key_validation_uses_indexed_duplicate_checks() {
     blob.push_str("~R|items|I0;");
 
     reset_working_string_comparisons();
-    let error = validate_and_catalog(&blob).expect_err("duplicate key is rejected");
+    let error = validate_and_catalog(&blob, usize::MAX).expect_err("duplicate key is rejected");
     let (insert_comparisons, lookup_comparisons) = working_string_comparisons();
 
     assert!(matches!(
@@ -73,7 +73,7 @@ fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
     }
 
     reset_blob_row_scans();
-    validate_and_catalog(&keyed).expect("a keyed fixture validates");
+    validate_and_catalog(&keyed, usize::MAX).expect("a keyed fixture validates");
     assert_eq!(
         blob_row_scans(),
         1,
@@ -93,7 +93,7 @@ fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
     }
 
     reset_blob_row_scans();
-    validate_and_catalog(&referenced).expect("a referenced fixture validates");
+    validate_and_catalog(&referenced, usize::MAX).expect("a referenced fixture validates");
     assert_eq!(
         blob_row_scans(),
         2,
@@ -110,7 +110,7 @@ fn sorted_primary_index_preserves_row_order_diagnostics() {
     let duplicate_offset = earlier_duplicate.len();
     earlier_duplicate.push_str("~R|items|I1;~R|items|I2;");
     assert!(matches!(
-        validate_and_catalog(&earlier_duplicate),
+        validate_and_catalog(&earlier_duplicate, usize::MAX),
         Err(Error::CorruptStorage { offset, message })
             if offset == duplicate_offset
                 && message == "duplicate primary key in table \"items\""
@@ -120,7 +120,7 @@ fn sorted_primary_index_preserves_row_order_diagnostics() {
     let high_water_offset = earlier_high_water.len();
     earlier_high_water.push_str("~R|items|I2;~R|items|I1;~R|items|I1;");
     assert!(matches!(
-        validate_and_catalog(&earlier_high_water),
+        validate_and_catalog(&earlier_high_water, usize::MAX),
         Err(Error::CorruptStorage { offset, message })
             if offset == high_water_offset
                 && message
@@ -145,7 +145,7 @@ fn foreign_key_validation_uses_indexed_membership_checks() {
     }
 
     reset_working_string_comparisons();
-    validate_and_catalog(&blob).expect("matching foreign keys validate");
+    validate_and_catalog(&blob, usize::MAX).expect("matching foreign keys validate");
     let (insert_comparisons, lookup_comparisons) = working_string_comparisons();
 
     assert!(
@@ -157,4 +157,50 @@ fn foreign_key_validation_uses_indexed_membership_checks() {
         (ROW_COUNT..=ROW_COUNT * 16).contains(&lookup_comparisons),
         "{ROW_COUNT} foreign keys required {lookup_comparisons} membership comparisons"
     );
+}
+
+#[test]
+fn primary_key_index_preserves_exact_limit_loading() {
+    let compact = "V2;~S|t|c0:I:!;~P|t|c0;~R|t|I0;~R|t|I1;~R|t|I2;";
+    validate_and_catalog(compact, working_limit(compact.len()))
+        .expect("a compact primary-key index fits its exact derived limit");
+
+    let mut larger = String::from("V2;~S|t|id:T:!;~P|t|id;");
+    for key in 0..=20 {
+        larger.push_str(&format!("~R|t|Tk{key};"));
+    }
+    validate_and_catalog(&larger, working_limit(larger.len()))
+        .expect("a larger primary-key index fits its exact derived limit");
+}
+
+/// The growth factor is bounded by the derived working limit rather than chosen for comfort.
+///
+/// This is the densest primary key a blob can carry: eight bytes of row per single-character
+/// key, each indexed at `size_of::<&str>()` bytes, so an exactly sized index already spends
+/// half of the four-times-database-size working limit and growth may only claim the other
+/// half. The key count stops one past a growth step, where the overshoot is at its worst, and
+/// the load still fits its exact derived limit. Growing by more than half would not: doubling
+/// reserves 64 keys for these 33 and breaches the limit outright, so this fixture fails if the
+/// growth factor is ever loosened.
+#[test]
+fn geometric_growth_stays_inside_the_derived_working_limit() {
+    const PREFIX: &str = "V2;~S|t|c:T:!;~P|t|c;";
+    const KEYS: &str = "abcdefghijklmnopqrstuvwxyz0123456";
+
+    let mut blob = String::from(PREFIX);
+    for key in KEYS.chars() {
+        blob.push_str(&format!("~R|t|T{key};"));
+    }
+    assert_eq!(blob.len(), PREFIX.len() + KEYS.len() * 8);
+
+    validate_and_catalog(&blob, working_limit(blob.len()))
+        .expect("the worst geometric overshoot still fits the exact derived working limit");
+
+    assert!(matches!(
+        validate_and_catalog(&blob, 128),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit: 128,
+        })
+    ));
 }

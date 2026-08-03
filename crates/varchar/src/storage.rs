@@ -1,5 +1,6 @@
 //! Canonical storage and physical edits for the single-string database.
 
+mod budget;
 mod candidate;
 mod catalog;
 mod decode;

@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use super::budget::WorkingBudget;
 use super::decode::row_records;
 use super::{Catalog, TableSchema};
 use crate::Error;
@@ -31,6 +32,12 @@ impl From<Violation> for ValidationError {
     }
 }
 
+impl From<Error> for ValidationError {
+    fn from(error: Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
 type ConstraintResult<T> = std::result::Result<T, Violation>;
 type ValidationResult<T> = std::result::Result<T, ValidationError>;
 
@@ -44,18 +51,29 @@ enum PrimaryValueSet<'a> {
     Multiple(Vec<&'a str>),
 }
 
+const PRIMARY_INDEX_OPERATION: &str = "reserving a primary-key validation index";
+
 impl<'a> PrimaryValueSet<'a> {
     /// Records a key as the fill pass sees it, promoting a lone key to a grown index.
-    fn push(&mut self, value: &'a str) {
+    ///
+    /// Returns the working bytes the key charged, so the pass that owns the index accumulates
+    /// exactly what it has to hand back.
+    fn push(&mut self, value: &'a str, budget: &mut WorkingBudget) -> Result<usize, Error> {
         match self {
             Self::Single(slot @ None) => {
                 *slot = Some(value);
+                Ok(0)
             }
             Self::Single(slot) => {
                 let existing = slot.expect("the matched slot holds a key");
-                *self = Self::Multiple(vec![existing, value]);
+                let mut values = Vec::new();
+                let mut charged =
+                    budget.push_charged(&mut values, existing, PRIMARY_INDEX_OPERATION)?;
+                charged += budget.push_charged(&mut values, value, PRIMARY_INDEX_OPERATION)?;
+                *self = Self::Multiple(values);
+                Ok(charged)
             }
-            Self::Multiple(values) => values.push(value),
+            Self::Multiple(values) => budget.push_charged(values, value, PRIMARY_INDEX_OPERATION),
         }
     }
 
@@ -90,13 +108,13 @@ fn source_position(value: &str) -> usize {
 
 fn compare_primary_values(left: &str, right: &str) -> Ordering {
     #[cfg(test)]
-    record_working_string_insert_comparison();
+    super::budget::record_working_string_insert_comparison();
     left.cmp(right)
 }
 
 fn lookup_primary_value(existing: &str, wanted: &str) -> Ordering {
     #[cfg(test)]
-    record_working_string_lookup_comparison();
+    super::budget::record_working_string_lookup_comparison();
     existing.cmp(wanted)
 }
 
@@ -115,7 +133,11 @@ fn primary_values_index(values: &[PrimaryValues<'_>], table: &str) -> Option<usi
         .ok()
 }
 
-pub(super) fn validate_rows(blob: &str, catalog: &Catalog) -> ValidationResult<()> {
+pub(super) fn validate_rows(
+    blob: &str,
+    catalog: &Catalog,
+    budget: &mut WorkingBudget,
+) -> ValidationResult<()> {
     let primary_count = catalog
         .schemas()
         .filter(|schema| schema.primary_key.is_some())
@@ -128,7 +150,12 @@ pub(super) fn validate_rows(blob: &str, catalog: &Catalog) -> ValidationResult<(
         return Ok(());
     }
 
-    let mut primary_values = Vec::with_capacity(primary_count);
+    let mut primary_values = Vec::new();
+    budget.reserve_exact(
+        &mut primary_values,
+        primary_count,
+        "reserving primary-key validation indexes",
+    )?;
     for (table, schema) in catalog.tables() {
         if schema.primary_key.is_some() {
             primary_values.push(PrimaryValues {
@@ -139,9 +166,8 @@ pub(super) fn validate_rows(blob: &str, catalog: &Catalog) -> ValidationResult<(
     }
     primary_values.sort_unstable_by(|left, right| left.table.cmp(right.table));
 
-    // The fill pass is spelled out rather than delegated to `for_each_row` because a duplicate
-    // key is only located once the whole index has been sorted, so the earliest row-order
-    // violation has to be remembered rather than returned as it is seen.
+    // The fill pass is spelled out rather than delegated to `for_each_row` because growing an
+    // index can exhaust the working budget, which is a storage error and not a row violation.
     let mut earliest_primary_violation = None;
     for row in row_records(blob, catalog.row_start) {
         let row = row.map_err(ValidationError::Storage)?;
@@ -197,7 +223,7 @@ pub(super) fn validate_rows(blob: &str, catalog: &Catalog) -> ValidationResult<(
         }
         let index = primary_values_index(&primary_values, &schema.name)
             .expect("a primary-key index exists for every keyed table");
-        primary_values[index].values.push(value);
+        primary_values[index].values.push(value, budget)?;
     }
     let mut earliest_duplicate = None;
     for values in &mut primary_values {
@@ -311,37 +337,4 @@ fn for_each_row<'a>(
         visit(&row, schema)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static WORKING_STRING_COMPARISONS: std::cell::Cell<(usize, usize)> = const {
-        std::cell::Cell::new((0, 0))
-    };
-}
-
-#[cfg(test)]
-pub(super) fn record_working_string_insert_comparison() {
-    WORKING_STRING_COMPARISONS.with(|comparisons| {
-        let (insert, lookup) = comparisons.get();
-        comparisons.set((insert + 1, lookup));
-    });
-}
-
-#[cfg(test)]
-pub(super) fn record_working_string_lookup_comparison() {
-    WORKING_STRING_COMPARISONS.with(|comparisons| {
-        let (insert, lookup) = comparisons.get();
-        comparisons.set((insert, lookup + 1));
-    });
-}
-
-#[cfg(test)]
-pub(super) fn reset_working_string_comparisons() {
-    WORKING_STRING_COMPARISONS.with(|comparisons| comparisons.set((0, 0)));
-}
-
-#[cfg(test)]
-pub(super) fn working_string_comparisons() -> (usize, usize) {
-    WORKING_STRING_COMPARISONS.with(std::cell::Cell::get)
 }

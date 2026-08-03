@@ -44,6 +44,7 @@ fn resources_have_human_readable_names() {
         (Resource::QueryOutputBytes, "query output bytes"),
         (Resource::JoinSteps, "JOIN execution steps"),
         (Resource::RegexBacktracking, "regex backtracking steps"),
+        (Resource::StorageWorkingBytes, "storage working bytes"),
     ];
 
     for (resource, human_display) in cases {

@@ -47,7 +47,7 @@ fn select_statement(sql: &str) -> crate::sql::Select {
 }
 
 fn catalog(blob: &str) -> Catalog {
-    StorageState::load(blob.to_owned())
+    StorageState::load(blob.to_owned(), usize::MAX)
         .expect("fixture catalog is valid")
         .catalog()
         .clone()

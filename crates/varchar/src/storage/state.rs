@@ -1,5 +1,6 @@
 //! Authoritative storage blobs paired with their derived catalogs.
 
+use super::budget::working_limit;
 use super::validate::{validate_and_catalog, validate_candidate};
 use super::{Candidate, Catalog};
 use crate::Result;
@@ -22,13 +23,13 @@ impl StorageState {
         }
     }
 
-    pub(crate) fn load(blob: String) -> Result<Self> {
-        let catalog = validate_and_catalog(&blob)?;
+    pub(crate) fn load(blob: String, max_database_bytes: usize) -> Result<Self> {
+        let catalog = validate_and_catalog(&blob, working_limit(max_database_bytes))?;
         Ok(Self { blob, catalog })
     }
 
-    pub(super) fn from_candidate(blob: String) -> Result<Self> {
-        let catalog = validate_candidate(&blob)?;
+    pub(super) fn from_candidate(blob: String, max_database_bytes: usize) -> Result<Self> {
+        let catalog = validate_candidate(&blob, working_limit(max_database_bytes))?;
         Ok(Self { blob, catalog })
     }
 

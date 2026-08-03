@@ -2,8 +2,8 @@ use super::Database;
 use crate::{Error, storage};
 
 fn assert_catalog_current(database: &Database) {
-    let reconstructed =
-        storage::StorageState::load(database.as_str().to_owned()).expect("database remains valid");
+    let reconstructed = storage::StorageState::load(database.as_str().to_owned(), usize::MAX)
+        .expect("database remains valid");
     assert_eq!(database.storage, reconstructed);
 }
 

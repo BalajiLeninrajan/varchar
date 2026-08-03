@@ -11,9 +11,10 @@ fn create_table(sql: &str) -> crate::sql::CreateTable {
 }
 
 fn keyed_parent_catalog() -> Catalog {
-    StorageState::load(String::from(
-        "V2;~S|parents|id:I:!|code:I:?|label:T:?;~P|parents|id;",
-    ))
+    StorageState::load(
+        String::from("V2;~S|parents|id:I:!|code:I:?|label:T:?;~P|parents|id;"),
+        usize::MAX,
+    )
     .expect("parent catalog is valid")
     .catalog()
     .clone()
