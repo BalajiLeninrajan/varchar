@@ -119,6 +119,16 @@ impl WorkingBudget {
         Ok(added)
     }
 
+    pub(super) fn clone_text(&mut self, value: &str, operation: &'static str) -> Result<String> {
+        self.charge(value.len())?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(value.len())
+            .map_err(|_| Error::Allocation { operation })?;
+        owned.push_str(value);
+        Ok(owned)
+    }
+
     const fn error(&self) -> Error {
         Error::ResourceLimit {
             resource: Resource::StorageWorkingBytes,

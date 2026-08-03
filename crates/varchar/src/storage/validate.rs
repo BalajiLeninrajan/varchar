@@ -55,7 +55,7 @@ fn validate_with_mode(
             RecordKind::Schema => {
                 reject_after_rows(saw_row, record.range.start, "schema record")?;
                 let schema = decode_schema_record(record.text, record.range.start)?;
-                metadata.insert_schema(schema, record.range.start)?;
+                metadata.insert_schema(schema, record.range.start, &mut budget)?;
             }
             RecordKind::PrimaryKey => {
                 reject_after_rows(saw_row, record.range.start, "primary-key metadata")?;
@@ -65,12 +65,17 @@ fn validate_with_mode(
             RecordKind::ForeignKey => {
                 reject_after_rows(saw_row, record.range.start, "foreign-key metadata")?;
                 let foreign_key = decode_foreign_key_record(record.text, record.range.start)?;
-                metadata.apply_foreign_key(foreign_key, record.range.start, mode)?;
+                metadata.apply_foreign_key(foreign_key, record.range.start, mode, &mut budget)?;
             }
             RecordKind::AutoIncrement => {
                 reject_after_rows(saw_row, record.range.start, "auto-increment metadata")?;
                 let auto_increment = decode_auto_increment_record(record.text, record.range.start)?;
-                metadata.apply_auto_increment(auto_increment, record.range.clone(), mode)?;
+                metadata.apply_auto_increment(
+                    auto_increment,
+                    record.range.clone(),
+                    mode,
+                    &mut budget,
+                )?;
             }
             RecordKind::Row => {
                 if !saw_row {

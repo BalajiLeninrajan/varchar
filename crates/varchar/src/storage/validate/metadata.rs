@@ -1,9 +1,9 @@
 //! Canonical metadata phase validation and catalog reconstruction.
 
-use std::collections::BTreeMap;
 use std::ops::Range;
 
-use super::super::catalog::AutoIncrementState;
+use super::super::budget::WorkingBudget;
+use super::super::catalog::{AutoIncrementState, CatalogMap};
 use super::super::decode::{AutoIncrementMetadata, ForeignKeyMetadata, PrimaryKeyMetadata};
 use super::super::{Catalog, ForeignKey, TableSchema};
 use super::ValidationMode;
@@ -35,9 +35,9 @@ impl MetadataState {
         }
     }
 
-    fn begin_table(table: &str) -> Self {
+    fn begin_table(table: String) -> Self {
         Self {
-            table: table.to_owned(),
+            table,
             phase: MetadataPhase::Keys,
             saw_primary_key: false,
             saw_foreign_key: false,
@@ -47,16 +47,16 @@ impl MetadataState {
 }
 
 pub(super) struct MetadataValidator {
-    tables: BTreeMap<String, TableSchema>,
-    auto_increments: BTreeMap<String, AutoIncrementState>,
+    tables: CatalogMap<TableSchema>,
+    auto_increments: CatalogMap<AutoIncrementState>,
     state: MetadataState,
 }
 
 impl MetadataValidator {
     pub(super) fn new() -> Self {
         Self {
-            tables: BTreeMap::new(),
-            auto_increments: BTreeMap::new(),
+            tables: CatalogMap::new(),
+            auto_increments: CatalogMap::new(),
             state: MetadataState::none(),
         }
     }
@@ -65,15 +65,28 @@ impl MetadataValidator {
         self.tables.get(name)
     }
 
-    pub(super) fn insert_schema(&mut self, schema: TableSchema, offset: usize) -> Result<()> {
+    pub(super) fn insert_schema(
+        &mut self,
+        schema: TableSchema,
+        offset: usize,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
         if self.tables.contains_key(&schema.name) {
             return Err(super::super::format::corrupt(
                 offset,
                 "duplicate table schema",
             ));
         }
-        self.state = MetadataState::begin_table(&schema.name);
-        self.tables.insert(schema.name.clone(), schema);
+        let state_table =
+            budget.clone_text(&schema.name, "allocating the active metadata table name")?;
+        let map_key = budget.clone_text(&schema.name, "allocating a catalog table key")?;
+        self.state = MetadataState::begin_table(state_table);
+        self.tables.insert_new(
+            map_key,
+            schema,
+            budget,
+            "reserving the reconstructed table catalog",
+        )?;
         Ok(())
     }
 
@@ -92,8 +105,9 @@ impl MetadataValidator {
         metadata: ForeignKeyMetadata<'_>,
         offset: usize,
         mode: ValidationMode,
+        budget: &mut WorkingBudget,
     ) -> Result<()> {
-        let result = self.apply_foreign_key_inner(metadata, offset);
+        let result = self.apply_foreign_key_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
     }
 
@@ -102,8 +116,9 @@ impl MetadataValidator {
         metadata: AutoIncrementMetadata<'_>,
         record_range: Range<usize>,
         mode: ValidationMode,
+        budget: &mut WorkingBudget,
     ) -> Result<()> {
-        let result = self.apply_auto_increment_inner(metadata, record_range);
+        let result = self.apply_auto_increment_inner(metadata, record_range, budget);
         result.map_err(|violation| violation.into_error(mode))
     }
 
@@ -165,6 +180,7 @@ impl MetadataValidator {
         &mut self,
         metadata: ForeignKeyMetadata<'_>,
         offset: usize,
+        budget: &mut WorkingBudget,
     ) -> std::result::Result<(), Violation> {
         if self.state.phase != MetadataPhase::Keys || metadata.table != self.state.table {
             return Err(Violation::new(
@@ -240,15 +256,31 @@ impl MetadataValidator {
             ));
         }
 
-        self.tables
+        let referenced_table = budget
+            .clone_text(
+                metadata.referenced_table,
+                "allocating a foreign-key table name",
+            )
+            .map_err(Violation::storage)?;
+        let referenced_column = budget
+            .clone_text(
+                metadata.referenced_column,
+                "allocating a foreign-key column name",
+            )
+            .map_err(Violation::storage)?;
+        let foreign_keys = &mut self
+            .tables
             .get_mut(&self.state.table)
             .expect("metadata state always names the most recent schema")
-            .foreign_keys
-            .push(ForeignKey {
-                column,
-                referenced_table: metadata.referenced_table.to_owned(),
-                referenced_column: metadata.referenced_column.to_owned(),
-            });
+            .foreign_keys;
+        budget
+            .reserve_exact(foreign_keys, 1, "reserving decoded foreign-key metadata")
+            .map_err(Violation::storage)?;
+        foreign_keys.push(ForeignKey {
+            column,
+            referenced_table,
+            referenced_column,
+        });
         self.state.saw_foreign_key = true;
         self.state.next_foreign_key_column = column + 1;
         Ok(())
@@ -258,6 +290,7 @@ impl MetadataValidator {
         &mut self,
         metadata: AutoIncrementMetadata<'_>,
         record_range: Range<usize>,
+        budget: &mut WorkingBudget,
     ) -> std::result::Result<(), Violation> {
         let offset = record_range.start;
         if self.state.phase != MetadataPhase::Keys
@@ -300,14 +333,21 @@ impl MetadataValidator {
             ));
         }
 
-        self.auto_increments.insert(
-            metadata.table.to_owned(),
-            AutoIncrementState {
-                column: primary_key,
-                last: metadata.last,
-                record_range,
-            },
-        );
+        let table = budget
+            .clone_text(metadata.table, "allocating an auto-increment catalog key")
+            .map_err(Violation::storage)?;
+        self.auto_increments
+            .insert_new(
+                table,
+                AutoIncrementState {
+                    column: primary_key,
+                    last: metadata.last,
+                    record_range,
+                },
+                budget,
+                "reserving the reconstructed auto-increment catalog",
+            )
+            .map_err(Violation::storage)?;
         self.state.phase = MetadataPhase::AutoIncrement;
         Ok(())
     }
@@ -316,6 +356,7 @@ impl MetadataValidator {
 pub(super) struct Violation {
     pub(super) offset: usize,
     pub(super) message: String,
+    storage: Option<Error>,
 }
 
 impl Violation {
@@ -323,11 +364,21 @@ impl Violation {
         Self {
             offset,
             message: message.into(),
+            storage: None,
+        }
+    }
+
+    fn storage(error: Error) -> Self {
+        Self {
+            offset: 0,
+            message: String::new(),
+            storage: Some(error),
         }
     }
 
     pub(super) fn into_error(self, mode: ValidationMode) -> Error {
-        map_schema_violation_parts(self.offset, self.message, mode)
+        self.storage
+            .unwrap_or_else(|| map_schema_violation_parts(self.offset, self.message, mode))
     }
 }
 
