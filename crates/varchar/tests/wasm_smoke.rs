@@ -841,13 +841,6 @@ fn referential_actions_execute_rollback_and_reload_inside_wasm() {
         Err(Error::Constraint(_))
     ));
     assert_eq!(database.as_str(), before_restrict);
-    assert!(matches!(
-        database.execute(
-            "CREATE TABLE unsupported (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
-        ),
-        Err(Error::Unsupported { ref feature, .. }) if feature == "ON UPDATE CASCADE"
-    ));
-    assert_eq!(database.as_str(), before_restrict);
 
     let mut reloaded = Database::from_string(database.into_string()).unwrap();
     assert_eq!(

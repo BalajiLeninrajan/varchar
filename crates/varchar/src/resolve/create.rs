@@ -522,6 +522,7 @@ const fn resolve_delete_action(action: ParsedDeleteAction) -> ForeignKeyDeleteAc
 const fn resolve_update_action(action: ParsedUpdateAction) -> ForeignKeyUpdateAction {
     match action {
         ParsedUpdateAction::Restrict => ForeignKeyUpdateAction::Restrict,
+        ParsedUpdateAction::Cascade => ForeignKeyUpdateAction::Cascade,
     }
 }
 

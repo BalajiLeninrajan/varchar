@@ -287,9 +287,10 @@ fn extended_foreign_key_action_metadata_requires_v3() {
     }
 
     let blob = "V3;~S|parents|id:I:!;~P|parents|id;\
-                ~S|children|cascading:I:?|nulling:I:?;\
+                ~S|children|cascading:I:?|nulling:I:?|updating:I:?;\
                 ~F|children|cascading|parents|id|C|R;\
-                ~F|children|nulling|parents|id|N|R;";
+                ~F|children|nulling|parents|id|N|R;\
+                ~F|children|updating|parents|id|R|C;";
     let (_, catalog) =
         validate_and_catalog(blob, usize::MAX).expect("V3 foreign-key actions decode");
     let foreign_keys = &catalog
@@ -298,6 +299,7 @@ fn extended_foreign_key_action_metadata_requires_v3() {
         .foreign_keys;
     assert_eq!(foreign_keys[0].on_delete, ForeignKeyDeleteAction::Cascade);
     assert_eq!(foreign_keys[1].on_delete, ForeignKeyDeleteAction::SetNull);
+    assert_eq!(foreign_keys[2].on_update, ForeignKeyUpdateAction::Cascade);
 }
 
 #[test]
@@ -312,10 +314,12 @@ fn persisted_v3_foreign_key_actions_must_be_canonical_and_applicable() {
                 && message == "explicit RESTRICT/RESTRICT foreign-key actions are noncanonical"
     ));
 
-    let update_cascade = format!("{prefix}~F|children|parent_id|parents|id|R|C;");
-    let offset = update_cascade.find("~F|").expect("foreign key exists");
+    let invalid_update_action = format!("{prefix}~F|children|parent_id|parents|id|R|N;");
+    let offset = invalid_update_action
+        .find("~F|")
+        .expect("foreign key exists");
     assert!(matches!(
-        validate_and_catalog(&update_cascade, usize::MAX),
+        validate_and_catalog(&invalid_update_action, usize::MAX),
         Err(Error::CorruptStorage { offset: actual, message })
             if actual == offset && message == "malformed foreign-key action metadata"
     ));

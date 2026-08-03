@@ -155,6 +155,7 @@ fn foreign_key_actions_use_canonical_legacy_and_extended_records() {
             column("restricted", DataType::Integer, false, None),
             column("cascading", DataType::Integer, false, None),
             column("nulling", DataType::Integer, true, None),
+            column("updating", DataType::Integer, false, None),
         ],
         primary_key: None,
         unique_columns: Vec::new(),
@@ -180,14 +181,22 @@ fn foreign_key_actions_use_canonical_legacy_and_extended_records() {
                 on_delete: ForeignKeyDeleteAction::SetNull,
                 on_update: ForeignKeyUpdateAction::Restrict,
             },
+            ForeignKey {
+                column: 3,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Cascade,
+            },
         ],
         checks: Vec::new(),
     };
     let expected = concat!(
-        "~S|children|restricted:I:!|cascading:I:!|nulling:I:?;",
+        "~S|children|restricted:I:!|cascading:I:!|nulling:I:?|updating:I:!;",
         "~F|children|restricted|parents|id;",
         "~F|children|cascading|parents|id|C|R;",
         "~F|children|nulling|parents|id|N|R;",
+        "~F|children|updating|parents|id|R|C;",
     );
 
     let measured = measure_table_metadata(&schema, None).expect("metadata measures");

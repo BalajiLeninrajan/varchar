@@ -374,23 +374,6 @@ fn a_late_restrict_failure_rolls_back_an_already_discovered_cascade_graph() {
 }
 
 #[test]
-fn unsupported_on_update_cascade_is_typed_and_atomic() {
-    let mut database = Database::new();
-    execute(
-        &mut database,
-        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
-    );
-
-    assert!(matches!(
-        atomic_error(
-            &mut database,
-            "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
-        ),
-        Error::Unsupported { ref feature, .. } if feature == "ON UPDATE CASCADE"
-    ));
-}
-
-#[test]
 fn set_null_nullability_precedes_later_declaration_errors() {
     let mut database = Database::new();
     execute(

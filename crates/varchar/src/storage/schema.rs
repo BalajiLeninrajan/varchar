@@ -145,12 +145,14 @@ impl ForeignKeyDeleteAction {
 pub(crate) enum ForeignKeyUpdateAction {
     #[default]
     Restrict,
+    Cascade,
 }
 
 impl ForeignKeyUpdateAction {
     pub(super) const fn storage_tag(self) -> char {
         match self {
             Self::Restrict => 'R',
+            Self::Cascade => 'C',
         }
     }
 }
