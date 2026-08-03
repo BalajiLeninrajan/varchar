@@ -116,6 +116,7 @@ pub(super) struct FrozenRow {
     identity: RowIdentity,
     original_values: Vec<Value>,
     mutation: MutationState,
+    update_queued: bool,
 }
 
 impl FrozenRow {
@@ -124,6 +125,7 @@ impl FrozenRow {
             identity,
             original_values,
             mutation: MutationState::Fresh,
+            update_queued: false,
         }
     }
 
@@ -199,6 +201,96 @@ impl FrozenRow {
             working_bytes,
         };
         Ok(())
+    }
+
+    pub(super) fn request_update(
+        &mut self,
+        column: usize,
+        value: &Value,
+        budget: &mut WorkingBudget,
+    ) -> Result<bool> {
+        if column >= self.original_values.len() {
+            return Err(Error::Schema(format!(
+                "cascaded UPDATE column {column} is outside a frozen row"
+            )));
+        }
+        if matches!(self.mutation, MutationState::Fresh) {
+            let (overlays, working_bytes) = self.allocate_update_overlays(budget)?;
+            self.mutation = MutationState::PendingUpdate {
+                overlays,
+                working_bytes,
+            };
+        }
+
+        let MutationState::PendingUpdate {
+            overlays,
+            working_bytes,
+        } = &mut self.mutation
+        else {
+            return Err(direct_conflict(self.identity));
+        };
+        if let Some(existing) = &overlays[column] {
+            if existing.value == *value {
+                return Ok(false);
+            }
+            return Err(update_conflict(self.identity, column));
+        }
+
+        let payload_bytes = value_payload_bytes(value);
+        budget.charge(payload_bytes)?;
+        let value = match clone_value(value) {
+            Ok(value) => value,
+            Err(error) => {
+                budget.release(payload_bytes);
+                return Err(error);
+            }
+        };
+        overlays[column] = Some(UpdateOverlay { value });
+        *working_bytes = working_bytes
+            .checked_add(payload_bytes)
+            .ok_or_else(|| budget.limit_error())?;
+        Ok(true)
+    }
+
+    pub(super) fn effective_value(&self, column: usize) -> Option<&Value> {
+        match &self.mutation {
+            MutationState::PendingUpdate { overlays, .. } => {
+                overlays.get(column).and_then(Option::as_ref).map_or_else(
+                    || self.original_values.get(column),
+                    |overlay| Some(&overlay.value),
+                )
+            }
+            _ => self.original_values.get(column),
+        }
+    }
+
+    pub(super) fn mark_update_queued(&mut self, primary_key: usize) -> bool {
+        if self.update_queued
+            || self.effective_value(primary_key) == self.original_value(primary_key)
+        {
+            return false;
+        }
+        self.update_queued = true;
+        true
+    }
+
+    pub(super) fn clone_effective_value(
+        &self,
+        column: usize,
+        budget: &mut WorkingBudget,
+    ) -> Result<(Value, usize)> {
+        let value = self.effective_value(column).ok_or(Error::Capacity {
+            operation: "reading an effective mutation value",
+        })?;
+        let working_bytes = value_payload_bytes(value);
+        budget.charge(working_bytes)?;
+        match clone_value(value) {
+            Ok(value) => Ok((value, working_bytes)),
+            Err(error) => {
+                budget.release(working_bytes);
+                Err(error)
+            }
+        }
     }
 
     fn allocate_update_overlays(
@@ -573,6 +665,13 @@ const fn value_payload_bytes(value: &Value) -> usize {
 fn direct_conflict(identity: RowIdentity) -> Error {
     Error::Constraint(format!(
         "conflicting direct mutations target the row at byte {}",
+        identity.start()
+    ))
+}
+
+fn update_conflict(identity: RowIdentity, column: usize) -> Error {
+    Error::Constraint(format!(
+        "conflicting cascaded updates target column {column} of the row at byte {}",
         identity.start()
     ))
 }

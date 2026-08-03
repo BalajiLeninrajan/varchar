@@ -10,7 +10,7 @@ mod referential;
 use std::ops::Range;
 
 use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
-use referential::{ReferentialIndex, enforce_update_restrict};
+use referential::{ReferentialAction, ReferentialIndex};
 
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
@@ -58,15 +58,42 @@ impl MutationPlan {
             .catalog()
             .table(scan.row_layout().table)
             .expect("a compiled mutation scan names a catalog table");
-        enforce_update_restrict(
-            blob,
-            candidate.catalog(),
-            parent_schema,
-            &rows,
-            &update,
-            &mut budget,
-        )?;
+        if let Some(primary_key) = parent_schema.primary_key {
+            let mut update_queue = Vec::new();
+            let mut queue_working_bytes = 0;
+            for (index, row) in rows.iter_mut().enumerate() {
+                if row.mark_update_queued(primary_key) {
+                    push_update_queue(
+                        &mut update_queue,
+                        index,
+                        &mut queue_working_bytes,
+                        &mut budget,
+                    )?;
+                }
+            }
+            if !update_queue.is_empty() {
+                let referential = ReferentialIndex::build(
+                    blob,
+                    candidate.catalog(),
+                    scan.row_layout().table,
+                    &rows,
+                    ReferentialAction::Update,
+                    &mut budget,
+                )?;
+                referential.initialize_direct_rows(&rows)?;
+                referential.expand_update_actions(
+                    &mut rows,
+                    &mut update_queue,
+                    &mut queue_working_bytes,
+                    &mut budget,
+                )?;
+                referential.release(&mut budget);
+            }
+            drop(update_queue);
+            budget.release(queue_working_bytes);
+        }
 
+        sort_and_validate_ranges(&mut rows)?;
         encode_and_check_updates(
             candidate.catalog(),
             blob,
@@ -105,7 +132,7 @@ impl MutationPlan {
             catalog,
             scan.row_layout().table,
             &rows,
-            true,
+            ReferentialAction::Delete,
             &mut budget,
         )?;
         referential.initialize_direct_rows(&rows)?;
@@ -182,6 +209,21 @@ impl MutationPlan {
         }
         Ok(direct_affected)
     }
+}
+
+fn push_update_queue(
+    queue: &mut Vec<usize>,
+    frozen_index: usize,
+    queue_working_bytes: &mut usize,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let charged =
+        budget.reserve_for_push_charged(queue, "reserving the referential update queue")?;
+    *queue_working_bytes = queue_working_bytes
+        .checked_add(charged)
+        .ok_or_else(|| budget.limit_error())?;
+    queue.push(frozen_index);
+    Ok(())
 }
 
 fn push_delete_queue(
