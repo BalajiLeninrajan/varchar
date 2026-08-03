@@ -278,6 +278,50 @@ fn preserves_duplicate_unique_declarations_for_resolution() {
 }
 
 #[test]
+fn parses_and_formats_inline_and_table_check_expressions() {
+    let statement = create_table(
+        "CREATE TABLE ranges (start INTEGER CHECK (finish >= 0 OR finish IN (1, NULL)), \
+         finish INTEGER, CHECK (start < 10 AND finish IS NOT NULL))",
+    );
+
+    let CreateElement::Column(start) = &statement.elements[0] else {
+        panic!("expected the first element to be a column");
+    };
+    let ColumnModifier::Check(inline) = &start.modifiers[0] else {
+        panic!("expected an inline CHECK");
+    };
+    assert_eq!(inline.to_string(), "finish >= 0 OR finish IN (1, NULL)");
+
+    let CreateElement::Constraint(TableConstraint::Check(table)) = &statement.elements[2] else {
+        panic!("expected a table CHECK");
+    };
+    assert_eq!(table.to_string(), "start < 10 AND finish IS NOT NULL");
+}
+
+#[test]
+fn deeply_nested_check_formatting_uses_explicit_stacks() {
+    const DEPTH: usize = 2_000;
+    let mut expression = "(".repeat(DEPTH);
+    expression.push_str("value = 0");
+    for index in 0..DEPTH {
+        expression.push_str(if index % 2 == 0 {
+            " AND value = 0)"
+        } else {
+            " OR value = 0)"
+        });
+    }
+    let statement = create_table(&format!(
+        "CREATE TABLE deep (value INTEGER, CHECK ({expression}))"
+    ));
+    let CreateElement::Constraint(TableConstraint::Check(check)) = &statement.elements[1] else {
+        panic!("expected a table CHECK");
+    };
+    let formatted = check.to_string();
+    assert!(formatted.starts_with('('));
+    drop(formatted);
+}
+
+#[test]
 fn rejects_composite_key_constraints_explicitly() {
     for sql in [
         "CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b))",
@@ -333,4 +377,45 @@ fn preserves_duplicate_auto_increment_modifiers_for_resolution() {
             ColumnModifier::AutoIncrement,
         ]
     );
+}
+
+#[test]
+fn preserves_check_and_default_declarations_in_source_order() {
+    let statement = create_table(
+        "CREATE TABLE items (\
+            first INTEGER CHECK (later = 0) DEFAULT 1, \
+            CHECK (first = 1), \
+            later INTEGER DEFAULT 2 CHECK (first = 1)\
+        )",
+    );
+
+    let CreateElement::Column(first) = &statement.elements[0] else {
+        panic!("expected the first element to be a column");
+    };
+    let ColumnModifier::Check(first_check) = &first.modifiers[0] else {
+        panic!("expected the first modifier to be CHECK");
+    };
+    assert_eq!(first_check.to_string(), "later = 0");
+    assert_eq!(
+        first.modifiers[1],
+        ColumnModifier::Default(Value::Integer(1))
+    );
+
+    let CreateElement::Constraint(TableConstraint::Check(table_check)) = &statement.elements[1]
+    else {
+        panic!("expected a table CHECK");
+    };
+    assert_eq!(table_check.to_string(), "first = 1");
+
+    let CreateElement::Column(later) = &statement.elements[2] else {
+        panic!("expected the final element to be a column");
+    };
+    assert_eq!(
+        later.modifiers[0],
+        ColumnModifier::Default(Value::Integer(2))
+    );
+    let ColumnModifier::Check(later_check) = &later.modifiers[1] else {
+        panic!("expected the final modifier to be CHECK");
+    };
+    assert_eq!(later_check.to_string(), "first = 1");
 }

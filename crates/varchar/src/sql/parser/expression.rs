@@ -10,6 +10,21 @@ enum LogicalOperator {
     Or,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExpressionContext {
+    Where,
+    Check,
+}
+
+impl ExpressionContext {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Where => "WHERE",
+            Self::Check => "CHECK",
+        }
+    }
+}
+
 impl LogicalOperator {
     const fn precedence(self) -> u8 {
         match self {
@@ -41,7 +56,7 @@ impl Parser {
 
         let start = self.position;
         self.where_expression = Some(start..self.where_expression_end(start));
-        self.parse_expression().map(Some)
+        self.parse_expression(ExpressionContext::Where).map(Some)
     }
 
     fn where_expression_end(&self, start: usize) -> usize {
@@ -76,11 +91,25 @@ impl Parser {
         }
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
+    pub(super) fn parse_check_expression(&mut self) -> Result<Expression> {
+        self.expect_keyword("CHECK")?;
+        if !matches!(self.current().kind, TokenKind::LeftParen) {
+            return Err(Error::parse(
+                "expected `(` after CHECK",
+                self.current().span,
+            ));
+        }
+        let start = self.position;
+        self.register_check_expression(start)?;
+        self.parse_expression(ExpressionContext::Check)
+    }
+
+    fn parse_expression(&mut self, context: ExpressionContext) -> Result<Expression> {
         let mut operators = Vec::new();
         let mut values = Vec::new();
         let mut arena = Vec::new();
         let mut expecting_operand = true;
+        let mut check_closed = false;
 
         loop {
             if expecting_operand {
@@ -101,7 +130,7 @@ impl Parser {
                     }
                     TokenKind::End | TokenKind::Semicolon => {
                         return Err(Error::parse(
-                            "expected a predicate in WHERE",
+                            format!("expected a predicate in {}", context.noun()),
                             self.current().span,
                         ));
                     }
@@ -127,7 +156,7 @@ impl Parser {
                         ));
                     }
                     _ => {
-                        let predicate = self.parse_predicate()?;
+                        let predicate = self.parse_predicate(context)?;
                         let index = arena.len();
                         try_push(
                             &mut arena,
@@ -139,6 +168,10 @@ impl Parser {
                     }
                 }
                 continue;
+            }
+
+            if check_closed {
+                break;
             }
 
             let incoming = match self.current_word() {
@@ -183,9 +216,13 @@ impl Parser {
                     }
                 }
                 if !found_left_paren {
-                    return Err(Error::parse("unmatched `)` in WHERE", span));
+                    return Err(Error::parse(
+                        format!("unmatched `)` in {}", context.noun()),
+                        span,
+                    ));
                 }
                 self.advance();
+                check_closed = context == ExpressionContext::Check && operators.is_empty();
                 continue;
             }
 
@@ -198,7 +235,10 @@ impl Parser {
             }
 
             return Err(Error::parse(
-                "expected `AND`, `OR`, `)`, or the end of WHERE",
+                format!(
+                    "expected `AND`, `OR`, `)`, or the end of {}",
+                    context.noun()
+                ),
                 self.current().span,
             ));
         }
@@ -214,7 +254,10 @@ impl Parser {
         while let Some(operator) = operators.pop() {
             match operator {
                 Operator::LeftParen => {
-                    return Err(Error::parse("expected `)` to close WHERE expression", span));
+                    return Err(Error::parse(
+                        format!("expected `)` to close {} expression", context.noun()),
+                        span,
+                    ));
                 }
                 Operator::Logical(operator) => {
                     reduce(operator, &mut values, &mut arena, span)?;
@@ -223,7 +266,10 @@ impl Parser {
         }
 
         let Some(root) = values.pop() else {
-            return Err(Error::parse("expected a predicate in WHERE", span));
+            return Err(Error::parse(
+                format!("expected a predicate in {}", context.noun()),
+                span,
+            ));
         };
         if !values.is_empty() {
             return Err(Error::parse(
@@ -235,25 +281,25 @@ impl Parser {
         normalize(arena, root)
     }
 
-    fn parse_predicate(&mut self) -> Result<Predicate> {
+    fn parse_predicate(&mut self, context: ExpressionContext) -> Result<Predicate> {
         let column = self.parse_column_ref()?;
         let operator = match self.current().kind.clone() {
             TokenKind::Equal => {
                 self.advance();
-                PredicateOperator::Equal(self.parse_predicate_value()?)
+                PredicateOperator::Equal(self.parse_predicate_value(context)?)
             }
             TokenKind::NotEqual => {
                 self.advance();
-                PredicateOperator::NotEqual(self.parse_predicate_value()?)
+                PredicateOperator::NotEqual(self.parse_predicate_value(context)?)
             }
             TokenKind::LessThan => {
                 let inclusive = self.peek_is_adjacent(&TokenKind::Equal);
                 self.advance();
                 if inclusive {
                     self.advance();
-                    PredicateOperator::LessThanOrEqual(self.parse_predicate_value()?)
+                    PredicateOperator::LessThanOrEqual(self.parse_predicate_value(context)?)
                 } else {
-                    PredicateOperator::LessThan(self.parse_predicate_value()?)
+                    PredicateOperator::LessThan(self.parse_predicate_value(context)?)
                 }
             }
             TokenKind::GreaterThan => {
@@ -261,9 +307,9 @@ impl Parser {
                 self.advance();
                 if inclusive {
                     self.advance();
-                    PredicateOperator::GreaterThanOrEqual(self.parse_predicate_value()?)
+                    PredicateOperator::GreaterThanOrEqual(self.parse_predicate_value(context)?)
                 } else {
-                    PredicateOperator::GreaterThan(self.parse_predicate_value()?)
+                    PredicateOperator::GreaterThan(self.parse_predicate_value(context)?)
                 }
             }
             TokenKind::Word(ref word) if word == "LIKE" => {
@@ -297,10 +343,12 @@ impl Parser {
                 PredicateOperator::In(self.parse_in_values(keyword_span)?)
             }
             _ => {
-                return Err(Error::parse(
-                    "expected `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `IS [NOT] NULL`, or `IN (...)`",
-                    self.current().span,
-                ));
+                let expected = if context == ExpressionContext::Where {
+                    "expected `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `IS [NOT] NULL`, or `IN (...)`"
+                } else {
+                    "expected a comparison, LIKE, IS [NOT] NULL, or IN"
+                };
+                return Err(Error::parse(expected, self.current().span));
             }
         };
         Ok(Predicate { column, operator })
@@ -378,10 +426,10 @@ impl Parser {
         Error::unsupported("expressions in IN lists", span)
     }
 
-    fn parse_predicate_value(&mut self) -> Result<Value> {
+    fn parse_predicate_value(&mut self, context: ExpressionContext) -> Result<Value> {
         if matches!(self.current().kind, TokenKind::Word(ref word) if !super::is_reserved(word)) {
             return Err(Error::unsupported(
-                "column-to-column WHERE predicates",
+                format!("column-to-column {} predicates", context.noun()),
                 self.current().span,
             ));
         }

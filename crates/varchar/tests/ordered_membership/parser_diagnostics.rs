@@ -91,7 +91,6 @@ fn ordered_comparisons_outside_where_keep_parent_diagnostics() {
         "SELECT id <> 0 FROM t",
         "INSERT INTO t VALUES (1 <= 2)",
         "UPDATE t SET id = 1 >= 2",
-        "CREATE TABLE t (id INTEGER CHECK (id < 2))",
         "SELECT id << 1 FROM t",
     ] {
         let span_start = sql

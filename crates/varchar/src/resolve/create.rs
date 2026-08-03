@@ -242,6 +242,11 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             columns[index].default = Some(value);
                             semantic_resolution.queue_default(order, index);
                         }
+                        ColumnModifier::Check(_) => {
+                            return Err(Error::Schema(String::from(
+                                "CHECK constraints are not resolved yet",
+                            )));
+                        }
                     }
                 }
             }
@@ -346,6 +351,11 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             return Err(error);
                         }
                         foreign_key_orders.push(order);
+                    }
+                    TableConstraint::Check(_) => {
+                        return Err(Error::Schema(String::from(
+                            "CHECK constraints are not resolved yet",
+                        )));
                     }
                 }
             }

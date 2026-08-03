@@ -22,6 +22,8 @@ impl Parser {
                 CreateElement::Constraint(self.parse_table_foreign_key()?)
             } else if self.current_word() == Some("UNIQUE") && self.peek_is(&TokenKind::LeftParen) {
                 CreateElement::Constraint(self.parse_table_unique()?)
+            } else if self.current_word() == Some("CHECK") && self.peek_is(&TokenKind::LeftParen) {
+                CreateElement::Constraint(TableConstraint::Check(self.parse_check_expression()?))
             } else {
                 CreateElement::Column(self.parse_column_definition()?)
             };
@@ -83,6 +85,9 @@ impl Parser {
                 Some("DEFAULT") => {
                     self.advance();
                     modifiers.push(ColumnModifier::Default(self.parse_value()?));
+                }
+                Some("CHECK") if self.peek_is(&TokenKind::LeftParen) => {
+                    modifiers.push(ColumnModifier::Check(self.parse_check_expression()?));
                 }
                 _ => break,
             }
