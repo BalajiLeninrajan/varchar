@@ -153,6 +153,7 @@ pub(in crate::storage) fn validate_check_against_schema(
     schema: &TableSchema,
     check: &CheckProgram,
 ) -> Result<()> {
+    check.validate_shape()?;
     for node in check.nodes() {
         let CheckProgramNode::Predicate(predicate) = node else {
             continue;

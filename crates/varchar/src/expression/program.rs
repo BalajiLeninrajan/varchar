@@ -1,10 +1,19 @@
 //! Flat resolved Boolean-expression programs.
 
-use crate::Value;
 use crate::resolve::ColumnLocation;
+use crate::{Error, Result, Value};
 
 use super::like::LikeAtom;
-use super::tree::{Leaf, Node, is_well_formed};
+use super::tree::{
+    FrameAccounting, Leaf, Node, ShapeLabels, ShapeRules, UntrackedFrames, is_well_formed,
+    validate_shape,
+};
+
+/// The shape errors a `CHECK` program reports when it is not canonical.
+const CHECK_SHAPE_LABELS: ShapeLabels = ShapeLabels {
+    capacity: "validating CHECK program shape",
+    allocation: "reserving CHECK shape validation state",
+};
 
 /// A semantically validated expression stored in preorder.
 #[derive(Debug, PartialEq, Eq)]
@@ -15,7 +24,7 @@ pub(crate) struct Program<'statement> {
 
 impl<'statement> Program<'statement> {
     pub(crate) fn new(nodes: Vec<ProgramNode<'statement>>) -> Self {
-        debug_assert!(is_well_formed(&nodes));
+        debug_assert!(is_well_formed(&nodes, ShapeRules::COMPLETE));
         let logical_nodes = nodes
             .iter()
             .filter(|node| !matches!(node, ProgramNode::Predicate(_)))
@@ -114,12 +123,37 @@ pub(crate) struct CheckProgram {
 
 impl CheckProgram {
     pub(crate) fn new(nodes: Vec<CheckProgramNode>) -> Self {
-        debug_assert!(is_well_formed(&nodes));
+        debug_assert!(is_well_formed(&nodes, ShapeRules::COMPLETE));
         Self { nodes }
     }
 
     pub(crate) fn nodes(&self) -> &[CheckProgramNode] {
         &self.nodes
+    }
+
+    /// Reject any program that is not the canonical encoding of its tree.
+    pub(crate) fn validate_shape(&self) -> Result<()> {
+        self.validate_shape_with_accounting(&mut UntrackedFrames)
+    }
+
+    fn validate_shape_with_accounting(&self, accounting: &mut impl FrameAccounting) -> Result<()> {
+        if validate_shape(
+            &self.nodes,
+            ShapeRules::CANONICAL,
+            accounting,
+            CHECK_SHAPE_LABELS,
+        )? {
+            Ok(())
+        } else {
+            Err(Error::Schema(String::from(
+                "CHECK program is not a canonical complete expression",
+            )))
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn validate_shape_with_budget(&self, budget: &mut LogicalFrameBudget) -> Result<()> {
+        self.validate_shape_with_accounting(budget)
     }
 }
 
@@ -159,5 +193,66 @@ impl CheckPredicate {
             | Self::IsNotNull { column }
             | Self::In { column, .. } => *column,
         }
+    }
+}
+
+#[cfg(test)]
+pub(super) struct LogicalFrameBudget {
+    limit: usize,
+    used: usize,
+    peak: usize,
+}
+
+#[cfg(test)]
+impl LogicalFrameBudget {
+    pub(super) const fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: 0,
+            peak: 0,
+        }
+    }
+
+    pub(super) const fn frame_bytes() -> usize {
+        super::tree::frame_bytes()
+    }
+
+    pub(super) const fn used(&self) -> usize {
+        self.used
+    }
+
+    pub(super) const fn peak(&self) -> usize {
+        self.peak
+    }
+
+    const fn error(&self) -> Error {
+        Error::ResourceLimit {
+            resource: crate::Resource::StorageWorkingBytes,
+            limit: self.limit,
+        }
+    }
+}
+
+#[cfg(test)]
+impl FrameAccounting for LogicalFrameBudget {
+    fn retain(&mut self, frames: usize) -> Result<()> {
+        let bytes = frames
+            .checked_mul(Self::frame_bytes())
+            .ok_or_else(|| self.error())?;
+        let used = self.used.checked_add(bytes).ok_or_else(|| self.error())?;
+        if used > self.limit {
+            return Err(self.error());
+        }
+        self.used = used;
+        self.peak = self.peak.max(used);
+        Ok(())
+    }
+
+    fn release(&mut self, frames: usize) {
+        let bytes = frames
+            .checked_mul(Self::frame_bytes())
+            .expect("retained CHECK frame bytes were previously representable");
+        debug_assert!(bytes <= self.used);
+        self.used -= bytes;
     }
 }

@@ -1,20 +1,16 @@
 use super::like;
+use super::program::LogicalFrameBudget;
 use super::truth::Truth;
 use super::{
-    CheckPredicate, CheckProgramNode, Evaluator, LikeAtom, Predicate, Program, ProgramNode,
-    compile_pattern, is_well_formed,
+    CheckPredicate, CheckProgram, CheckProgramNode, Evaluator, LikeAtom, Predicate, Program,
+    ProgramNode, ShapeRules, compile_pattern, is_well_formed,
 };
 use crate::resolve::ColumnLocation;
 use crate::sql::{ColumnRef, ExpressionNode, Predicate as ParsedPredicate, PredicateOperator};
 use crate::{Error, Resource, Value};
 
-fn where_leaf() -> ProgramNode<'static> {
-    ProgramNode::Predicate(Predicate::IsNull {
-        column: ColumnLocation {
-            source: 0,
-            column: 0,
-        },
-    })
+fn check_leaf(column: usize) -> CheckProgramNode {
+    CheckProgramNode::Predicate(CheckPredicate::IsNull { column })
 }
 
 fn passes_where(predicate: Predicate<'_>, row: &[Value]) -> bool {
@@ -296,6 +292,46 @@ fn residual_like_evaluation_surfaces_the_regex_backtracking_limit() {
 }
 
 #[test]
+fn wide_check_shape_validation_uses_the_exact_depth_budget() {
+    const GROUPS: usize = 4_096;
+
+    let mut nodes = Vec::with_capacity(1 + GROUPS * 3);
+    nodes.push(CheckProgramNode::And { children: GROUPS });
+    for _ in 0..GROUPS {
+        nodes.push(CheckProgramNode::Or { children: 2 });
+        nodes.push(CheckProgramNode::Predicate(CheckPredicate::IsNull {
+            column: 0,
+        }));
+        nodes.push(CheckProgramNode::Predicate(CheckPredicate::IsNotNull {
+            column: 0,
+        }));
+    }
+    let program = CheckProgram::new(nodes);
+    let frame_bytes = LogicalFrameBudget::frame_bytes();
+    let exact = 2 * frame_bytes;
+    let mut exact_budget = LogicalFrameBudget::new(exact);
+    program
+        .validate_shape_with_budget(&mut exact_budget)
+        .expect("the two simultaneously open logical nodes fit exactly");
+    assert_eq!(exact_budget.peak(), exact);
+    assert_eq!(exact_budget.used(), 0);
+
+    let mut one_under = LogicalFrameBudget::new(exact - 1);
+    assert!(matches!(
+        program.validate_shape_with_budget(&mut one_under),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit,
+        }) if limit == exact - 1
+    ));
+    assert_eq!(
+        one_under.used(),
+        0,
+        "failed validation releases every frame"
+    );
+}
+
+#[test]
 fn existing_leaf_operators_use_sql_null_semantics() {
     let expected = Value::Text("x".to_owned());
     let row = vec![Value::Null, Value::Text("xyz".to_owned())];
@@ -443,6 +479,75 @@ fn in_membership_honors_matches_nulls_and_duplicates() {
     ));
 }
 
+/// The associative-nesting rule belongs to canonical `CHECK` metadata alone.
+///
+/// Every pipeline now shares one shape walk, so the rule has to stay attached
+/// to the `CHECK` rule set instead of leaking into the programs that pushdown
+/// rebuilds or spreading nowhere at all.
+#[test]
+fn only_canonical_shape_rules_reject_associative_nesting() {
+    let nested_and = vec![
+        CheckProgramNode::And { children: 2 },
+        CheckProgramNode::And { children: 2 },
+        check_leaf(0),
+        check_leaf(0),
+        check_leaf(0),
+    ];
+    let nested_or = vec![
+        CheckProgramNode::Or { children: 2 },
+        CheckProgramNode::Or { children: 2 },
+        check_leaf(0),
+        check_leaf(0),
+        check_leaf(0),
+    ];
+    let alternating = vec![
+        CheckProgramNode::And { children: 2 },
+        CheckProgramNode::Or { children: 2 },
+        check_leaf(0),
+        check_leaf(0),
+        check_leaf(0),
+    ];
+
+    for nodes in [nested_and, nested_or] {
+        assert!(
+            is_well_formed(&nodes, ShapeRules::COMPLETE),
+            "a nested associative program is still one complete tree"
+        );
+        assert!(!is_well_formed(&nodes, ShapeRules::CANONICAL));
+        assert!(matches!(
+            CheckProgram::new(nodes).validate_shape(),
+            Err(Error::Schema(message))
+                if message == "CHECK program is not a canonical complete expression"
+        ));
+    }
+
+    assert!(is_well_formed(&alternating, ShapeRules::CANONICAL));
+    CheckProgram::new(alternating)
+        .validate_shape()
+        .expect("alternating connectives are canonical");
+}
+
+/// Deeply right-nested alternation exercises the frames the walk keeps open.
+#[test]
+fn canonical_shape_validation_accepts_deeply_alternating_programs() {
+    const DEPTH: usize = 2_048;
+
+    let mut nodes = Vec::with_capacity(DEPTH * 2 + 1);
+    for level in 0..DEPTH {
+        nodes.push(if level % 2 == 0 {
+            CheckProgramNode::And { children: 2 }
+        } else {
+            CheckProgramNode::Or { children: 2 }
+        });
+        nodes.push(check_leaf(0));
+    }
+    nodes.push(check_leaf(0));
+
+    CheckProgram::new(nodes)
+        .validate_shape()
+        .expect("alternating connectives never nest under themselves");
+}
+
 /// One walk backs every pipeline, so each node type rejects the same shapes.
 #[test]
 fn every_pipeline_rejects_the_same_malformed_programs() {
@@ -453,7 +558,7 @@ fn every_pipeline_rejects_the_same_malformed_programs() {
         },
         operator: PredicateOperator::In(Vec::new()),
     })];
-    assert!(!is_well_formed(&parsed_empty_in));
+    assert!(!is_well_formed(&parsed_empty_in, ShapeRules::COMPLETE));
 
     let resolved_empty_in = vec![ProgramNode::Predicate(Predicate::In {
         column: ColumnLocation {
@@ -462,28 +567,36 @@ fn every_pipeline_rejects_the_same_malformed_programs() {
         },
         values: &[],
     })];
-    assert!(!is_well_formed(&resolved_empty_in));
+    assert!(!is_well_formed(&resolved_empty_in, ShapeRules::COMPLETE));
 
     let check_empty_in = vec![CheckProgramNode::Predicate(CheckPredicate::In {
         column: 0,
         values: Vec::new(),
     })];
-    assert!(!is_well_formed(&check_empty_in));
+    assert!(!is_well_formed(&check_empty_in, ShapeRules::COMPLETE));
 
-    assert!(
-        !is_well_formed(&[] as &[ProgramNode<'_>]),
-        "an empty program has no root"
-    );
-    assert!(
-        !is_well_formed(&[ProgramNode::And { children: 1 }, where_leaf()]),
-        "a logical node needs at least two children"
-    );
-    assert!(
-        !is_well_formed(&[ProgramNode::And { children: 2 }, where_leaf()]),
-        "a program cannot end before all children are encoded"
-    );
-    assert!(
-        !is_well_formed(&[where_leaf(), where_leaf()]),
-        "a program cannot carry a second root"
-    );
+    for rules in [ShapeRules::COMPLETE, ShapeRules::CANONICAL] {
+        assert!(
+            !is_well_formed(&[] as &[CheckProgramNode], rules),
+            "an empty program has no root"
+        );
+        assert!(
+            !is_well_formed(
+                &[CheckProgramNode::And { children: 1 }, check_leaf(0)],
+                rules
+            ),
+            "a logical node needs at least two children"
+        );
+        assert!(
+            !is_well_formed(
+                &[CheckProgramNode::And { children: 2 }, check_leaf(0)],
+                rules
+            ),
+            "a program cannot end before all children are encoded"
+        );
+        assert!(
+            !is_well_formed(&[check_leaf(0), check_leaf(0)], rules),
+            "a program cannot carry a second root"
+        );
+    }
 }

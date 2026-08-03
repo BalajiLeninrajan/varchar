@@ -1,6 +1,6 @@
 //! Flat parsed Boolean-expression programs.
 
-use crate::expression::{Leaf, Node, is_well_formed};
+use crate::expression::{Leaf, Node, ShapeRules, is_well_formed};
 use crate::{Error, Result, Value};
 
 use super::ColumnRef;
@@ -13,7 +13,7 @@ pub(crate) struct Expression {
 
 impl Expression {
     pub(crate) fn new(nodes: Vec<ExpressionNode>) -> Self {
-        debug_assert!(is_well_formed(&nodes));
+        debug_assert!(is_well_formed(&nodes, ShapeRules::COMPLETE));
         Self { nodes }
     }
 
