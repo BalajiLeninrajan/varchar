@@ -4,6 +4,14 @@ use super::{Evaluator, LikeAtom, Predicate, Program, ProgramNode, compile_patter
 use crate::resolve::ColumnLocation;
 use crate::{Error, Resource, Value};
 
+fn passes_where(predicate: Predicate<'_>, row: &[Value]) -> bool {
+    let program = Program::new(vec![ProgramNode::Predicate(predicate)]);
+    let mut evaluator = Evaluator::new(&program, usize::MAX).expect("evaluation stack reserves");
+    evaluator
+        .evaluate_where(&program, &[row])
+        .expect("predicate evaluates")
+}
+
 #[test]
 fn three_valued_and_matrix_is_complete() {
     use Truth::{False, True, Unknown};
@@ -320,4 +328,65 @@ fn existing_leaf_operators_use_sql_null_semantics() {
             .evaluate_where(&like, &rows)
             .expect("decoded LIKE evaluates")
     );
+}
+
+#[test]
+fn ordered_predicates_compare_each_scalar_type_and_reject_null_left_values() {
+    let location = ColumnLocation {
+        source: 0,
+        column: 0,
+    };
+    let integer = Value::Integer(2);
+    assert!(passes_where(
+        Predicate::LessThan {
+            column: location,
+            value: &integer,
+        },
+        &[Value::Integer(1)],
+    ));
+    assert!(passes_where(
+        Predicate::LessThanOrEqual {
+            column: location,
+            value: &integer,
+        },
+        &[Value::Integer(2)],
+    ));
+    assert!(passes_where(
+        Predicate::GreaterThan {
+            column: location,
+            value: &integer,
+        },
+        &[Value::Integer(3)],
+    ));
+    assert!(passes_where(
+        Predicate::GreaterThanOrEqual {
+            column: location,
+            value: &integer,
+        },
+        &[Value::Integer(2)],
+    ));
+
+    let text = Value::Text(String::from("β"));
+    assert!(passes_where(
+        Predicate::LessThan {
+            column: location,
+            value: &text,
+        },
+        &[Value::Text(String::from("é"))],
+    ));
+    let boolean = Value::Boolean(true);
+    assert!(passes_where(
+        Predicate::LessThan {
+            column: location,
+            value: &boolean,
+        },
+        &[Value::Boolean(false)],
+    ));
+    assert!(!passes_where(
+        Predicate::LessThan {
+            column: location,
+            value: &integer,
+        },
+        &[Value::Null],
+    ));
 }

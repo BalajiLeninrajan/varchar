@@ -111,6 +111,28 @@ fn predicate_at<'statement>(
             validate_value(value, definition)?;
             Ok(ResolvedPredicate::NotEqual { column, value })
         }
+        PredicateOperator::LessThan(Value::Null)
+        | PredicateOperator::LessThanOrEqual(Value::Null)
+        | PredicateOperator::GreaterThan(Value::Null)
+        | PredicateOperator::GreaterThanOrEqual(Value::Null) => Err(Error::Type(String::from(
+            "NULL cannot be compared with `<`, `<=`, `>`, or `>=`; use IS NULL or IS NOT NULL",
+        ))),
+        PredicateOperator::LessThan(value) => {
+            validate_value(value, definition)?;
+            Ok(ResolvedPredicate::LessThan { column, value })
+        }
+        PredicateOperator::LessThanOrEqual(value) => {
+            validate_value(value, definition)?;
+            Ok(ResolvedPredicate::LessThanOrEqual { column, value })
+        }
+        PredicateOperator::GreaterThan(value) => {
+            validate_value(value, definition)?;
+            Ok(ResolvedPredicate::GreaterThan { column, value })
+        }
+        PredicateOperator::GreaterThanOrEqual(value) => {
+            validate_value(value, definition)?;
+            Ok(ResolvedPredicate::GreaterThanOrEqual { column, value })
+        }
         PredicateOperator::Like(pattern) => {
             if definition.data_type != DataType::Text {
                 return Err(Error::Type(format!(

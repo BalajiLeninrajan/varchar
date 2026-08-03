@@ -1,5 +1,7 @@
 //! Iterative evaluation of resolved expression programs.
 
+use std::cmp::Ordering;
+
 use crate::resolve::ColumnLocation;
 use crate::{Error, Result, Value};
 
@@ -173,6 +175,14 @@ fn evaluate_predicate(
             Truth::False => Truth::True,
             Truth::Unknown => Truth::Unknown,
         },
+        Predicate::LessThan { value, .. } => compare_ordered(left, value, Ordering::is_lt)?,
+        Predicate::LessThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| !ordering.is_gt())?
+        }
+        Predicate::GreaterThan { value, .. } => compare_ordered(left, value, Ordering::is_gt)?,
+        Predicate::GreaterThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| !ordering.is_lt())?
+        }
         Predicate::Like { atoms, .. } => match left {
             Value::Text(value) => truth(like::matches_charged(value, atoms, like_work)?),
             Value::Null => Truth::Unknown,
@@ -216,6 +226,30 @@ fn compare_equal(left: &Value, right: &Value) -> Truth {
     } else {
         Truth::False
     }
+}
+
+fn compare_ordered(
+    left: &Value,
+    right: &Value,
+    accepts: impl FnOnce(Ordering) -> bool,
+) -> Result<Truth> {
+    if matches!(left, Value::Null) {
+        return Ok(Truth::Unknown);
+    }
+    let ordering = match (left, right) {
+        (Value::Text(left), Value::Text(right)) => left.chars().cmp(right.chars()),
+        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+        (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
+        (
+            Value::Text(_) | Value::Integer(_) | Value::Boolean(_) | Value::Null,
+            Value::Text(_) | Value::Integer(_) | Value::Boolean(_) | Value::Null,
+        ) => {
+            return Err(Error::Type(String::from(
+                "resolved ordered predicate contained incompatible scalar values",
+            )));
+        }
+    };
+    Ok(truth(accepts(ordering)))
 }
 
 fn values_equal(left: &Value, right: &Value) -> bool {

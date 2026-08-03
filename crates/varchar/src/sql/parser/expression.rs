@@ -38,7 +38,42 @@ impl Parser {
         if !self.consume_keyword("WHERE") {
             return Ok(None);
         }
+
+        let start = self.position;
+        self.where_expression = Some(start..self.where_expression_end(start));
         self.parse_expression().map(Some)
+    }
+
+    fn where_expression_end(&self, start: usize) -> usize {
+        let mut depth = 0_usize;
+        let mut index = start;
+        while let Some(token) = self.tokens.get(index) {
+            if matches!(&token.kind, TokenKind::End | TokenKind::Semicolon)
+                || (depth == 0 && self.starts_trailing_clause(index))
+            {
+                break;
+            }
+            match &token.kind {
+                TokenKind::LeftParen => depth = depth.saturating_add(1),
+                TokenKind::RightParen if depth > 0 => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        index
+    }
+
+    fn starts_trailing_clause(&self, index: usize) -> bool {
+        match self.word_at(index) {
+            Some("JOIN" | "ORDER" | "GROUP" | "LIMIT" | "AS") => true,
+            Some("LEFT" | "RIGHT" | "FULL") => {
+                self.word_at(index + 1) == Some("JOIN")
+                    || (self.word_at(index + 1) == Some("OUTER")
+                        && self.word_at(index + 2) == Some("JOIN"))
+            }
+            Some("OUTER" | "CROSS" | "NATURAL") => self.word_at(index + 1) == Some("JOIN"),
+            _ => false,
+        }
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
@@ -211,6 +246,26 @@ impl Parser {
                 self.advance();
                 PredicateOperator::NotEqual(self.parse_predicate_value()?)
             }
+            TokenKind::LessThan => {
+                let inclusive = self.peek_is_adjacent(&TokenKind::Equal);
+                self.advance();
+                if inclusive {
+                    self.advance();
+                    PredicateOperator::LessThanOrEqual(self.parse_predicate_value()?)
+                } else {
+                    PredicateOperator::LessThan(self.parse_predicate_value()?)
+                }
+            }
+            TokenKind::GreaterThan => {
+                let inclusive = self.peek_is_adjacent(&TokenKind::Equal);
+                self.advance();
+                if inclusive {
+                    self.advance();
+                    PredicateOperator::GreaterThanOrEqual(self.parse_predicate_value()?)
+                } else {
+                    PredicateOperator::GreaterThan(self.parse_predicate_value()?)
+                }
+            }
             TokenKind::Word(ref word) if word == "LIKE" => {
                 self.advance();
                 match self.current().kind.clone() {
@@ -238,7 +293,7 @@ impl Parser {
             }
             _ => {
                 return Err(Error::parse(
-                    "expected `=`, `!=`, `LIKE`, or `IS [NOT] NULL`",
+                    "expected `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, or `IS [NOT] NULL`",
                     self.current().span,
                 ));
             }

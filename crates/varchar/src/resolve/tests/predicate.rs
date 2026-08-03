@@ -48,6 +48,69 @@ fn predicate_resolution_preserves_name_and_operator_error_order() {
 }
 
 #[test]
+fn ordered_predicates_require_same_type_non_null_scalars() {
+    let schema = people_schema();
+    for (name, operator) in [
+        ("id", PredicateOperator::LessThan(Value::Integer(10))),
+        (
+            "note",
+            PredicateOperator::LessThanOrEqual(Value::Text(String::from("m"))),
+        ),
+        (
+            "active",
+            PredicateOperator::GreaterThan(Value::Boolean(false)),
+        ),
+        (
+            "id",
+            PredicateOperator::GreaterThanOrEqual(Value::Integer(1)),
+        ),
+    ] {
+        let parsed = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: name.to_owned(),
+            },
+            operator,
+        };
+        predicate(&schema, &parsed).expect("same-type ordered predicate resolves");
+    }
+
+    for operator in [
+        PredicateOperator::LessThan(Value::Null),
+        PredicateOperator::LessThanOrEqual(Value::Null),
+        PredicateOperator::GreaterThan(Value::Null),
+        PredicateOperator::GreaterThanOrEqual(Value::Null),
+    ] {
+        let null_ordering = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: String::from("id"),
+            },
+            operator,
+        };
+        assert!(matches!(
+            predicate(&schema, &null_ordering),
+            Err(Error::Type(ref message))
+                if message
+                    == "NULL cannot be compared with `<`, `<=`, `>`, or `>=`; use IS NULL or IS NOT NULL"
+        ));
+    }
+
+    let wrong_type = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("active"),
+        },
+        operator: PredicateOperator::GreaterThan(Value::Integer(0)),
+    };
+    assert!(matches!(
+        predicate(&schema, &wrong_type),
+        Err(Error::Type(ref message))
+            if message == "column \"active\" expects BOOLEAN, got INTEGER"
+    ));
+}
+
+#[test]
 fn select_predicates_resolve_in_statement_order() {
     let catalog = catalog("V2;~S|t|id:I:!|note:T:!;");
     let invalid_like_first =

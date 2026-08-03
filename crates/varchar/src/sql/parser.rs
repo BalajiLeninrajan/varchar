@@ -5,9 +5,11 @@ mod expression;
 mod mutation;
 mod select;
 
+use std::ops::Range;
+
 use super::ast::{ColumnRef, Statement};
-use super::lexer::{Token, TokenKind, lex_for_parser};
-use crate::{Error, Result, Value};
+use super::lexer::{Token, TokenKind, comparison_error, lex_for_parser};
+use crate::{Error, Result, Span, Value};
 
 pub(super) fn parse(input: &str) -> Result<Statement> {
     let tokens = lex_for_parser(input)?;
@@ -20,6 +22,7 @@ pub(super) fn parse(input: &str) -> Result<Statement> {
 struct Parser {
     tokens: Vec<Token>,
     position: usize,
+    where_expression: Option<Range<usize>>,
 }
 
 impl Parser {
@@ -27,6 +30,7 @@ impl Parser {
         Self {
             tokens,
             position: 0,
+            where_expression: None,
         }
     }
 
@@ -69,12 +73,65 @@ impl Parser {
     }
 
     fn reject_deferred_lexical_errors(&self) -> Result<()> {
-        for token in &self.tokens {
+        let mut index = 0;
+        while let Some(token) = self.tokens.get(index) {
             if let TokenKind::LexicalError(error) = &token.kind {
                 return Err(error.error(token.span));
             }
+
+            if comparison_fragment(&token.kind).is_some() {
+                if self.token_is_in_where_expression(index) {
+                    let (operator, end, span) = self.comparison_sequence(index);
+                    if !is_where_comparison(&operator) {
+                        return Err(comparison_error(&operator, span));
+                    }
+                    index = end;
+                    continue;
+                }
+
+                match &token.kind {
+                    TokenKind::LessThan | TokenKind::GreaterThan => {
+                        return Err(Error::unsupported(
+                            "ordered comparisons",
+                            Span::new(token.span.start, token.span.start + 1),
+                        ));
+                    }
+                    TokenKind::Bang => return Err(comparison_error("!", token.span)),
+                    _ => {}
+                }
+            }
+
+            index += 1;
         }
         Ok(())
+    }
+
+    fn comparison_sequence(&self, start: usize) -> (String, usize, Span) {
+        let mut operator = String::new();
+        let mut end = start;
+        let mut span_end = self.tokens[start].span.start;
+        while let Some(token) = self.tokens.get(end) {
+            if end > start && token.span.start != span_end {
+                break;
+            }
+            let Some(fragment) = comparison_fragment(&token.kind) else {
+                break;
+            };
+            operator.push_str(fragment);
+            span_end = token.span.end;
+            end += 1;
+        }
+        (
+            operator,
+            end,
+            Span::new(self.tokens[start].span.start, span_end),
+        )
+    }
+
+    fn token_is_in_where_expression(&self, index: usize) -> bool {
+        self.where_expression
+            .as_ref()
+            .is_some_and(|range| range.contains(&index))
     }
 
     fn parse_column_ref(&mut self) -> Result<ColumnRef> {
@@ -178,15 +235,22 @@ impl Parser {
         }
     }
 
+    fn peek_is_adjacent(&self, expected: &TokenKind) -> bool {
+        self.tokens.get(self.position + 1).is_some_and(|token| {
+            &token.kind == expected && self.current().span.end == token.span.start
+        })
+    }
+
     fn current_word(&self) -> Option<&str> {
-        match &self.current().kind {
-            TokenKind::Word(word) => Some(word),
-            _ => None,
-        }
+        self.word_at(self.position)
     }
 
     fn peek_word(&self) -> Option<&str> {
-        match self.tokens.get(self.position + 1).map(|token| &token.kind) {
+        self.word_at(self.position + 1)
+    }
+
+    fn word_at(&self, index: usize) -> Option<&str> {
+        match self.tokens.get(index).map(|token| &token.kind) {
             Some(TokenKind::Word(word)) => Some(word),
             _ => None,
         }
@@ -205,6 +269,21 @@ impl Parser {
     fn at_end(&self) -> bool {
         matches!(self.current().kind, TokenKind::End)
     }
+}
+
+fn comparison_fragment(kind: &TokenKind) -> Option<&'static str> {
+    match kind {
+        TokenKind::Bang => Some("!"),
+        TokenKind::Equal => Some("="),
+        TokenKind::NotEqual => Some("!="),
+        TokenKind::LessThan => Some("<"),
+        TokenKind::GreaterThan => Some(">"),
+        _ => None,
+    }
+}
+
+fn is_where_comparison(operator: &str) -> bool {
+    matches!(operator, "=" | "!=" | "<" | "<=" | ">" | ">=")
 }
 
 fn trailing_feature(word: &str) -> Option<&'static str> {

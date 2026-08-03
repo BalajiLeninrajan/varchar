@@ -64,6 +64,22 @@ pub(crate) enum Predicate<'statement> {
         column: ColumnLocation,
         value: &'statement Value,
     },
+    LessThan {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    LessThanOrEqual {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    GreaterThan {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    GreaterThanOrEqual {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
     Like {
         column: ColumnLocation,
         atoms: Vec<LikeAtom>,
@@ -81,6 +97,10 @@ impl Predicate<'_> {
         match self {
             Self::Equal { column, .. }
             | Self::NotEqual { column, .. }
+            | Self::LessThan { column, .. }
+            | Self::LessThanOrEqual { column, .. }
+            | Self::GreaterThan { column, .. }
+            | Self::GreaterThanOrEqual { column, .. }
             | Self::Like { column, .. }
             | Self::IsNull { column }
             | Self::IsNotNull { column } => *column,

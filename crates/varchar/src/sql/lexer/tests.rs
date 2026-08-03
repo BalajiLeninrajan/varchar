@@ -178,13 +178,36 @@ fn a_lexical_error_stops_lexing_before_later_tokens() {
 }
 
 #[test]
-fn bang_without_equals_is_still_an_eager_lexical_error() {
-    assert!(matches!(
-        lex_for_parser("!"),
-        Err(Error::Parse {
-            ref message,
-            span_start: 0,
-            span_end: 1,
-        }) if message == "expected `=` after `!`"
-    ));
+fn comparison_operators_lex_one_character_at_a_time_for_the_parser() {
+    assert_eq!(
+        lex_for_parser("< <= > >= != !")
+            .expect("comparison operators lex")
+            .into_iter()
+            .map(|token| (token.kind, token.span))
+            .collect::<Vec<_>>(),
+        vec![
+            (TokenKind::LessThan, Span::new(0, 1)),
+            (TokenKind::LessThan, Span::new(2, 3)),
+            (TokenKind::Equal, Span::new(3, 4)),
+            (TokenKind::GreaterThan, Span::new(5, 6)),
+            (TokenKind::GreaterThan, Span::new(7, 8)),
+            (TokenKind::Equal, Span::new(8, 9)),
+            (TokenKind::NotEqual, Span::new(10, 12)),
+            (TokenKind::Bang, Span::new(13, 14)),
+            (TokenKind::End, Span::new(14, 14)),
+        ]
+    );
+}
+
+#[test]
+fn adjacency_is_recoverable_from_spans_alone() {
+    let glued = lex_for_parser("a<=1").expect("glued operators lex");
+    assert_eq!(glued[1].kind, TokenKind::LessThan);
+    assert_eq!(glued[2].kind, TokenKind::Equal);
+    assert_eq!(glued[1].span.end, glued[2].span.start);
+
+    let spaced = lex_for_parser("a< =1").expect("spaced operators lex");
+    assert_eq!(spaced[1].kind, TokenKind::LessThan);
+    assert_eq!(spaced[2].kind, TokenKind::Equal);
+    assert_ne!(spaced[1].span.end, spaced[2].span.start);
 }

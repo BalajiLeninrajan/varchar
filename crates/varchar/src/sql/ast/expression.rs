@@ -60,6 +60,10 @@ pub(crate) struct Predicate {
 pub(crate) enum PredicateOperator {
     Equal(Value),
     NotEqual(Value),
+    LessThan(Value),
+    LessThanOrEqual(Value),
+    GreaterThan(Value),
+    GreaterThanOrEqual(Value),
     Like(String),
     IsNull,
     IsNotNull,
