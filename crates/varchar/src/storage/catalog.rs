@@ -6,6 +6,7 @@ use std::ops::Range;
 
 pub(super) use map::CatalogMap;
 
+use super::decode::{self, RowRecordRef};
 use super::{EMPTY_BLOB, TableSchema, ValidatedTableSchema};
 
 /// The derived schema index reconstructed from the authoritative string.
@@ -30,6 +31,10 @@ impl Catalog {
         self.tables.get(name)
     }
 
+    pub(crate) fn table_with_order(&self, name: &str) -> Option<(usize, &TableSchema)> {
+        self.tables.get_with_order(name)
+    }
+
     pub(crate) fn validated_table(&self, name: &str) -> Option<ValidatedTableSchema<'_>> {
         self.tables
             .get(name)
@@ -40,8 +45,19 @@ impl Catalog {
         self.tables.values()
     }
 
-    pub(super) fn tables(&self) -> impl Iterator<Item = (&str, &TableSchema)> {
+    pub(crate) fn tables(&self) -> impl Iterator<Item = (&str, &TableSchema)> {
         self.tables.iter()
+    }
+
+    pub(crate) fn table_count(&self) -> usize {
+        self.tables.len()
+    }
+
+    pub(crate) fn row_records<'a>(
+        &self,
+        blob: &'a str,
+    ) -> impl Iterator<Item = crate::Result<RowRecordRef<'a>>> {
+        decode::row_records(blob, self.row_start)
     }
 
     pub(crate) fn auto_increment(&self, table: &str) -> Option<AutoIncrement> {

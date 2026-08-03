@@ -4,6 +4,7 @@ use super::model::{
     FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
     set_value_clone_failure_after,
 };
+use super::referential::enforce_update_restrict;
 use super::{
     freeze_rows, measure_and_check_update_database_size, sequence_edit_lengths_for_targets,
     sort_and_validate_ranges,
@@ -647,4 +648,76 @@ fn governed_reservations_report_allocation_failures() {
     ));
     assert!(values.is_empty());
     assert_eq!(budget.used(), 7, "failed reservations refund their charge");
+}
+
+#[test]
+fn update_restrict_releases_only_edges_the_same_statement_retargets() {
+    let record = "~R|nodes|I3|I3;";
+    let blob = format!(
+        "V2;~S|nodes|id:I:!|parent_id:I:?;~P|nodes|id;~F|nodes|parent_id|nodes|id;{record}"
+    );
+    let start = blob.find(record).expect("the fixture holds one row record");
+    let columns = vec![
+        SchemaColumn {
+            name: String::from("id"),
+            data_type: DataType::Integer,
+            nullable: false,
+            default: None,
+        },
+        SchemaColumn {
+            name: String::from("parent_id"),
+            data_type: DataType::Integer,
+            nullable: true,
+            default: None,
+        },
+    ];
+    let state = StorageState::load(blob, usize::MAX).expect("the self-reference loads");
+    let schema = state
+        .catalog()
+        .table("nodes")
+        .expect("the fixture declares nodes");
+
+    let enforce = |assignments: &mut [(usize, Value)]| -> crate::Result<()> {
+        let layout = RowLayout {
+            table: "nodes",
+            columns: &columns,
+        };
+        let mut budget = WorkingBudget::with_limit(usize::MAX);
+        let (rows, _) = freeze_rows(
+            state.as_str(),
+            [Ok(start..start + record.len())],
+            layout,
+            &mut budget,
+            |_| Ok(true),
+        )
+        .expect("the validated record freezes");
+        let update = PreparedDirectUpdate::new(assignments, columns.len(), rows[0].identity())?;
+        enforce_update_restrict(
+            state.as_str(),
+            state.catalog(),
+            schema,
+            &rows,
+            &update,
+            &mut budget,
+        )
+    };
+
+    // Re-keying alone leaves the row's own reference behind on the old key.
+    assert!(matches!(
+        enforce(&mut [(0, Value::Integer(4))]),
+        Err(Error::Constraint(ref message))
+            if message == "foreign key \"nodes\".\"parent_id\" restricts mutation of \"nodes\""
+    ));
+    // Assigning the foreign-key column something else that still names the old
+    // key restricts for the same reason.
+    assert!(matches!(
+        enforce(&mut [(0, Value::Integer(4)), (1, Value::Integer(3))]),
+        Err(Error::Constraint(_))
+    ));
+    // Moving the reference with the key releases the edge; whether the new key
+    // resolves is left to candidate validation.
+    enforce(&mut [(0, Value::Integer(4)), (1, Value::Integer(4))])
+        .expect("a co-mutated child does not restrict its own parent");
+    enforce(&mut [(0, Value::Integer(4)), (1, Value::Null)])
+        .expect("a nulled reference does not restrict its parent");
 }

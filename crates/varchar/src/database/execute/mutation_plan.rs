@@ -5,10 +5,12 @@
 //! replacements, and only afterward hands physical edits to storage.
 
 mod model;
+mod referential;
 
 use std::ops::Range;
 
 use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
+use referential::enforce_update_restrict;
 
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
@@ -49,6 +51,18 @@ impl MutationPlan {
         let layout = scan.validated_row_layout();
         let update =
             PreparedDirectUpdate::new(assignments, layout.column_count(), rows[0].identity())?;
+        let parent_schema = candidate
+            .catalog()
+            .table(scan.row_layout().table)
+            .expect("a compiled mutation scan names a catalog table");
+        enforce_update_restrict(
+            blob,
+            candidate.catalog(),
+            parent_schema,
+            &rows,
+            &update,
+            &mut budget,
+        )?;
         with_validated_row_encoder(layout, |encoder| -> Result<()> {
             let (measurements, measurement_working_bytes) = measure_and_check_update_database_size(
                 blob.len(),
@@ -98,6 +112,20 @@ impl MutationPlan {
         }
         Ok(direct_affected)
     }
+}
+
+fn row_record_for_identity<'a>(
+    blob: &'a str,
+    identity: RowIdentity,
+) -> Result<storage::RowRecordRef<'a>> {
+    let record = blob
+        .get(identity.range())
+        .ok_or_else(|| invalid_range(identity.start()))?;
+    let row_record = storage::row_record(record, identity.start())?;
+    if row_record.range() != identity.range() {
+        return Err(invalid_range(identity.start()));
+    }
+    Ok(row_record)
 }
 
 fn sequence_edit_lengths_for_targets(

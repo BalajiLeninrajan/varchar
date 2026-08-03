@@ -1,11 +1,18 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Database, Error, Limits, Outcome, Resource};
+use varchar::{Database, Error, Limits, Outcome, Resource, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
         .execute(sql)
         .unwrap_or_else(|error| panic!("failed to execute {sql:?}: {error}"))
+}
+
+fn rows(database: &mut Database, sql: &str) -> Vec<Vec<Value>> {
+    match execute(database, sql) {
+        Outcome::Rows(rows) => rows.into_rows(),
+        other => panic!("expected rows, got {other:?}"),
+    }
 }
 
 fn atomic_error(database: &mut Database, sql: &str) -> Error {
@@ -62,6 +69,80 @@ fn default_and_explicit_restrict_block_parent_mutations_atomically() {
     );
     assert!(!database.as_str().contains("|R|R;"));
     assert!(database.as_str().starts_with("V2;"));
+}
+
+#[test]
+fn restrict_admits_coordinated_self_referential_mutations() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES nodes(id))",
+    );
+    execute(&mut database, "INSERT INTO nodes VALUES (1, 1)");
+
+    // The reference is rewritten by the same statement that re-keys its parent,
+    // so the candidate database never holds a dangling row.
+    assert_eq!(
+        execute(
+            &mut database,
+            "UPDATE nodes SET id = 2, parent_id = 2 WHERE id = 1",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id, parent_id FROM nodes"),
+        vec![vec![Value::Integer(2), Value::Integer(2)]]
+    );
+
+    // A rewrite that lands on a key nothing supplies still dangles, and the
+    // candidate-side check rejects it.
+    assert!(matches!(
+        atomic_error(
+            &mut database,
+            "UPDATE nodes SET id = 3, parent_id = 9 WHERE id = 2",
+        ),
+        Error::Constraint(_)
+    ));
+    // Re-keying without moving the reference dangles just as plainly.
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE nodes SET id = 3 WHERE id = 2"),
+        Error::Constraint(_)
+    ));
+
+    assert_eq!(
+        execute(&mut database, "DELETE FROM nodes"),
+        Outcome::Affected { rows: 1 }
+    );
+}
+
+#[test]
+fn restrict_still_rejects_mutations_that_strand_an_uninvolved_child() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES nodes(id))",
+    );
+    execute(&mut database, "INSERT INTO nodes VALUES (1, NULL)");
+    execute(&mut database, "INSERT INTO nodes VALUES (2, 1)");
+
+    // Row 2 is outside both statements' target sets, so its reference to row 1
+    // is exactly what RESTRICT exists to protect.
+    for sql in [
+        "UPDATE nodes SET id = 3 WHERE id = 1",
+        "UPDATE nodes SET id = 3, parent_id = 3 WHERE id = 1",
+        "DELETE FROM nodes WHERE id = 1",
+    ] {
+        assert!(
+            matches!(atomic_error(&mut database, sql), Error::Constraint(_)),
+            "{sql:?} must remain restricted"
+        );
+    }
+
+    // Naming both rows lets the same statement move the parent and its child.
+    assert_eq!(
+        execute(&mut database, "DELETE FROM nodes"),
+        Outcome::Affected { rows: 2 }
+    );
 }
 
 #[test]

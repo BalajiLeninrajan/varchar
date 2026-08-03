@@ -77,7 +77,7 @@ impl<'assignments> PreparedDirectUpdate<'assignments> {
         Ok(Self { assignments })
     }
 
-    fn assignments(&self) -> &[(usize, Value)] {
+    pub(super) fn assignments(&self) -> &[(usize, Value)] {
         self.assignments
     }
 
@@ -134,6 +134,10 @@ impl FrozenRow {
     #[cfg(test)]
     pub(super) fn original_values(&self) -> &[Value] {
         &self.original_values
+    }
+
+    pub(super) fn original_value(&self, column: usize) -> Option<&Value> {
+        self.original_values.get(column)
     }
 
     pub(super) fn measure_direct_update<'brand>(
@@ -327,8 +331,17 @@ impl WorkingBudget {
         values: &mut Vec<T>,
         operation: &'static str,
     ) -> Result<()> {
+        let _ = self.reserve_for_push_charged(values, operation)?;
+        Ok(())
+    }
+
+    pub(super) fn reserve_for_push_charged<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        operation: &'static str,
+    ) -> Result<usize> {
         if values.len() < values.capacity() {
-            return Ok(());
+            return Ok(0);
         }
         let target_capacity = if values.capacity() == 0 {
             1
@@ -341,8 +354,7 @@ impl WorkingBudget {
         let additional = target_capacity
             .checked_sub(values.len())
             .ok_or_else(|| self.limit_error())?;
-        let _ = self.reserve_exact(values, additional, operation)?;
-        Ok(())
+        self.reserve_exact(values, additional, operation)
     }
 
     pub(super) fn reserve_exact<T>(
