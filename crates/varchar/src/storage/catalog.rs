@@ -27,6 +27,16 @@ impl Catalog {
         self.tables.get(name)
     }
 
+    pub(super) fn schemas(&self) -> impl Iterator<Item = &TableSchema> {
+        self.tables.values()
+    }
+
+    pub(super) fn tables(&self) -> impl Iterator<Item = (&str, &TableSchema)> {
+        self.tables
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema))
+    }
+
     pub(crate) fn auto_increment(&self, table: &str) -> Option<AutoIncrement> {
         self.auto_increments.get(table).map(|state| AutoIncrement {
             column: state.column,

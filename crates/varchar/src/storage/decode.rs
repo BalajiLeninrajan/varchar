@@ -67,6 +67,8 @@ pub(super) fn row_records(
     blob: &str,
     row_start: usize,
 ) -> impl Iterator<Item = Result<RowRecordRef<'_>>> {
+    #[cfg(test)]
+    record_blob_row_scan();
     records_from(blob, row_start).map(|record| {
         record.and_then(|record| {
             if record.kind != RecordKind::Row {
@@ -252,6 +254,27 @@ fn decode_text(payload: &str, offset: usize) -> Result<String> {
         .map_err(|_| allocation_error("reserving decoded text"))?;
     scan_text(payload, offset, |character| decoded.push(character))?;
     Ok(decoded)
+}
+
+// Counts full-blob row scans so tests can pin the number of validation passes per load.
+#[cfg(test)]
+std::thread_local! {
+    static BLOB_ROW_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn record_blob_row_scan() {
+    BLOB_ROW_SCANS.with(|scans| scans.set(scans.get() + 1));
+}
+
+#[cfg(test)]
+pub(super) fn reset_blob_row_scans() {
+    BLOB_ROW_SCANS.with(|scans| scans.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn blob_row_scans() -> usize {
+    BLOB_ROW_SCANS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
