@@ -12,8 +12,11 @@ pub(super) enum TokenKind {
     Comma,
     Dot,
     Star,
+    Bang,
     Equal,
     NotEqual,
+    LessThan,
+    GreaterThan,
     LexicalError(LexicalErrorKind),
     Semicolon,
     End,
@@ -83,23 +86,30 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
                 cursor += 1;
                 TokenKind::Star
             }
+            '!' => {
+                cursor += 1;
+                if bytes.get(cursor) == Some(&b'=') {
+                    cursor += 1;
+                    TokenKind::NotEqual
+                } else {
+                    TokenKind::Bang
+                }
+            }
+            '<' => {
+                cursor += 1;
+                TokenKind::LessThan
+            }
             '=' => {
                 cursor += 1;
                 TokenKind::Equal
             }
+            '>' => {
+                cursor += 1;
+                TokenKind::GreaterThan
+            }
             ';' => {
                 cursor += 1;
                 TokenKind::Semicolon
-            }
-            '!' if bytes.get(cursor + 1) == Some(&b'=') => {
-                cursor += 2;
-                TokenKind::NotEqual
-            }
-            '!' => {
-                return Err(Error::parse(
-                    "expected `=` after `!`",
-                    Span::new(start, start + 1),
-                ));
             }
             '\'' => {
                 cursor += 1;
@@ -166,12 +176,6 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
                 }
                 TokenKind::Word(input[start..cursor].to_ascii_uppercase())
             }
-            '<' | '>' => {
-                return Err(Error::unsupported(
-                    "ordered comparisons",
-                    Span::new(start, start + width),
-                ));
-            }
             _ => {
                 cursor += width;
                 TokenKind::LexicalError(LexicalErrorKind::UnexpectedCharacter(character))
@@ -196,6 +200,14 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
 
 pub(super) fn unexpected_character_error(character: char, span: Span) -> Error {
     Error::parse(format!("unexpected character {character:?}"), span)
+}
+
+pub(super) fn comparison_error(operator: &str, span: Span) -> Error {
+    match operator {
+        "<>" => Error::unsupported("comparison operator `<>`", span),
+        "!" => Error::parse("expected `=` after `!`", span),
+        _ => Error::parse(format!("malformed comparison operator `{operator}`"), span),
+    }
 }
 
 #[cfg(test)]

@@ -55,6 +55,14 @@ pub(super) fn row_scan_pattern(
             ResolvedPredicate::IsNotNull { .. } => {
                 push_cell_pattern(&mut pattern, &columns[column_index], false)?;
             }
+            ResolvedPredicate::LessThan { .. }
+            | ResolvedPredicate::LessThanOrEqual { .. }
+            | ResolvedPredicate::GreaterThan { .. }
+            | ResolvedPredicate::GreaterThanOrEqual { .. } => {
+                return Err(Error::Capacity {
+                    operation: "building a row pattern from a residual predicate",
+                });
+            }
         }
         pattern.push_str(cell_boundary_pattern(column_index, columns.len()))?;
         pattern.push_char(')')?;

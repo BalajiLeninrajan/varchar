@@ -1,6 +1,6 @@
 use super::{parse, select};
-use crate::Error;
-use crate::sql::ast::{Expression, ExpressionNode, Statement};
+use crate::sql::ast::{Expression, ExpressionNode, PredicateOperator, Statement};
+use crate::{Error, Value};
 
 fn expression(sql: &str) -> Expression {
     select(sql)
@@ -179,6 +179,60 @@ fn excluded_expression_forms_have_structured_features_and_exact_spans() {
     ] {
         assert_unsupported(sql, feature, marker);
     }
+}
+
+#[test]
+fn ordered_predicates_stay_flat_and_format_canonically() {
+    let expression = expression("SELECT * FROM t WHERE a < 1 AND b <= 2 AND c > 3 AND d >= 4");
+
+    assert!(matches!(
+        expression.nodes()[0],
+        ExpressionNode::And { children: 4 }
+    ));
+    assert!(matches!(
+        &expression.nodes()[1],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::LessThan(Value::Integer(1))
+    ));
+    assert!(matches!(
+        &expression.nodes()[2],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::LessThanOrEqual(Value::Integer(2))
+    ));
+    assert!(matches!(
+        &expression.nodes()[3],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::GreaterThan(Value::Integer(3))
+    ));
+    assert!(matches!(
+        &expression.nodes()[4],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::GreaterThanOrEqual(Value::Integer(4))
+    ));
+    assert_eq!(expression.predicate_units().expect("count fits"), 4);
+    assert_eq!(
+        expression.to_string(),
+        "a < 1 AND b <= 2 AND c > 3 AND d >= 4"
+    );
+}
+
+#[test]
+fn malformed_comparison_operators_are_rejected_as_units_by_the_parser() {
+    for operator in ["==", "=>", "<<", ">>", "!<", "!==", "<==", "><", "<>="] {
+        let sql = format!("SELECT * FROM t WHERE a {operator} 1");
+        assert_parse_error(
+            &sql,
+            &format!("malformed comparison operator `{operator}`"),
+            operator,
+        );
+    }
+
+    assert_parse_error("SELECT * FROM t WHERE a ! 1", "expected `=` after `!`", "!");
+    assert_unsupported(
+        "SELECT * FROM t WHERE a <> 1",
+        "comparison operator `<>`",
+        "<>",
+    );
 }
 
 #[test]

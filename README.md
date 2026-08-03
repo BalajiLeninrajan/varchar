@@ -96,11 +96,11 @@ Omitting the generated column from a named-column insert, or explicitly insertin
 
 `WHERE` supports parentheses plus `AND`/`OR`, with `AND` binding more tightly than `OR`. Predicate leaves are:
 
-- `=`, `!=`
+- `=`, `!=`, `<`, `<=`, `>`, `>=`
 - `LIKE`, where `%` matches any sequence and `_` matches one Unicode scalar
 - `IS NULL`, `IS NOT NULL`
 
-Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` use SQL three-valued truth for nullable columns: a `NULL` input produces unknown, and `WHERE` retains only true. Direct `= NULL` and `!= NULL` comparisons are type errors; use `IS NULL` or `IS NOT NULL`. All leaves are resolved and type-checked before execution, even when runtime short-circuiting would skip one. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
+Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` use SQL three-valued truth for nullable columns: a `NULL` left value produces unknown, and `WHERE` retains only true. Direct comparison to a `NULL` literal is a type error for every comparison operator; use `IS NULL` or `IS NOT NULL`. Ordered operands must have the column's type: integers use signed numeric order, booleans use `FALSE < TRUE`, and text uses case-sensitive decoded Unicode-scalar order without normalization. All leaves are resolved and type-checked before execution, even when runtime short-circuiting would skip one. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
 
 `SELECT` supports inner equijoins using either `JOIN` or `INNER JOIN`:
 
@@ -119,7 +119,7 @@ Each library result column includes its display label and the table/column it or
 
 Unconstrained tables retain duplicate rows. Projection order, duplicate projected columns, and physical insertion order are preserved.
 
-The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, ordering, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
+The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, `ORDER BY`, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
 
 ## The one string
 
