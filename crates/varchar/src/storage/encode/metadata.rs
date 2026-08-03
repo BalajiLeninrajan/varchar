@@ -7,15 +7,15 @@ mod tests;
 
 use std::fmt::Write as _;
 
+use super::super::TableSchema;
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
     SCHEMA_PREFIX, UNIQUE_PREFIX, encode_text_into, encoded_text_len, type_tag,
 };
-use super::super::{TableSchema, validate_schema_for_write};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::{DataType, Error, Result, Value};
 
-use self::validation::{validate_auto_increment_record, validate_table_metadata};
+use self::validation::validate_table_metadata;
 
 const METADATA_LENGTH_OPERATION: &str = "measuring encoded table metadata";
 const TABLE_METADATA_ALLOCATION: &str = "reserving encoded table metadata";
@@ -69,8 +69,7 @@ pub(crate) fn encode_auto_increment_record(
     column: usize,
     last: i64,
 ) -> Result<String> {
-    validate_schema_for_write(schema)?;
-    validate_auto_increment_record(schema, column, last)?;
+    validate_table_metadata(schema, Some((column, last)))?;
 
     let mut measured = EncodedLength::default();
     stream_auto_increment_record(schema, column, last, &mut measured)?;

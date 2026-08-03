@@ -1,6 +1,6 @@
+use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode};
 use crate::storage::TableSchema;
 use crate::storage::format::is_valid_identifier;
-use crate::storage::schema::validate_check_against_schema;
 use crate::{DataType, Error, Result, Value};
 
 pub(super) fn validate_table_metadata(
@@ -164,4 +164,59 @@ pub(super) fn validate_auto_increment_record(
         )));
     }
     Ok(())
+}
+
+/// Reject a `CHECK` that is not a canonical program over `schema`'s columns.
+///
+/// Encoding metadata is the one place a `CHECK` is committed to the database,
+/// so this is where the shape and operand invariants are enforced — once, over
+/// the shared program representation.
+fn validate_check_against_schema(schema: &TableSchema, check: &CheckProgram) -> Result<()> {
+    check.validate_shape()?;
+    for node in check.nodes() {
+        let CheckProgramNode::Predicate(predicate) = node else {
+            continue;
+        };
+        let column_index = predicate.column();
+        let column = schema.columns.get(column_index).ok_or_else(|| {
+            Error::Schema(format!(
+                "CHECK references column index {column_index} outside table {:?}",
+                schema.name
+            ))
+        })?;
+        let valid = match predicate {
+            CheckPredicate::Equal { value, .. }
+            | CheckPredicate::NotEqual { value, .. }
+            | CheckPredicate::LessThan { value, .. }
+            | CheckPredicate::LessThanOrEqual { value, .. }
+            | CheckPredicate::GreaterThan { value, .. }
+            | CheckPredicate::GreaterThanOrEqual { value, .. } => {
+                !matches!(value, Value::Null) && value_matches_type(value, column.data_type)
+            }
+            CheckPredicate::Like { .. } => column.data_type == DataType::Text,
+            CheckPredicate::IsNull { .. } | CheckPredicate::IsNotNull { .. } => true,
+            CheckPredicate::In { values, .. } => {
+                !values.is_empty()
+                    && values.iter().all(|value| {
+                        matches!(value, Value::Null) || value_matches_type(value, column.data_type)
+                    })
+            }
+        };
+        if !valid {
+            return Err(Error::Schema(format!(
+                "invalid CHECK operand for column {:?}.{:?}",
+                schema.name, column.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+const fn value_matches_type(value: &Value, data_type: DataType) -> bool {
+    matches!(
+        (value, data_type),
+        (Value::Text(_), DataType::Text)
+            | (Value::Integer(_), DataType::Integer)
+            | (Value::Boolean(_), DataType::Boolean)
+    )
 }
