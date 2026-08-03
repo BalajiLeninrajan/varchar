@@ -168,36 +168,86 @@ fn row_width_error(offset: usize, layout: RowLayout<'_>, actual: usize) -> Error
 }
 
 pub(super) fn validate_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<()> {
-    decode_cell_at(encoded, column, offset).map(|_| ())
+    validate_typed_value_at(
+        encoded,
+        column.data_type,
+        column.nullable,
+        offset,
+        "NULL stored in a NOT NULL column",
+    )
 }
 
 pub(super) fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<Value> {
+    decode_typed_value_at(
+        encoded,
+        column.data_type,
+        column.nullable,
+        offset,
+        "NULL stored in a NOT NULL column",
+    )
+}
+
+fn validate_typed_value_at(
+    encoded: &str,
+    data_type: DataType,
+    nullable: bool,
+    offset: usize,
+    null_message: &'static str,
+) -> Result<()> {
     if encoded == "N" {
-        return if column.nullable {
-            Ok(Value::Null)
+        return if nullable {
+            Ok(())
         } else {
-            Err(corrupt(offset, "NULL stored in a NOT NULL column"))
+            Err(corrupt(offset, null_message))
         };
     }
 
-    match column.data_type {
+    match data_type {
         DataType::Text => {
             let payload = encoded
                 .strip_prefix('T')
                 .ok_or_else(|| corrupt(offset, "cell type does not match TEXT column"))?;
-            decode_text(payload, offset + 1).map(Value::Text)
+            scan_text(payload, offset + 1, |_| {})
         }
         DataType::Integer => {
             let payload = encoded
                 .strip_prefix('I')
                 .ok_or_else(|| corrupt(offset, "cell type does not match INTEGER column"))?;
-            decode_integer(payload, offset + 1).map(Value::Integer)
+            decode_integer(payload, offset + 1).map(|_| ())
         }
         DataType::Boolean => match encoded {
-            "B0" => Ok(Value::Boolean(false)),
-            "B1" => Ok(Value::Boolean(true)),
+            "B0" | "B1" => Ok(()),
             _ => Err(corrupt(offset, "invalid BOOLEAN cell")),
         },
+    }
+}
+
+fn decode_typed_value_at(
+    encoded: &str,
+    data_type: DataType,
+    nullable: bool,
+    offset: usize,
+    null_message: &'static str,
+) -> Result<Value> {
+    validate_typed_value_at(encoded, data_type, nullable, offset, null_message)?;
+    if encoded == "N" {
+        return Ok(Value::Null);
+    }
+
+    match data_type {
+        DataType::Text => {
+            let payload = encoded
+                .strip_prefix('T')
+                .expect("validated TEXT values have the canonical type prefix");
+            decode_text(payload, offset + 1).map(Value::Text)
+        }
+        DataType::Integer => {
+            let payload = encoded
+                .strip_prefix('I')
+                .expect("validated INTEGER values have the canonical type prefix");
+            decode_integer(payload, offset + 1).map(Value::Integer)
+        }
+        DataType::Boolean => Ok(Value::Boolean(encoded == "B1")),
     }
 }
 
