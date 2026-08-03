@@ -20,6 +20,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
         primary_key: Some(0),
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
     let mut candidate = state.candidate(1024).expect("empty state fits");
     candidate

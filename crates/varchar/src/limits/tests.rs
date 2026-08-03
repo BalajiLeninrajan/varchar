@@ -38,6 +38,7 @@ fn resources_have_human_readable_names() {
         (Resource::DatabaseBytes, "database bytes"),
         (Resource::SqlBytes, "SQL bytes"),
         (Resource::WherePredicates, "WHERE predicates"),
+        (Resource::CheckPredicates, "CHECK predicates"),
         (Resource::JoinSources, "JOIN sources"),
         (Resource::GeneratedRegexBytes, "generated regex bytes"),
         (Resource::QueryWorkingBytes, "query working bytes"),

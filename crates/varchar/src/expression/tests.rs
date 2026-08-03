@@ -1,7 +1,8 @@
 use super::like;
 use super::truth::Truth;
 use super::{
-    Evaluator, LikeAtom, Predicate, Program, ProgramNode, compile_pattern, is_well_formed,
+    CheckPredicate, CheckProgramNode, Evaluator, LikeAtom, Predicate, Program, ProgramNode,
+    compile_pattern, is_well_formed,
 };
 use crate::resolve::ColumnLocation;
 use crate::sql::{ColumnRef, ExpressionNode, Predicate as ParsedPredicate, PredicateOperator};
@@ -462,6 +463,12 @@ fn every_pipeline_rejects_the_same_malformed_programs() {
         values: &[],
     })];
     assert!(!is_well_formed(&resolved_empty_in));
+
+    let check_empty_in = vec![CheckProgramNode::Predicate(CheckPredicate::In {
+        column: 0,
+        values: Vec::new(),
+    })];
+    assert!(!is_well_formed(&check_empty_in));
 
     assert!(
         !is_well_formed(&[] as &[ProgramNode<'_>]),

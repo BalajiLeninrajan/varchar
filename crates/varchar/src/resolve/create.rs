@@ -1,6 +1,7 @@
 //! `CREATE TABLE` resolution and validated schema assembly.
 
 mod auto_increment;
+mod check;
 mod foreign_key;
 mod primary_key;
 mod unique;
@@ -8,14 +9,17 @@ mod unique;
 use std::collections::BTreeMap;
 
 use auto_increment::{declare_auto_increment, validate_auto_increment};
+use check::resolve_check;
 use foreign_key::{declare_foreign_key, validate_foreign_key};
 use primary_key::declare_primary_key;
 use unique::declare_unique;
 
-use crate::sql::{ColumnModifier, CreateElement, CreateTable, TableConstraint};
+use crate::expression::CheckProgram;
+use crate::limits::check_limit;
+use crate::sql::{ColumnModifier, CreateElement, CreateTable, Expression, TableConstraint};
 use crate::storage::{Catalog, TableSchema};
 use crate::value::validate_value;
-use crate::{Error, Result, SchemaColumn, Value};
+use crate::{Error, Resource, Result, SchemaColumn, Value};
 
 pub(crate) struct ResolvedCreate {
     pub(crate) schema: TableSchema,
@@ -23,39 +27,60 @@ pub(crate) struct ResolvedCreate {
 }
 
 enum SemanticEvent {
-    Default { order: usize, column: usize },
+    Default {
+        order: usize,
+        column: usize,
+    },
+    Check {
+        order: usize,
+        expression: Expression,
+    },
 }
 
 impl SemanticEvent {
     const fn order(&self) -> usize {
         match self {
-            Self::Default { order, .. } => *order,
+            Self::Default { order, .. } | Self::Check { order, .. } => *order,
         }
     }
 }
 
-/// Deferred `CREATE TABLE` semantics, replayed in declaration order.
 struct SemanticResolution {
     events: Vec<SemanticEvent>,
     next_event: usize,
+    check_predicates: usize,
+    checks: Vec<CheckProgram>,
+    max_predicates: usize,
 }
 
 impl SemanticResolution {
-    fn new(column_count: usize) -> Result<Self> {
+    fn new(column_count: usize, check_count: usize, max_predicates: usize) -> Result<Self> {
+        let event_capacity = column_count
+            .checked_add(check_count)
+            .ok_or(Error::Capacity {
+                operation: "counting CREATE semantic events",
+            })?;
         let mut events = Vec::new();
         events
-            .try_reserve_exact(column_count)
+            .try_reserve_exact(event_capacity)
             .map_err(|_| Error::Allocation {
                 operation: "reserving CREATE semantic events",
             })?;
         Ok(Self {
             events,
             next_event: 0,
+            check_predicates: 0,
+            checks: Vec::new(),
+            max_predicates,
         })
     }
 
     fn queue_default(&mut self, order: usize, column: usize) {
         self.events.push(SemanticEvent::Default { order, column });
+    }
+
+    fn queue_check(&mut self, order: usize, expression: Expression) {
+        self.events.push(SemanticEvent::Check { order, expression });
     }
 
     fn drain_before(
@@ -73,14 +98,42 @@ impl SemanticResolution {
                 SemanticEvent::Default { column, .. } => {
                     validate_default(table, &columns[*column], auto_increment == Some(*column))?;
                 }
+                SemanticEvent::Check { expression, .. } => {
+                    let predicates = expression.predicate_units()?;
+                    let total =
+                        self.check_predicates
+                            .checked_add(predicates)
+                            .ok_or(Error::Capacity {
+                                operation: "counting table CHECK predicates",
+                            })?;
+                    check_limit(total, self.max_predicates, Resource::CheckPredicates)?;
+                    self.checks.try_reserve(1).map_err(|_| Error::Allocation {
+                        operation: "reserving resolved CHECK declarations",
+                    })?;
+                    self.checks.push(resolve_check(table, columns, expression)?);
+                    self.check_predicates = total;
+                }
             }
             self.next_event += 1;
         }
         Ok(())
     }
+
+    fn into_checks(self) -> Vec<CheckProgram> {
+        self.checks
+    }
 }
 
+#[cfg(test)]
 pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<ResolvedCreate> {
+    create_schema_with_limit(catalog, statement, usize::MAX)
+}
+
+pub(crate) fn create_schema_with_limit(
+    catalog: &Catalog,
+    statement: CreateTable,
+    max_predicates: usize,
+) -> Result<ResolvedCreate> {
     let CreateTable { table, elements } = statement;
     if catalog.table(&table).is_some() {
         return Err(Error::Schema(format!("table {table:?} already exists")));
@@ -120,7 +173,22 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     let mut unique_columns = Vec::new();
     let mut foreign_keys = Vec::new();
     let mut foreign_key_orders = Vec::new();
-    let mut semantic_resolution = SemanticResolution::new(columns.len())?;
+    let check_count = elements.iter().try_fold(0_usize, |count, element| {
+        let declarations = match element {
+            CreateElement::Column(column) => column
+                .modifiers
+                .iter()
+                .filter(|modifier| matches!(modifier, ColumnModifier::Check(_)))
+                .count(),
+            CreateElement::Constraint(TableConstraint::Check(_)) => 1,
+            CreateElement::Constraint(_) => 0,
+        };
+        count.checked_add(declarations).ok_or(Error::Capacity {
+            operation: "counting CHECK declarations",
+        })
+    })?;
+    let mut semantic_resolution =
+        SemanticResolution::new(columns.len(), check_count, max_predicates)?;
     let mut auto_increment = None;
     let mut auto_increment_order = None;
     let mut saw_not_null = vec![false; columns.len()];
@@ -242,10 +310,8 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             columns[index].default = Some(value);
                             semantic_resolution.queue_default(order, index);
                         }
-                        ColumnModifier::Check(_) => {
-                            return Err(Error::Schema(String::from(
-                                "CHECK constraints are not resolved yet",
-                            )));
+                        ColumnModifier::Check(expression) => {
+                            semantic_resolution.queue_check(order, expression);
                         }
                     }
                 }
@@ -352,10 +418,8 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                         }
                         foreign_key_orders.push(order);
                     }
-                    TableConstraint::Check(_) => {
-                        return Err(Error::Schema(String::from(
-                            "CHECK constraints are not resolved yet",
-                        )));
+                    TableConstraint::Check(expression) => {
+                        semantic_resolution.queue_check(order, expression);
                     }
                 }
             }
@@ -371,6 +435,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         primary_key,
         unique_columns,
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
     for (foreign_key, order) in foreign_keys.iter().zip(foreign_key_orders) {
         if let Err(error) = validate_foreign_key(catalog, &schema, foreign_key) {
@@ -393,6 +458,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         validate_auto_increment(&schema, column)?;
     }
     semantic_resolution.drain_before(&schema.name, &schema.columns, auto_increment, usize::MAX)?;
+    schema.checks = semantic_resolution.into_checks();
     Ok(ResolvedCreate {
         schema,
         auto_increment,

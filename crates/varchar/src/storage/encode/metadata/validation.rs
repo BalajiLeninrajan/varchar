@@ -100,6 +100,12 @@ fn validate_schema_for_metadata(schema: &TableSchema) -> Result<()> {
         }
     }
 
+    if !schema.checks.is_empty() {
+        return Err(Error::Schema(String::from(
+            "CHECK metadata requires a persisted program",
+        )));
+    }
+
     let mut previous_foreign_key_column = None;
     for foreign_key in &schema.foreign_keys {
         if schema.columns.get(foreign_key.column).is_none() {

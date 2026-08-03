@@ -16,6 +16,7 @@ fn auto_increment_resolution_generates_and_tracks_only_new_high_water_marks() {
         primary_key: Some(0),
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
     let auto_increment = Some(AutoIncrement { column: 0, last: 4 });
 
@@ -51,6 +52,7 @@ fn sequence_exhaustion_precedes_remaining_value_validation() {
         primary_key: Some(0),
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
 
     assert!(matches!(

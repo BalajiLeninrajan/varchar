@@ -39,6 +39,7 @@ fn exact_measurement_preserves_every_metadata_phase() {
             referenced_table: String::from("parent"),
             referenced_column: String::from("id"),
         }],
+        checks: Vec::new(),
     };
     let expected = concat!(
         "~S|all_meta|id:I:!|parent_id:I:?|text:T:?|flag:B:?|note:T:?;",

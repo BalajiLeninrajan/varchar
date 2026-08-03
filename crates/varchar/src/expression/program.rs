@@ -105,3 +105,59 @@ impl Predicate<'_> {
         }
     }
 }
+
+/// One owned, resolved CHECK expression stored in flat preorder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CheckProgram {
+    nodes: Vec<CheckProgramNode>,
+}
+
+impl CheckProgram {
+    pub(crate) fn new(nodes: Vec<CheckProgramNode>) -> Self {
+        debug_assert!(is_well_formed(&nodes));
+        Self { nodes }
+    }
+
+    pub(crate) fn nodes(&self) -> &[CheckProgramNode] {
+        &self.nodes
+    }
+}
+
+pub(crate) type CheckProgramNode = Node<CheckPredicate>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CheckPredicate {
+    Equal { column: usize, value: Value },
+    NotEqual { column: usize, value: Value },
+    LessThan { column: usize, value: Value },
+    LessThanOrEqual { column: usize, value: Value },
+    GreaterThan { column: usize, value: Value },
+    GreaterThanOrEqual { column: usize, value: Value },
+    Like { column: usize, atoms: Vec<LikeAtom> },
+    IsNull { column: usize },
+    IsNotNull { column: usize },
+    In { column: usize, values: Vec<Value> },
+}
+
+impl Leaf for CheckPredicate {
+    fn is_degenerate(&self) -> bool {
+        matches!(self, Self::In { values, .. } if values.is_empty())
+    }
+}
+
+impl CheckPredicate {
+    pub(crate) const fn column(&self) -> usize {
+        match self {
+            Self::Equal { column, .. }
+            | Self::NotEqual { column, .. }
+            | Self::LessThan { column, .. }
+            | Self::LessThanOrEqual { column, .. }
+            | Self::GreaterThan { column, .. }
+            | Self::GreaterThanOrEqual { column, .. }
+            | Self::Like { column, .. }
+            | Self::IsNull { column }
+            | Self::IsNotNull { column }
+            | Self::In { column, .. } => *column,
+        }
+    }
+}

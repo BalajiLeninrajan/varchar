@@ -7,7 +7,11 @@ use crate::{Outcome, Result};
 
 impl Database {
     pub(super) fn execute_create(&mut self, statement: CreateTable) -> Result<Outcome> {
-        let resolved = resolve::create_schema(self.storage.catalog(), statement)?;
+        let resolved = resolve::create_schema_with_limit(
+            self.storage.catalog(),
+            statement,
+            self.limits.max_predicates,
+        )?;
         let table = resolved.schema.name.clone();
         let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
         candidate.insert_schema_with_auto_increment(&resolved.schema, resolved.auto_increment)?;
