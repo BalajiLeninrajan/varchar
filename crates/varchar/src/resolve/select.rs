@@ -1,21 +1,20 @@
 //! Semantic orchestration for multi-source `SELECT` statements.
 
 use super::column::ColumnLocation;
-use super::expression::resolve_select_predicate;
+use super::expression::expression as resolve_expression;
 use super::join::{ResolvedJoin, resolve_joins};
 use super::projection::{expanded_len, resolve_projection};
 use super::source::resolve_sources;
-use crate::expression::Predicate as ResolvedPredicate;
-use crate::limits::check_limit;
+use crate::Result;
+use crate::expression::Program;
 use crate::sql::Select;
 use crate::storage::{Catalog, TableSchema};
-use crate::{Resource, Result};
 
 pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) sources: Vec<&'catalog TableSchema>,
     pub(crate) projection: Vec<ColumnLocation>,
     pub(crate) joins: Vec<ResolvedJoin>,
-    pub(crate) predicates: Vec<ResolvedPredicate<'statement>>,
+    pub(crate) where_clause: Option<Program<'statement>>,
 }
 
 pub(crate) fn select<'catalog, 'statement>(
@@ -32,16 +31,8 @@ pub(crate) fn select<'catalog, 'statement>(
     // resource error.
     let projection_len = expanded_len(&sources, &statement.projection)?;
     let joins = resolve_joins(statement, &sources)?;
-    check_limit(
-        statement.predicates.len(),
-        max_predicates,
-        Resource::WherePredicates,
-    )?;
-    let predicates = statement
-        .predicates
-        .iter()
-        .map(|predicate| resolve_select_predicate(&sources, predicate))
-        .collect::<Result<Vec<_>>>()?;
+    let where_clause =
+        resolve_expression(&sources, statement.where_clause.as_ref(), max_predicates)?;
     let projection = resolve_projection(
         &sources,
         &statement.projection,
@@ -53,6 +44,6 @@ pub(crate) fn select<'catalog, 'statement>(
         sources,
         projection,
         joins,
-        predicates,
+        where_clause,
     })
 }

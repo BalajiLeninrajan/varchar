@@ -1,5 +1,6 @@
 use super::{catalog, select_statement};
 use crate::Value;
+use crate::expression::ProgramNode;
 use crate::resolve::{LikeAtom, ResolvedPredicate, select};
 
 #[test]
@@ -25,17 +26,20 @@ fn joined_select_resolution_tracks_sources_locations_and_predicates() {
     assert_eq!(resolved.joins[0].source, 1);
     assert_eq!(resolved.joins[0].conditions[0].left.source, 0);
     assert_eq!(resolved.joins[0].conditions[0].right.source, 1);
+
+    let nodes = resolved.where_clause.expect("WHERE resolves").into_nodes();
+    assert!(matches!(nodes[0], ProgramNode::And { children: 2 }));
     assert!(matches!(
-        &resolved.predicates[0],
-        ResolvedPredicate::Like { column, atoms }
+        &nodes[1],
+        ProgramNode::Predicate(ResolvedPredicate::Like { column, atoms })
             if (column.source, column.column) == (1, 1)
                 && atoms == &[LikeAtom::Literal('N'), LikeAtom::AnySequence]
     ));
     assert!(matches!(
-        &resolved.predicates[1],
-        ResolvedPredicate::Equal {
+        &nodes[2],
+        ProgramNode::Predicate(ResolvedPredicate::Equal {
             column,
             value: Value::Text(value),
-        } if (column.source, column.column) == (0, 1) && value == "Ada"
+        }) if (column.source, column.column) == (0, 1) && value == "Ada"
     ));
 }

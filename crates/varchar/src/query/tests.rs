@@ -22,7 +22,7 @@ fn select_plans_borrow_sources_while_mutation_scans_own_their_layout() {
     assert!(std::ptr::eq(select.sources[0], items));
     assert!(std::ptr::eq(select.sources[1], groups));
 
-    let scan = compile_scan(items, &[], &Limits::default()).expect("scan plan compiles");
+    let scan = compile_scan(items, None, &Limits::default()).expect("scan plan compiles");
     assert_eq!(scan.table, items.name);
     assert_eq!(scan.schema, items.columns);
 }

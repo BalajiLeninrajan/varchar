@@ -1,10 +1,11 @@
 //! Recursive-descent statement parser for Varchar's small SQL dialect.
 
 mod create;
+mod expression;
 mod mutation;
 mod select;
 
-use super::ast::{ColumnRef, Predicate, PredicateOperator, Statement};
+use super::ast::{ColumnRef, Statement};
 use super::lexer::{Token, TokenKind, lex};
 use crate::{Error, Result, Value};
 
@@ -70,66 +71,6 @@ impl Parser {
             return Err(Error::unsupported(feature, self.current().span));
         }
         Ok(statement)
-    }
-
-    fn parse_optional_where(&mut self) -> Result<Vec<Predicate>> {
-        if !self.consume_keyword("WHERE") {
-            return Ok(Vec::new());
-        }
-        let mut predicates = vec![self.parse_predicate()?];
-        while self.consume_keyword("AND") {
-            predicates.push(self.parse_predicate()?);
-        }
-        if self.current_word() == Some("OR") {
-            return Err(Error::unsupported("OR predicates", self.current().span));
-        }
-        Ok(predicates)
-    }
-
-    fn parse_predicate(&mut self) -> Result<Predicate> {
-        let column = self.parse_column_ref()?;
-        let operator = match self.current().kind.clone() {
-            TokenKind::Equal => {
-                self.advance();
-                PredicateOperator::Equal(self.parse_value()?)
-            }
-            TokenKind::NotEqual => {
-                self.advance();
-                PredicateOperator::NotEqual(self.parse_value()?)
-            }
-            TokenKind::Word(ref word) if word == "LIKE" => {
-                self.advance();
-                match self.current().kind.clone() {
-                    TokenKind::String(pattern) => {
-                        self.advance();
-                        PredicateOperator::Like(pattern)
-                    }
-                    _ => {
-                        return Err(Error::parse(
-                            "LIKE expects a string literal",
-                            self.current().span,
-                        ));
-                    }
-                }
-            }
-            TokenKind::Word(ref word) if word == "IS" => {
-                self.advance();
-                let negated = self.consume_keyword("NOT");
-                self.expect_keyword("NULL")?;
-                if negated {
-                    PredicateOperator::IsNotNull
-                } else {
-                    PredicateOperator::IsNull
-                }
-            }
-            _ => {
-                return Err(Error::parse(
-                    "expected `=`, `!=`, `LIKE`, or `IS [NOT] NULL`",
-                    self.current().span,
-                ));
-            }
-        };
-        Ok(Predicate { column, operator })
     }
 
     fn parse_column_ref(&mut self) -> Result<ColumnRef> {

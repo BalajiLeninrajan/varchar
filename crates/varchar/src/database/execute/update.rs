@@ -11,7 +11,7 @@ impl Database {
         let schema = resolve::require_table(self.storage.catalog(), &statement.table)?;
         let auto_increment = self.storage.catalog().auto_increment(&statement.table);
         let assignments = resolve::assignments(schema, auto_increment, &statement.assignments)?;
-        let plan = query::compile_scan(schema, &statement.predicates, &self.limits)?;
+        let plan = query::compile_scan(schema, statement.where_clause.as_ref(), &self.limits)?;
         let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
         if let Some(last) = assignments.next_auto_increment {
             candidate.defer_auto_increment(&statement.table, last)?;

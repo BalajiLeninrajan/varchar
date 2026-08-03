@@ -2,8 +2,8 @@ mod create;
 
 use super::parse;
 use crate::sql::ast::{
-    ColumnRef, CreateElement, CreateTable, Join, JoinCondition, Predicate, PredicateOperator,
-    Projection, ProjectionItem, Select, Statement,
+    ColumnRef, CreateElement, CreateTable, Expression, ExpressionNode, Join, JoinCondition,
+    Predicate, PredicateOperator, Projection, ProjectionItem, Select, Statement,
 };
 use crate::{Error, Value};
 
@@ -40,16 +40,17 @@ fn parsing_produces_the_exact_normalized_ast() {
                 ProjectionItem::Column(column_ref(None, "name")),
                 ProjectionItem::Column(column_ref(None, "id")),
             ]),
-            predicates: vec![
-                Predicate {
+            where_clause: Some(Expression::new(vec![
+                ExpressionNode::And { children: 2 },
+                ExpressionNode::Predicate(Predicate {
                     column: column_ref(None, "name"),
                     operator: PredicateOperator::Like(String::from("a_%")),
-                },
-                Predicate {
+                }),
+                ExpressionNode::Predicate(Predicate {
                     column: column_ref(None, "id"),
                     operator: PredicateOperator::NotEqual(Value::Integer(-7)),
-                },
-            ],
+                }),
+            ])),
         })
     );
 }
@@ -93,10 +94,12 @@ fn parses_qualified_projection_inner_join_and_predicate_ast() {
                 ProjectionItem::Column(column_ref(Some("authors"), "name")),
                 ProjectionItem::QualifiedAll("books".to_owned()),
             ]),
-            predicates: vec![Predicate {
-                column: column_ref(Some("books"), "title"),
-                operator: PredicateOperator::Like("R%".to_owned()),
-            }],
+            where_clause: Some(Expression::new(vec![ExpressionNode::Predicate(
+                Predicate {
+                    column: column_ref(Some("books"), "title"),
+                    operator: PredicateOperator::Like("R%".to_owned()),
+                },
+            )])),
         }
     );
 }
@@ -127,8 +130,11 @@ fn inner_and_on_remain_contextual_identifiers() {
             "on",
         ))])
     );
-    assert_eq!(
-        statement.predicates[0].column,
-        column_ref(Some("inner"), "on")
-    );
+    let Some(expression) = &statement.where_clause else {
+        panic!("expected WHERE expression");
+    };
+    let ExpressionNode::Predicate(predicate) = &expression.nodes()[0] else {
+        panic!("expected predicate root");
+    };
+    assert_eq!(predicate.column, column_ref(Some("inner"), "on"));
 }

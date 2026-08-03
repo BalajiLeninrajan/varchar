@@ -44,11 +44,11 @@ impl Parser {
                 break;
             }
         }
-        let predicates = self.parse_optional_where()?;
+        let where_clause = self.parse_optional_where()?;
         Ok(Update {
             table,
             assignments,
-            predicates,
+            where_clause,
         })
     }
 
@@ -56,7 +56,10 @@ impl Parser {
         self.expect_keyword("DELETE")?;
         self.expect_keyword("FROM")?;
         let table = self.expect_identifier()?;
-        let predicates = self.parse_optional_where()?;
-        Ok(Delete { table, predicates })
+        let where_clause = self.parse_optional_where()?;
+        Ok(Delete {
+            table,
+            where_clause,
+        })
     }
 }
