@@ -18,6 +18,7 @@ pub(crate) struct TableSchema {
     pub(crate) name: String,
     pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) primary_key: Option<usize>,
+    /// Increasing by local column; each local column appears at most once.
     pub(crate) foreign_keys: Vec<ForeignKey>,
 }
 
@@ -57,7 +58,7 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
         }
     }
 
-    let mut foreign_key_columns = BTreeSet::new();
+    let mut previous_foreign_key_column = None;
     for foreign_key in &schema.foreign_keys {
         if schema.columns.get(foreign_key.column).is_none() {
             return Err(Error::Schema(format!(
@@ -65,12 +66,21 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
                 foreign_key.column, schema.name
             )));
         }
-        if !foreign_key_columns.insert(foreign_key.column) {
-            return Err(Error::Schema(format!(
-                "column {:?}.{:?} has multiple foreign keys",
-                schema.name, schema.columns[foreign_key.column].name
-            )));
+        if let Some(previous) = previous_foreign_key_column {
+            if foreign_key.column == previous {
+                return Err(Error::Schema(format!(
+                    "column {:?}.{:?} has multiple foreign keys",
+                    schema.name, schema.columns[foreign_key.column].name
+                )));
+            }
+            if foreign_key.column < previous {
+                return Err(Error::Schema(format!(
+                    "foreign keys for table {:?} are not in increasing local-column order",
+                    schema.name
+                )));
+            }
         }
+        previous_foreign_key_column = Some(foreign_key.column);
         if !format::is_valid_identifier(&foreign_key.referenced_table)
             || !format::is_valid_identifier(&foreign_key.referenced_column)
         {

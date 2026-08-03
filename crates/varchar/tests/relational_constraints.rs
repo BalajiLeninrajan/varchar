@@ -137,6 +137,25 @@ fn inline_constraints_accept_mixed_modifier_order() {
 }
 
 #[test]
+fn foreign_key_metadata_uses_local_column_order() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (left_id INTEGER, right_id INTEGER, FOREIGN KEY (right_id) REFERENCES parents(id), FOREIGN KEY (left_id) REFERENCES parents(id))",
+    );
+
+    assert!(
+        database
+            .as_str()
+            .contains("~F|children|left_id|parents|id;~F|children|right_id|parents|id;")
+    );
+}
+
+#[test]
 fn primary_key_update_collisions_fail_atomically() {
     let mut database = Database::new();
     execute(
