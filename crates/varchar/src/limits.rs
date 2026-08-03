@@ -56,8 +56,8 @@ pub struct Limits {
     pub max_sql_bytes: usize,
     /// Maximum predicate units in one `WHERE` expression.
     ///
-    /// Each currently supported predicate leaf consumes one unit. Logical
-    /// operators and parentheses consume none.
+    /// Ordinary predicate leaves consume one unit, while `IN` consumes one
+    /// unit per list member. Logical operators and parentheses consume none.
     pub max_predicates: usize,
     /// Maximum number of source tables participating in one `SELECT`.
     pub max_join_sources: usize,

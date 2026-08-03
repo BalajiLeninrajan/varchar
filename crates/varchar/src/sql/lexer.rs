@@ -12,6 +12,7 @@ pub(super) enum TokenKind {
     Comma,
     Dot,
     Star,
+    ExpressionOperator(char),
     Bang,
     Equal,
     NotEqual,
@@ -86,6 +87,10 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
                 cursor += 1;
                 TokenKind::Star
             }
+            '+' | '%' | '|' => {
+                cursor += 1;
+                TokenKind::ExpressionOperator(character)
+            }
             '!' => {
                 cursor += 1;
                 if bytes.get(cursor) == Some(&b'=') {
@@ -158,6 +163,10 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
                     cursor += 1;
                 }
                 TokenKind::Number(input[start..cursor].to_owned())
+            }
+            '-' | '/' => {
+                cursor += 1;
+                TokenKind::ExpressionOperator(character)
             }
             value if value.is_ascii_digit() => {
                 cursor += 1;

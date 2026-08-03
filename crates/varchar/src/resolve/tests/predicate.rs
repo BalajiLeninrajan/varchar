@@ -1,5 +1,5 @@
 use super::{catalog, people_schema, select_statement};
-use crate::resolve::{predicate, select};
+use crate::resolve::{ResolvedPredicate, predicate, select};
 use crate::sql::{ColumnRef, Predicate, PredicateOperator};
 use crate::{Error, Resource, Value};
 
@@ -107,6 +107,55 @@ fn ordered_predicates_require_same_type_non_null_scalars() {
         predicate(&schema, &wrong_type),
         Err(Error::Type(ref message))
             if message == "column \"active\" expects BOOLEAN, got INTEGER"
+    ));
+}
+
+#[test]
+fn in_resolves_every_member_left_to_right_and_allows_untyped_null() {
+    let schema = people_schema();
+    for name in ["id", "note", "active"] {
+        let all_null = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: name.to_owned(),
+            },
+            operator: PredicateOperator::In(vec![Value::Null, Value::Null]),
+        };
+        assert!(matches!(
+            predicate(&schema, &all_null),
+            Ok(ResolvedPredicate::In { values, .. })
+                if values == [Value::Null, Value::Null]
+        ));
+    }
+
+    let duplicates = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("id"),
+        },
+        operator: PredicateOperator::In(vec![Value::Integer(1), Value::Integer(1), Value::Null]),
+    };
+    assert!(matches!(
+        predicate(&schema, &duplicates),
+        Ok(ResolvedPredicate::In { values, .. })
+            if values == [Value::Integer(1), Value::Integer(1), Value::Null]
+    ));
+
+    let bad_later_member = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("id"),
+        },
+        operator: PredicateOperator::In(vec![
+            Value::Integer(1),
+            Value::Text(String::from("wrong")),
+            Value::Boolean(false),
+        ]),
+    };
+    assert!(matches!(
+        predicate(&schema, &bad_later_member),
+        Err(Error::Type(ref message))
+            if message == "column \"id\" expects INTEGER, got TEXT"
     ));
 }
 

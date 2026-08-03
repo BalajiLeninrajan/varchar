@@ -8,7 +8,9 @@ mod select;
 use std::ops::Range;
 
 use super::ast::{ColumnRef, Statement};
-use super::lexer::{Token, TokenKind, comparison_error, lex_for_parser};
+use super::lexer::{
+    Token, TokenKind, comparison_error, lex_for_parser, unexpected_character_error,
+};
 use crate::{Error, Result, Span, Value};
 
 pub(super) fn parse(input: &str) -> Result<Statement> {
@@ -23,6 +25,7 @@ struct Parser {
     tokens: Vec<Token>,
     position: usize,
     where_expression: Option<Range<usize>>,
+    claimed_in_expression: Option<usize>,
 }
 
 impl Parser {
@@ -31,6 +34,7 @@ impl Parser {
             tokens,
             position: 0,
             where_expression: None,
+            claimed_in_expression: None,
         }
     }
 
@@ -85,6 +89,9 @@ impl Parser {
                     if !is_where_comparison(&operator) {
                         return Err(comparison_error(&operator, span));
                     }
+                    if self.claimed_in_expression == Some(index) {
+                        break;
+                    }
                     index = end;
                     continue;
                 }
@@ -101,6 +108,12 @@ impl Parser {
                 }
             }
 
+            if self.claimed_in_expression == Some(index) {
+                break;
+            }
+            if let TokenKind::ExpressionOperator(character) = &token.kind {
+                return Err(unexpected_character_error(*character, token.span));
+            }
             index += 1;
         }
         Ok(())
@@ -235,6 +248,12 @@ impl Parser {
         }
     }
 
+    fn peek_is(&self, expected: &TokenKind) -> bool {
+        self.tokens
+            .get(self.position + 1)
+            .is_some_and(|token| &token.kind == expected)
+    }
+
     fn peek_is_adjacent(&self, expected: &TokenKind) -> bool {
         self.tokens.get(self.position + 1).is_some_and(|token| {
             &token.kind == expected && self.current().span.end == token.span.start
@@ -320,6 +339,7 @@ fn is_reserved(word: &str) -> bool {
             | "AND"
             | "OR"
             | "IS"
+            | "IN"
             | "NOT"
             | "NULL"
             | "LIKE"

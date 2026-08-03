@@ -58,7 +58,8 @@ pub(super) fn row_scan_pattern(
             ResolvedPredicate::LessThan { .. }
             | ResolvedPredicate::LessThanOrEqual { .. }
             | ResolvedPredicate::GreaterThan { .. }
-            | ResolvedPredicate::GreaterThanOrEqual { .. } => {
+            | ResolvedPredicate::GreaterThanOrEqual { .. }
+            | ResolvedPredicate::In { .. } => {
                 return Err(Error::Capacity {
                     operation: "building a row pattern from a residual predicate",
                 });

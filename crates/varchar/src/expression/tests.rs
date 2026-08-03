@@ -390,3 +390,42 @@ fn ordered_predicates_compare_each_scalar_type_and_reject_null_left_values() {
         &[Value::Null],
     ));
 }
+
+#[test]
+fn in_membership_honors_matches_nulls_and_duplicates() {
+    let location = ColumnLocation {
+        source: 0,
+        column: 0,
+    };
+    let with_null = vec![Value::Integer(1), Value::Null, Value::Integer(1)];
+    assert!(passes_where(
+        Predicate::In {
+            column: location,
+            values: &with_null,
+        },
+        &[Value::Integer(1)],
+    ));
+    assert!(!passes_where(
+        Predicate::In {
+            column: location,
+            values: &with_null,
+        },
+        &[Value::Integer(2)],
+    ));
+    assert!(!passes_where(
+        Predicate::In {
+            column: location,
+            values: &with_null,
+        },
+        &[Value::Null],
+    ));
+
+    let without_null = vec![Value::Integer(1), Value::Integer(1)];
+    assert!(!passes_where(
+        Predicate::In {
+            column: location,
+            values: &without_null,
+        },
+        &[Value::Integer(2)],
+    ));
+}
