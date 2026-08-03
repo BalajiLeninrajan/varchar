@@ -50,7 +50,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 
 | Operation | Supported shape |
 | --- | --- |
-| Create | `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)` |
+| Create | `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT 'anonymous', active BOOLEAN)` |
 | Insert | `INSERT INTO users VALUES (1, 'Ada', TRUE)` |
 | Insert by column | `INSERT INTO users (name) VALUES ('Grace')` |
 | Select | `SELECT * FROM users` or a named projection, optionally followed by `ORDER BY`, `LIMIT`, and `OFFSET` |
@@ -59,7 +59,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
 | Explain | `EXPLAIN REGEX SELECT name FROM users WHERE active = TRUE` |
 
-Column types are `TEXT`, signed 64-bit `INTEGER`, and `BOOLEAN`. Columns are nullable unless declared `NOT NULL`; `NULL` is represented as its own typed value.
+Column types are `TEXT`, signed 64-bit `INTEGER`, and `BOOLEAN`. Columns are nullable unless declared `NOT NULL`; `NULL` is represented as its own typed value. A column may declare one literal `DEFAULT`, including an explicit `DEFAULT NULL`.
 
 Varchar supports one single-column primary key per table and single-column foreign keys. Constraints may be written inline:
 
@@ -93,6 +93,21 @@ INSERT INTO messages VALUES (NULL, 'second');
 ```
 
 Omitting the generated column from a named-column insert, or explicitly inserting `NULL`, generates the next positive integer. A new table persists a high-water mark of `0`, so its first generated key is `1`. The mark advances for larger explicit inserts and updates, never falls after deletion, and survives reloads. Zero and negative explicit values do not advance it. Overflow and every other failed mutation leave both rows and the high-water mark unchanged.
+
+Defaults are literal values and apply only when a column is omitted from a named-column insert:
+
+```sql
+CREATE TABLE jobs (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  state TEXT NOT NULL DEFAULT 'queued',
+  note TEXT DEFAULT NULL
+);
+
+INSERT INTO jobs (id) VALUES (2);             -- state is 'queued'
+INSERT INTO jobs (id, state) VALUES (3, NULL); -- rejected: explicit NULL is not defaulted
+```
+
+Explicit `NULL` never invokes a default, and positional inserts still require exactly one value per column. Defaults are applied before auto-increment generation and final type/nullability validation. `DEFAULT NULL` is invalid for a final `NOT NULL` or primary-key column, and an auto-increment column cannot have any default. A correctly typed non-NULL default is allowed on an ordinary primary key. Existing rows are never backfilled.
 
 `WHERE` supports parentheses plus `AND`/`OR`, with `AND` binding more tightly than `OR`. Predicate leaves are:
 
