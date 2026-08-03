@@ -169,3 +169,36 @@ fn safe_not_equal_and_like_leaves_are_pushed_without_residuals() {
     assert!(partition.local_residuals[0].is_none());
     assert!(partition.cross_source_residual.is_none());
 }
+
+#[test]
+fn ordered_and_membership_predicates_remain_decoded_residuals() {
+    let threshold = Value::Integer(10);
+    let members = vec![Value::Integer(10), Value::Null];
+    let program = Program::new(vec![
+        ProgramNode::And { children: 2 },
+        ProgramNode::Predicate(Predicate::GreaterThanOrEqual {
+            column: location(0, 0),
+            value: &threshold,
+        }),
+        ProgramNode::Predicate(Predicate::In {
+            column: location(0, 1),
+            values: &members,
+        }),
+    ]);
+
+    let partition = partition(Some(program), 1).expect("expression partitions");
+
+    assert!(partition.regex_by_source[0].is_empty());
+    assert!(partition.cross_source_residual.is_none());
+    let residual = partition.local_residuals[0]
+        .as_ref()
+        .expect("predicates remain source-local residuals");
+    assert!(matches!(
+        residual.nodes(),
+        [
+            ProgramNode::And { children: 2 },
+            ProgramNode::Predicate(Predicate::GreaterThanOrEqual { .. }),
+            ProgramNode::Predicate(Predicate::In { .. }),
+        ]
+    ));
+}

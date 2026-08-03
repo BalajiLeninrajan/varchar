@@ -44,6 +44,47 @@ fn ordered_comparisons_reject_null_and_cross_type_literals_before_execution() {
 }
 
 #[test]
+fn bad_later_in_members_fail_before_select_or_mutation_execution() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE guarded_members (id INTEGER NOT NULL, touched BOOLEAN NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "INSERT INTO guarded_members VALUES (1, FALSE)",
+    );
+    execute(
+        &mut database,
+        "INSERT INTO guarded_members VALUES (2, FALSE)",
+    );
+    let blob = database.into_string();
+
+    for sql in [
+        "SELECT id FROM guarded_members WHERE id IN (1, 'wrong', FALSE)",
+        "UPDATE guarded_members SET touched = TRUE WHERE id IN (1, 'wrong', FALSE)",
+        "DELETE FROM guarded_members WHERE id IN (1, 'wrong', FALSE)",
+    ] {
+        let mut database =
+            Database::from_string(blob.clone()).expect("guarded membership fixture reloads");
+        assert!(matches!(
+            database.execute(sql),
+            Err(Error::Type(ref message))
+                if message == "column \"id\" expects INTEGER, got TEXT"
+        ));
+        assert_eq!(database.as_str(), blob, "{sql}");
+        assert_eq!(
+            rows(&mut database, "SELECT id, touched FROM guarded_members").into_rows(),
+            vec![
+                vec![Value::Integer(1), Value::Boolean(false)],
+                vec![Value::Integer(2), Value::Boolean(false)],
+            ],
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn existing_name_equality_and_like_error_contracts_remain_compatible() {
     let mut database = Database::new();
     execute(

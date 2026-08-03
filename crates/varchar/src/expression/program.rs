@@ -90,6 +90,10 @@ pub(crate) enum Predicate<'statement> {
     IsNotNull {
         column: ColumnLocation,
     },
+    In {
+        column: ColumnLocation,
+        values: &'statement [Value],
+    },
 }
 
 impl Predicate<'_> {
@@ -103,7 +107,8 @@ impl Predicate<'_> {
             | Self::GreaterThanOrEqual { column, .. }
             | Self::Like { column, .. }
             | Self::IsNull { column }
-            | Self::IsNotNull { column } => *column,
+            | Self::IsNotNull { column }
+            | Self::In { column, .. } => *column,
         }
     }
 }
@@ -116,6 +121,12 @@ fn valid_program(nodes: &[ProgramNode<'_>]) -> bool {
         };
         pending = after_node;
 
+        if matches!(
+            node,
+            ProgramNode::Predicate(Predicate::In { values, .. }) if values.is_empty()
+        ) {
+            return false;
+        }
         let children = node.child_count();
         if matches!(node, ProgramNode::And { .. } | ProgramNode::Or { .. }) && children < 2 {
             return false;

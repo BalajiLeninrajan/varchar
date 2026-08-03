@@ -22,13 +22,17 @@ impl Expression {
 
     pub(crate) fn predicate_units(&self) -> Result<usize> {
         self.nodes.iter().try_fold(0_usize, |count, node| {
-            if matches!(node, ExpressionNode::Predicate(_)) {
-                count.checked_add(1).ok_or(Error::Capacity {
-                    operation: "counting WHERE predicates",
-                })
-            } else {
-                Ok(count)
-            }
+            let units = match node {
+                ExpressionNode::Predicate(Predicate {
+                    operator: PredicateOperator::In(values),
+                    ..
+                }) => values.len(),
+                ExpressionNode::Predicate(_) => 1,
+                ExpressionNode::And { .. } | ExpressionNode::Or { .. } => 0,
+            };
+            count.checked_add(units).ok_or(Error::Capacity {
+                operation: "counting WHERE predicates",
+            })
         })
     }
 }
@@ -67,6 +71,7 @@ pub(crate) enum PredicateOperator {
     Like(String),
     IsNull,
     IsNotNull,
+    In(Vec<Value>),
 }
 
 fn valid_program(nodes: &[ExpressionNode]) -> bool {
@@ -77,6 +82,15 @@ fn valid_program(nodes: &[ExpressionNode]) -> bool {
         };
         pending = after_node;
 
+        if matches!(
+            node,
+            ExpressionNode::Predicate(Predicate {
+                operator: PredicateOperator::In(values),
+                ..
+            }) if values.is_empty()
+        ) {
+            return false;
+        }
         let children = node.child_count();
         if matches!(node, ExpressionNode::And { .. } | ExpressionNode::Or { .. }) && children < 2 {
             return false;

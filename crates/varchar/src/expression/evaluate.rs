@@ -194,6 +194,7 @@ fn evaluate_predicate(
         },
         Predicate::IsNull { .. } => truth(matches!(left, Value::Null)),
         Predicate::IsNotNull { .. } => truth(!matches!(left, Value::Null)),
+        Predicate::In { values, .. } => compare_in(left, values),
     })
 }
 
@@ -250,6 +251,26 @@ fn compare_ordered(
         }
     };
     Ok(truth(accepts(ordering)))
+}
+
+fn compare_in(left: &Value, values: &[Value]) -> Truth {
+    if matches!(left, Value::Null) {
+        return Truth::Unknown;
+    }
+
+    let mut contains_null = false;
+    for value in values {
+        if matches!(value, Value::Null) {
+            contains_null = true;
+        } else if values_equal(left, value) {
+            return Truth::True;
+        }
+    }
+    if contains_null {
+        Truth::Unknown
+    } else {
+        Truth::False
+    }
 }
 
 fn values_equal(left: &Value, right: &Value) -> bool {

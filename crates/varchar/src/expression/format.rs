@@ -148,6 +148,16 @@ fn format_predicate(formatter: &mut fmt::Formatter<'_>, predicate: &Predicate) -
         }
         PredicateOperator::IsNull => formatter.write_str(" IS NULL"),
         PredicateOperator::IsNotNull => formatter.write_str(" IS NOT NULL"),
+        PredicateOperator::In(values) => {
+            formatter.write_str(" IN (")?;
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    formatter.write_str(", ")?;
+                }
+                format_value(formatter, value)?;
+            }
+            formatter.write_char(')')
+        }
     }
 }
 

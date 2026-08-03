@@ -182,12 +182,14 @@ fn excluded_expression_forms_have_structured_features_and_exact_spans() {
 }
 
 #[test]
-fn ordered_predicates_stay_flat_and_format_canonically() {
-    let expression = expression("SELECT * FROM t WHERE a < 1 AND b <= 2 AND c > 3 AND d >= 4");
+fn ordered_and_membership_predicates_stay_flat_and_format_canonically() {
+    let expression = expression(
+        "SELECT * FROM t WHERE a < 1 AND b <= 2 AND c > 3 AND d >= 4 AND e IN ('x', NULL, 'x')",
+    );
 
     assert!(matches!(
         expression.nodes()[0],
-        ExpressionNode::And { children: 4 }
+        ExpressionNode::And { children: 5 }
     ));
     assert!(matches!(
         &expression.nodes()[1],
@@ -209,11 +211,104 @@ fn ordered_predicates_stay_flat_and_format_canonically() {
         ExpressionNode::Predicate(predicate)
             if predicate.operator == PredicateOperator::GreaterThanOrEqual(Value::Integer(4))
     ));
-    assert_eq!(expression.predicate_units().expect("count fits"), 4);
+    assert!(matches!(
+        &expression.nodes()[5],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator
+                == PredicateOperator::In(vec![
+                    Value::Text(String::from("x")),
+                    Value::Null,
+                    Value::Text(String::from("x")),
+                ])
+    ));
+    assert_eq!(expression.predicate_units().expect("count fits"), 7);
     assert_eq!(
         expression.to_string(),
-        "a < 1 AND b <= 2 AND c > 3 AND d >= 4"
+        "a < 1 AND b <= 2 AND c > 3 AND d >= 4 AND e IN ('x', NULL, 'x')"
     );
+}
+
+#[test]
+fn empty_in_is_excluded_while_all_null_lists_are_valid() {
+    let sql = "SELECT * FROM t WHERE value IN ()";
+    assert!(matches!(
+        parse(sql),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 28,
+            span_end: 30,
+        }) if feature == "empty IN lists"
+    ));
+
+    let expression = expression("SELECT * FROM t WHERE value IN (NULL, NULL)");
+    assert_eq!(expression.predicate_units().expect("count fits"), 2);
+    assert_eq!(expression.to_string(), "value IN (NULL, NULL)");
+
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (1, )"),
+        Err(Error::Parse { .. })
+    ));
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (SELECT id FROM t)"),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 32,
+            span_end: 38,
+        }) if feature == "subqueries in IN lists"
+    ));
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (1 = 1)"),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 34,
+            span_end: 35,
+        }) if feature == "expressions in IN lists"
+    ));
+    assert_unsupported(
+        "SELECT * FROM t WHERE value IN (1 BETWEEN 0 AND 2)",
+        "expressions in IN lists",
+        "BETWEEN",
+    );
+    assert_unsupported(
+        "SELECT * FROM t WHERE value IN (1 + 2)",
+        "expressions in IN lists",
+        "+",
+    );
+}
+
+#[test]
+fn in_is_reserved_and_cannot_be_used_as_an_identifier() {
+    for (sql, marker) in [
+        ("CREATE TABLE in (id INTEGER)", "in"),
+        ("CREATE TABLE t (in INTEGER)", "in"),
+        ("SELECT in FROM t", "in"),
+        ("SELECT * FROM in", "in"),
+        ("SELECT * FROM t WHERE in = 1", "in"),
+        ("INSERT INTO in (id) VALUES (1)", "in"),
+        ("UPDATE in SET id = 1", "in"),
+        ("DELETE FROM in", "in"),
+    ] {
+        assert_parse_error(
+            sql,
+            "reserved keyword `IN` cannot be used as an identifier",
+            marker,
+        );
+    }
+}
+
+#[test]
+fn in_still_drives_the_membership_predicate_after_reservation() {
+    let membership = expression("SELECT * FROM t WHERE value IN (1)");
+    assert_eq!(membership.to_string(), "value IN (1)");
+
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 28,
+            span_end: 30,
+        }) if message.starts_with("expected `=`, `!=`")
+    ));
 }
 
 #[test]

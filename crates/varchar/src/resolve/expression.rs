@@ -147,5 +147,21 @@ fn predicate_at<'statement>(
         }
         PredicateOperator::IsNull => Ok(ResolvedPredicate::IsNull { column }),
         PredicateOperator::IsNotNull => Ok(ResolvedPredicate::IsNotNull { column }),
+        PredicateOperator::In(values) => {
+            if values.is_empty() {
+                return Err(Error::Capacity {
+                    operation: "resolving an empty IN literal list",
+                });
+            }
+            for value in values {
+                if !matches!(value, Value::Null) {
+                    validate_value(value, definition)?;
+                }
+            }
+            Ok(ResolvedPredicate::In {
+                column,
+                values: values.as_slice(),
+            })
+        }
     }
 }
