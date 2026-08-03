@@ -1,6 +1,5 @@
 //! The physical V2/V3 grammar shared by decoding and encoding.
 
-use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::{DataType, Error, Result};
@@ -183,15 +182,31 @@ pub(crate) fn encoded_text_len(value: &str) -> Result<usize> {
 }
 
 pub(crate) fn encode_text_into(value: &str, encoded: &mut String) {
+    encode_text_with(value, |character| {
+        encoded.push(character);
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .expect("writing encoded text to a String is infallible");
+}
+
+pub(super) fn encode_text_with<Failure>(
+    value: &str,
+    mut push: impl FnMut(char) -> std::result::Result<(), Failure>,
+) -> std::result::Result<(), Failure> {
+    const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
     for character in value.chars() {
         if must_escape(character) {
-            encoded.push('%');
-            // Writing to a String is infallible.
-            let _ = write!(encoded, "{:06X}", character as u32);
+            push('%')?;
+            let scalar = character as u32;
+            for shift in [20, 16, 12, 8, 4, 0] {
+                push(HEX_DIGITS[((scalar >> shift) & 0xF) as usize] as char)?;
+            }
         } else {
-            encoded.push(character);
+            push(character)?;
         }
     }
+    Ok(())
 }
 
 pub(super) fn scan_text(

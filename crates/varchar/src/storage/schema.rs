@@ -1,7 +1,5 @@
 //! Table schemas and the physical row layouts they define.
 
-use std::collections::BTreeSet;
-
 use super::format;
 use crate::{Error, Result, SchemaColumn};
 
@@ -10,6 +8,23 @@ use crate::{Error, Result, SchemaColumn};
 pub(crate) struct RowLayout<'a> {
     pub(crate) table: &'a str,
     pub(crate) columns: &'a [SchemaColumn],
+}
+
+/// Proof that a physical row layout passed canonical schema validation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValidatedRowLayout<'a> {
+    layout: RowLayout<'a>,
+}
+
+impl<'a> ValidatedRowLayout<'a> {
+    #[cfg(test)]
+    pub(crate) const fn column_count(self) -> usize {
+        self.layout.columns.len()
+    }
+
+    pub(super) const fn layout(self) -> RowLayout<'a> {
+        self.layout
+    }
 }
 
 /// A table definition reconstructed from its schema and key metadata records.
@@ -44,7 +59,9 @@ pub(crate) struct ForeignKey {
     pub(crate) referenced_column: String,
 }
 
-pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
+pub(crate) fn validate_row_layout<'layout>(
+    layout: RowLayout<'layout>,
+) -> Result<ValidatedRowLayout<'layout>> {
     if !format::is_valid_identifier(layout.table) {
         return Err(Error::Schema(format!(
             "invalid or noncanonical table name {:?}",
@@ -56,20 +73,24 @@ pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {
             "table must contain at least one column",
         )));
     }
-    let mut names = BTreeSet::new();
-    for column in layout.columns {
+    // Replacement encoding invokes this path under the storage-working budget,
+    // so inspect the borrowed prefix instead of allocating a temporary set.
+    for (position, column) in layout.columns.iter().enumerate() {
         if !format::is_valid_identifier(&column.name) {
             return Err(Error::Schema(format!(
                 "invalid or noncanonical column name {:?}",
                 column.name
             )));
         }
-        if !names.insert(column.name.as_str()) {
+        if layout.columns[..position]
+            .iter()
+            .any(|seen| seen.name == column.name)
+        {
             return Err(Error::Schema(format!(
                 "duplicate column name {:?}",
                 column.name
             )));
         }
     }
-    Ok(())
+    Ok(ValidatedRowLayout { layout })
 }
