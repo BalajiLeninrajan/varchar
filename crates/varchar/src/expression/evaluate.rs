@@ -3,6 +3,7 @@
 use crate::resolve::ColumnLocation;
 use crate::{Error, Result, Value};
 
+use super::like::{self, LikeWork};
 use super::program::{Predicate, Program, ProgramNode};
 use super::truth::Truth;
 
@@ -23,6 +24,7 @@ enum EvaluationRows<'rows, 'values> {
 /// Reusable, fallibly allocated state for row-value evaluation.
 pub(crate) struct Evaluator {
     frames: Vec<Frame>,
+    like_work: LikeWork,
 }
 
 impl Evaluator {
@@ -36,14 +38,23 @@ impl Evaluator {
     }
 
     /// Reserve evaluation state for `program`.
-    pub(crate) fn new(program: &Program<'_>) -> Result<Self> {
+    ///
+    /// `like_work_limit` bounds the wildcard backtracking of every residual
+    /// `LIKE` this evaluator runs, the way the regex backtracking budget bounds
+    /// a `LIKE` pushed into a scan pattern. One budget is shared by every row
+    /// and every predicate, so moving leaves to the residual program can
+    /// neither escape the bound nor multiply it by the rows it visits.
+    pub(crate) fn new(program: &Program<'_>, like_work_limit: usize) -> Result<Self> {
         let mut frames = Vec::new();
         frames
             .try_reserve_exact(program.logical_node_count())
             .map_err(|_| Error::Allocation {
                 operation: "reserving the expression evaluation stack",
             })?;
-        Ok(Self { frames })
+        Ok(Self {
+            frames,
+            like_work: LikeWork::new(like_work_limit),
+        })
     }
 
     pub(crate) fn evaluate_where(
@@ -91,7 +102,9 @@ impl Evaluator {
                     });
                     continue;
                 }
-                ProgramNode::Predicate(predicate) => evaluate_predicate(predicate, rows)?,
+                ProgramNode::Predicate(predicate) => {
+                    evaluate_predicate(predicate, rows, &mut self.like_work)?
+                }
             };
 
             loop {
@@ -125,7 +138,11 @@ impl Evaluator {
     }
 }
 
-fn evaluate_predicate(predicate: &Predicate<'_>, rows: EvaluationRows<'_, '_>) -> Result<Truth> {
+fn evaluate_predicate(
+    predicate: &Predicate<'_>,
+    rows: EvaluationRows<'_, '_>,
+    like_work: &mut LikeWork,
+) -> Result<Truth> {
     let left = value_at(rows, predicate.column())?;
     Ok(match predicate {
         Predicate::Equal { value, .. } => compare_equal(left, value),
@@ -134,11 +151,15 @@ fn evaluate_predicate(predicate: &Predicate<'_>, rows: EvaluationRows<'_, '_>) -
             Truth::False => Truth::True,
             Truth::Unknown => Truth::Unknown,
         },
-        Predicate::Like { .. } => {
-            return Err(Error::Type(String::from(
-                "residual LIKE evaluation is not available",
-            )));
-        }
+        Predicate::Like { atoms, .. } => match left {
+            Value::Text(value) => truth(like::matches_charged(value, atoms, like_work)?),
+            Value::Null => Truth::Unknown,
+            Value::Integer(_) | Value::Boolean(_) => {
+                return Err(Error::Type(String::from(
+                    "resolved LIKE predicate was evaluated against a non-TEXT value",
+                )));
+            }
+        },
         Predicate::IsNull { .. } => truth(matches!(left, Value::Null)),
         Predicate::IsNotNull { .. } => truth(!matches!(left, Value::Null)),
     })

@@ -68,6 +68,7 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -
         std::slice::from_ref(local_residual),
         None,
         &mut working_budget,
+        limits.regex_backtrack_limit,
     )?;
 
     for matched in plan.regex.find_iter(blob) {
@@ -148,6 +149,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result
         &plan.local_residuals,
         plan.cross_source_residual.as_ref(),
         &mut working_budget,
+        limits.regex_backtrack_limit,
     )?;
 
     for matched in plan.regex.find_iter(blob) {
@@ -322,6 +324,7 @@ fn residual_evaluator(
     local_residuals: &[Option<Program<'_>>],
     cross_source_residual: Option<&Program<'_>>,
     working_budget: &mut ByteBudget,
+    like_work_limit: usize,
 ) -> Result<Option<Evaluator>> {
     let mut largest = None;
     for program in local_residuals
@@ -339,7 +342,7 @@ fn residual_evaluator(
         return Ok(None);
     };
     working_budget.charge(bytes)?;
-    Evaluator::new(program).map(Some)
+    Evaluator::new(program, like_work_limit).map(Some)
 }
 
 fn materialize_result_columns(

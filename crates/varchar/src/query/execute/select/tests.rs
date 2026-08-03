@@ -85,7 +85,7 @@ fn one_evaluator_stack_is_charged_for_all_join_residuals() {
 
     let mut exact = ByteBudget::new(expected, Resource::QueryWorkingBytes);
     assert!(
-        residual_evaluator(&local, Some(&cross), &mut exact)
+        residual_evaluator(&local, Some(&cross), &mut exact, usize::MAX)
             .expect("largest reusable evaluator fits")
             .is_some()
     );
@@ -93,7 +93,7 @@ fn one_evaluator_stack_is_charged_for_all_join_residuals() {
 
     let mut one_under = ByteBudget::new(expected - 1, Resource::QueryWorkingBytes);
     assert!(matches!(
-        residual_evaluator(&local, Some(&cross), &mut one_under),
+        residual_evaluator(&local, Some(&cross), &mut one_under, usize::MAX),
         Err(Error::ResourceLimit {
             resource: Resource::QueryWorkingBytes,
             limit,

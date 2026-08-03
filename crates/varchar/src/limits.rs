@@ -26,7 +26,8 @@ pub enum Resource {
     QueryOutputBytes,
     /// Value-comparison work performed by a join.
     JoinSteps,
-    /// Backtracking performed by one regex search.
+    /// Backtracking performed by one regex search, and wildcard backtracking
+    /// performed by the `LIKE` matcher across one statement.
     RegexBacktracking,
 }
 
@@ -90,7 +91,14 @@ pub struct Limits {
     pub max_query_output_bytes: usize,
     /// Maximum amount of value-comparison work performed while joining rows.
     pub max_join_steps: usize,
-    /// Per-search backtracking limit passed to the regex engine.
+    /// Per-search backtracking limit passed to the regex engine, and the
+    /// wildcard backtracking budget one statement shares across every `LIKE` it
+    /// evaluates outside a scan pattern.
+    ///
+    /// A residual `LIKE` matches segment by segment and scans forward without
+    /// charge, so ordinary matching is bounded by the text rather than by this
+    /// limit. Only re-comparison beyond a forward scan is charged, and it is
+    /// charged once for the statement rather than once per row or predicate.
     pub regex_backtrack_limit: usize,
 }
 

@@ -100,7 +100,7 @@ Omitting the generated column from a named-column insert, or explicitly insertin
 - `LIKE`, where `%` matches any sequence and `_` matches one Unicode scalar
 - `IS NULL`, `IS NOT NULL`
 
-Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` do not match `NULL`; use `IS NULL` instead of `= NULL`. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
+Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` use SQL three-valued truth for nullable columns: a `NULL` input produces unknown, and `WHERE` retains only true. Direct `= NULL` and `!= NULL` comparisons are type errors; use `IS NULL` or `IS NOT NULL`. All leaves are resolved and type-checked before execution, even when runtime short-circuiting would skip one. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
 
 `SELECT` supports inner equijoins using either `JOIN` or `INNER JOIN`:
 

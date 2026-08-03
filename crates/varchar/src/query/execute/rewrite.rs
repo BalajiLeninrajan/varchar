@@ -27,7 +27,7 @@ where
     let mut evaluator = plan
         .local_residual
         .as_ref()
-        .map(Evaluator::new)
+        .map(|program| Evaluator::new(program, limits.regex_backtrack_limit))
         .transpose()?;
 
     for matched in plan.regex.find_iter(blob) {
