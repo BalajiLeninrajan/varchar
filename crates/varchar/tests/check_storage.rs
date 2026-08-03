@@ -252,6 +252,36 @@ fn incomplete_trailing_and_noncanonical_trees_are_rejected() {
 }
 
 #[test]
+fn persisted_check_violations_are_corruption_at_the_row() {
+    let blob = "V3;~S|t|value:I:?;~C|t|GT|0|I0;~R|t|I1;~R|t|I0;";
+    let bad_row = blob.rfind("~R|").expect("failing row exists");
+    assert_eq!(
+        corruption(blob),
+        (
+            bad_row,
+            "CHECK constraint 1 failed for table \"t\"".to_owned(),
+        )
+    );
+}
+
+#[test]
+fn combined_unique_and_check_state_loads_at_the_exact_database_limit() {
+    const ROW_COUNT: usize = 1_000;
+
+    let mut blob = String::from("V3;~S|t|value:I:?;~U|t|value;~C|t|GE|0|I0;");
+    for value in 0..ROW_COUNT {
+        blob.push_str(&format!("~R|t|I{value};"));
+    }
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits)
+        .expect("combined UNIQUE and CHECK validation fits the exact database limit");
+    assert_eq!(database.as_str(), blob);
+}
+
+#[test]
 fn many_check_records_load_with_linear_metadata_growth() {
     const CHECK_COUNT: usize = 4_096;
 
@@ -267,4 +297,31 @@ fn many_check_records_load_with_linear_metadata_growth() {
     let database = Database::from_string_with_limits(blob.clone(), limits)
         .expect("many CHECK records grow retained metadata geometrically");
     assert_eq!(database.as_str(), blob);
+}
+
+#[test]
+fn unique_precedes_check_and_check_precedes_foreign_key_validation() {
+    let unique_and_check = "V3;~S|t|value:I:?;~U|t|value;~C|t|GT|0|I0;~R|t|I-1;~R|t|I-1;";
+    assert_eq!(
+        corruption(unique_and_check),
+        (
+            unique_and_check.rfind("~R|").expect("duplicate row exists"),
+            "duplicate UNIQUE value for table \"t\" column \"value\"".to_owned(),
+        )
+    );
+
+    let check_and_foreign_key = "V3;\
+~S|parents|id:I:!;~P|parents|id;\
+~S|children|parent_id:I:?;~F|children|parent_id|parents|id;\
+~C|children|GT|0|I0;\
+~R|parents|I1;~R|children|I-1;";
+    assert_eq!(
+        corruption(check_and_foreign_key),
+        (
+            check_and_foreign_key
+                .rfind("~R|children")
+                .expect("invalid child row exists"),
+            "CHECK constraint 1 failed for table \"children\"".to_owned(),
+        )
+    );
 }

@@ -105,11 +105,11 @@ pub struct Limits {
     pub max_query_output_bytes: usize,
     /// Maximum amount of value-comparison work performed while joining rows.
     pub max_join_steps: usize,
-    /// Per-search backtracking limit passed to the regex engine, and the
-    /// wildcard backtracking budget one statement shares across every `LIKE` it
-    /// evaluates outside a scan pattern.
+    /// Per-search work limit for generated regexes, and the wildcard
+    /// backtracking budget one statement shares across every `LIKE` it
+    /// evaluates outside a scan pattern, in `WHERE` and in `CHECK` alike.
     ///
-    /// A residual `LIKE` matches segment by segment and scans forward without
+    /// A matched `LIKE` runs segment by segment and scans forward without
     /// charge, so ordinary matching is bounded by the text rather than by this
     /// limit. Only re-comparison beyond a forward scan is charged, and it is
     /// charged once for the statement rather than once per row or predicate.

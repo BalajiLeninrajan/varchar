@@ -1,5 +1,6 @@
 //! Deterministic cross-row constraint validation.
 
+mod check;
 mod unique;
 
 use std::cmp::Ordering;
@@ -139,6 +140,7 @@ pub(super) fn validate_rows(
     blob: &str,
     catalog: &Catalog,
     budget: &mut WorkingBudget,
+    check_like_work_limit: usize,
 ) -> ValidationResult<()> {
     let primary_count = catalog
         .schemas()
@@ -297,6 +299,7 @@ pub(super) fn validate_rows(
     }
 
     unique::validate(blob, catalog, budget)?;
+    check::validate(blob, catalog, budget, check_like_work_limit)?;
 
     if !has_foreign_keys {
         return Ok(());

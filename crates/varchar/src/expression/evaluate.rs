@@ -6,7 +6,7 @@ use crate::resolve::ColumnLocation;
 use crate::{Error, Result, Value};
 
 use super::like::{self, LikeWork};
-use super::program::{Predicate, Program};
+use super::program::{CheckPredicate, CheckProgram, Predicate, Program};
 use super::tree::{LogicalOperator, Node};
 use super::truth::Truth;
 
@@ -43,6 +43,18 @@ const WHERE_LABELS: EvaluationLabels = EvaluationLabels {
     skip_children: "counting skipped expression children",
     skip_descendants: "counting skipped expression descendants",
     skip_advance: "advancing over skipped expression descendants",
+};
+
+const CHECK_LABELS: EvaluationLabels = EvaluationLabels {
+    undersized_stack: "evaluating a CHECK with an undersized stack",
+    read_node: "evaluating a resolved CHECK program",
+    advance: "advancing through a resolved CHECK program",
+    finish: "finishing a resolved CHECK program",
+    count_children: "counting evaluated CHECK children",
+    skip_node: "short-circuiting a resolved CHECK program",
+    skip_children: "counting skipped CHECK children",
+    skip_descendants: "counting skipped CHECK descendants",
+    skip_advance: "advancing over skipped CHECK descendants",
 };
 
 #[derive(Clone, Copy)]
@@ -117,6 +129,53 @@ impl Evaluator {
             program.logical_node_count(),
             WHERE_LABELS,
             |predicate| evaluate_predicate(predicate, rows, like_work),
+        )
+    }
+}
+
+/// Reusable explicit stack for evaluating owned CHECK programs.
+pub(crate) struct CheckEvaluator {
+    frames: Vec<Frame>,
+    like_work: LikeWork,
+}
+
+impl CheckEvaluator {
+    pub(crate) fn working_bytes(logical_nodes: usize) -> Result<usize> {
+        logical_nodes
+            .checked_mul(std::mem::size_of::<Frame>())
+            .ok_or(Error::Capacity {
+                operation: "sizing the CHECK evaluation stack",
+            })
+    }
+
+    pub(crate) fn new_with_like_work_limit(
+        logical_nodes: usize,
+        like_work_limit: usize,
+    ) -> Result<Self> {
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(logical_nodes)
+            .map_err(|_| Error::Allocation {
+                operation: "reserving the CHECK evaluation stack",
+            })?;
+        Ok(Self {
+            frames,
+            like_work: LikeWork::new(like_work_limit),
+        })
+    }
+
+    pub(crate) fn evaluate(&mut self, program: &CheckProgram, row: &[Value]) -> Result<bool> {
+        self.evaluate_truth(program, row).map(Truth::passes_check)
+    }
+
+    fn evaluate_truth(&mut self, program: &CheckProgram, row: &[Value]) -> Result<Truth> {
+        let Self { frames, like_work } = self;
+        run(
+            frames,
+            program.nodes(),
+            program.logical_node_count(),
+            CHECK_LABELS,
+            |predicate| evaluate_check_predicate(predicate, row, like_work),
         )
     }
 }
@@ -239,6 +298,55 @@ fn evaluate_predicate(
         Predicate::IsNotNull { .. } => truth(!matches!(left, Value::Null)),
         Predicate::In { values, .. } => compare_in(left, values),
     })
+}
+
+fn evaluate_check_predicate(
+    predicate: &CheckPredicate,
+    row: &[Value],
+    like_work: &mut LikeWork,
+) -> Result<Truth> {
+    let left = row.get(predicate.column()).ok_or_else(|| {
+        Error::Schema(format!(
+            "resolved CHECK column {} is outside the evaluated row",
+            predicate.column()
+        ))
+    })?;
+    Ok(match predicate {
+        CheckPredicate::Equal { value, .. } => compare_equal(left, value),
+        CheckPredicate::NotEqual { value, .. } => negate(compare_equal(left, value)),
+        CheckPredicate::LessThan { value, .. } => {
+            compare_ordered(left, value, |ordering| ordering.is_lt())?
+        }
+        CheckPredicate::LessThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| ordering.is_le())?
+        }
+        CheckPredicate::GreaterThan { value, .. } => {
+            compare_ordered(left, value, |ordering| ordering.is_gt())?
+        }
+        CheckPredicate::GreaterThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| ordering.is_ge())?
+        }
+        CheckPredicate::Like { atoms, .. } => match left {
+            Value::Text(value) => truth(like::matches_charged(value, atoms, like_work)?),
+            Value::Null => Truth::Unknown,
+            Value::Integer(_) | Value::Boolean(_) => {
+                return Err(Error::Type(String::from(
+                    "resolved CHECK LIKE predicate was evaluated against a non-TEXT value",
+                )));
+            }
+        },
+        CheckPredicate::IsNull { .. } => truth(matches!(left, Value::Null)),
+        CheckPredicate::IsNotNull { .. } => truth(!matches!(left, Value::Null)),
+        CheckPredicate::In { values, .. } => compare_in(left, values),
+    })
+}
+
+const fn negate(value: Truth) -> Truth {
+    match value {
+        Truth::True => Truth::False,
+        Truth::False => Truth::True,
+        Truth::Unknown => Truth::Unknown,
+    }
 }
 
 fn value_at<'values>(

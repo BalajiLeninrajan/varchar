@@ -26,7 +26,7 @@ pub(crate) fn validate_and_catalog(
     blob: &str,
     max_storage_working_bytes: usize,
 ) -> Result<(FormatVersion, Catalog)> {
-    validate_and_catalog_with_limits(blob, max_storage_working_bytes, usize::MAX)
+    validate_and_catalog_with_limits(blob, max_storage_working_bytes, usize::MAX, usize::MAX)
 }
 
 /// Validate an authoritative blob under the caller's CHECK limits.
@@ -34,12 +34,14 @@ pub(crate) fn validate_and_catalog_with_limits(
     blob: &str,
     max_storage_working_bytes: usize,
     max_predicates: usize,
+    check_like_work_limit: usize,
 ) -> Result<(FormatVersion, Catalog)> {
     validate_with_mode(
         blob,
         ValidationMode::Persisted,
         max_storage_working_bytes,
         max_predicates,
+        check_like_work_limit,
     )
 }
 
@@ -51,12 +53,14 @@ pub(crate) fn validate_candidate(
     blob: &str,
     max_storage_working_bytes: usize,
     max_predicates: usize,
+    check_like_work_limit: usize,
 ) -> Result<(FormatVersion, Catalog)> {
     validate_with_mode(
         blob,
         ValidationMode::Candidate,
         max_storage_working_bytes,
         max_predicates,
+        check_like_work_limit,
     )
 }
 
@@ -65,6 +69,7 @@ fn validate_with_mode(
     mode: ValidationMode,
     max_storage_working_bytes: usize,
     max_predicates: usize,
+    check_like_work_limit: usize,
 ) -> Result<(FormatVersion, Catalog)> {
     let version = decode_header(blob)?;
     let mut budget = WorkingBudget::new(max_storage_working_bytes);
@@ -140,7 +145,8 @@ fn validate_with_mode(
     }
 
     let catalog = metadata.finish(row_start);
-    if let Err(error) = integrity::validate_rows(blob, &catalog, &mut budget) {
+    if let Err(error) = integrity::validate_rows(blob, &catalog, &mut budget, check_like_work_limit)
+    {
         return Err(match error {
             integrity::ValidationError::Storage(error) => error,
             integrity::ValidationError::Constraint(violation) => {

@@ -14,6 +14,7 @@ impl Database {
         let mut candidate = self.storage.candidate_with_validation_limits(
             self.limits.max_database_bytes,
             self.limits.max_predicates,
+            self.limits.regex_backtrack_limit,
         )?;
         if let Some(last) = resolved.next_auto_increment {
             candidate.advance_auto_increment(&statement.table, last)?;

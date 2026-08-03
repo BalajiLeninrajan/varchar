@@ -13,6 +13,7 @@ impl Database {
         let mut candidate = self.storage.candidate_with_validation_limits(
             self.limits.max_database_bytes,
             self.limits.max_predicates,
+            self.limits.regex_backtrack_limit,
         )?;
         let affected =
             query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |_| Ok(None))?;
