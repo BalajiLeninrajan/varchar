@@ -107,6 +107,10 @@ enum MutationState {
         direct_overlays: Vec<DirectOverlay>,
         overlay_working_bytes: usize,
     },
+    PendingSetNull {
+        columns: Vec<usize>,
+        working_bytes: usize,
+    },
     EncodedUpdate(String),
     Deleted,
 }
@@ -208,10 +212,17 @@ impl FrozenRow {
         Ok(())
     }
 
-    pub(super) fn request_delete(&mut self) -> Result<bool> {
+    pub(super) fn request_delete(&mut self, budget: &mut WorkingBudget) -> Result<bool> {
         match &self.mutation {
             MutationState::Fresh => {
                 self.mutation = MutationState::Deleted;
+                Ok(true)
+            }
+            MutationState::PendingSetNull { working_bytes, .. } => {
+                let working_bytes = *working_bytes;
+                let previous = std::mem::replace(&mut self.mutation, MutationState::Deleted);
+                drop(previous);
+                budget.release(working_bytes);
                 Ok(true)
             }
             MutationState::Deleted => Ok(false),
@@ -219,6 +230,90 @@ impl FrozenRow {
             | MutationState::InstalledUpdate { .. }
             | MutationState::EncodedUpdate(_) => Err(direct_conflict(self.identity)),
         }
+    }
+
+    pub(super) fn request_set_null(
+        &mut self,
+        column: usize,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        match &mut self.mutation {
+            MutationState::Fresh => {
+                let mut columns = Vec::new();
+                let working_bytes = budget.reserve_exact(
+                    &mut columns,
+                    1,
+                    "reserving referential SET NULL columns",
+                )?;
+                columns.push(column);
+                self.mutation = MutationState::PendingSetNull {
+                    columns,
+                    working_bytes,
+                };
+                Ok(())
+            }
+            MutationState::PendingSetNull {
+                columns,
+                working_bytes,
+            } => {
+                if columns.len() == columns.capacity() {
+                    let charged = budget.reserve_for_push_charged(
+                        columns,
+                        "reserving referential SET NULL columns",
+                    )?;
+                    *working_bytes = working_bytes
+                        .checked_add(charged)
+                        .ok_or_else(|| budget.limit_error())?;
+                }
+                columns.push(column);
+                Ok(())
+            }
+            MutationState::Deleted => Ok(()),
+            MutationState::MeasuredUpdate
+            | MutationState::InstalledUpdate { .. }
+            | MutationState::EncodedUpdate(_) => Err(direct_conflict(self.identity)),
+        }
+    }
+
+    pub(super) fn encode_set_null(
+        &mut self,
+        encoder: &ValidatedRowEncoder<'_, '_>,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        let (columns, working_bytes) = match &mut self.mutation {
+            MutationState::PendingSetNull {
+                columns,
+                working_bytes,
+            } => (columns, *working_bytes),
+            _ => return Err(direct_conflict(self.identity)),
+        };
+        columns.sort_unstable();
+        columns.dedup();
+        let next_column = Cell::new(0);
+        let null = Value::Null;
+        let measured = encoder.measure(self.original_values.len(), |column| {
+            effective_set_null_value(&self.original_values, columns, column, &next_column, &null)
+        })?;
+        let encoded_len = measured.encoded_len();
+        budget.charge(encoded_len)?;
+        next_column.set(0);
+        let encoded = match encoder.encode(measured, |column| {
+            effective_set_null_value(&self.original_values, columns, column, &next_column, &null)
+        }) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                budget.release(encoded_len);
+                return Err(error);
+            }
+        };
+        let previous = std::mem::replace(&mut self.mutation, MutationState::EncodedUpdate(encoded));
+        drop(previous);
+        budget.release(working_bytes);
+        Ok(())
+    }
+
+    pub(super) fn needs_set_null(&self) -> bool {
+        matches!(self.mutation, MutationState::PendingSetNull { .. })
     }
 
     pub(super) fn encode_effective_update<'brand>(
@@ -264,11 +359,27 @@ impl FrozenRow {
             MutationState::Deleted => Ok(None),
             MutationState::Fresh
             | MutationState::MeasuredUpdate
-            | MutationState::InstalledUpdate { .. } => Err(Error::Capacity {
+            | MutationState::InstalledUpdate { .. }
+            | MutationState::PendingSetNull { .. } => Err(Error::Capacity {
                 operation: "reading a planned row replacement",
             }),
         }
     }
+}
+
+fn effective_set_null_value<'values>(
+    original_values: &'values [Value],
+    columns: &[usize],
+    column: usize,
+    next_column: &Cell<usize>,
+    null: &'values Value,
+) -> Option<&'values Value> {
+    let position = next_column.get();
+    if columns.get(position) == Some(&column) {
+        next_column.set(position + 1);
+        return Some(null);
+    }
+    original_values.get(column)
 }
 
 fn effective_value<'values>(

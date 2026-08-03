@@ -215,6 +215,56 @@ fn delete_cascade_is_multi_level_reports_direct_rows_and_survives_reload() {
 }
 
 #[test]
+fn delete_set_null_preserves_children_and_update_restrict_remains_explicitly_supported() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE RESTRICT ON DELETE SET NULL)",
+    );
+    execute(&mut database, "INSERT INTO parents VALUES (1)");
+    execute(&mut database, "INSERT INTO parents VALUES (2)");
+    execute(&mut database, "INSERT INTO children VALUES (10, 1)");
+    execute(&mut database, "INSERT INTO children VALUES (11, 1)");
+    execute(&mut database, "INSERT INTO children VALUES (20, 2)");
+
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE parents SET id = 3 WHERE id = 1"),
+        Error::Constraint(_)
+    ));
+    assert_eq!(
+        execute(&mut database, "DELETE FROM parents WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT id, parent_id FROM children ORDER BY id",
+        ),
+        vec![
+            vec![Value::Integer(10), Value::Null],
+            vec![Value::Integer(11), Value::Null],
+            vec![Value::Integer(20), Value::Integer(2)],
+        ]
+    );
+
+    let blob = database.into_string();
+    assert!(blob.contains("~F|children|parent_id|parents|id|N|R;"));
+    let mut reloaded = Database::from_string(blob).expect("SET NULL metadata reloads");
+    assert_eq!(
+        rows(&mut reloaded, "SELECT parent_id FROM children ORDER BY id"),
+        vec![
+            vec![Value::Null],
+            vec![Value::Null],
+            vec![Value::Integer(2)],
+        ]
+    );
+}
+
+#[test]
 fn self_referential_cascade_handles_trees_self_loops_and_cycles() {
     let mut database = Database::new();
     execute(
@@ -357,6 +407,45 @@ fn set_null_nullability_precedes_later_declaration_errors() {
             if message
                 == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
     ));
+}
+
+#[test]
+fn referential_action_words_are_reserved_identifiers() {
+    let mut database = Database::new();
+    for (sql, keyword) in [
+        ("CREATE TABLE restrict (id INTEGER PRIMARY KEY)", "RESTRICT"),
+        ("CREATE TABLE t (cascade TEXT)", "CASCADE"),
+    ] {
+        let error = atomic_error(&mut database, sql);
+        assert!(
+            matches!(&error, Error::Parse { message, .. }
+            if message == &format!(
+                "reserved keyword `{keyword}` cannot be used as an identifier"
+            )),
+            "{keyword} must not be usable as an identifier, got {error}"
+        );
+    }
+
+    // The words still drive the referential clauses they were reserved for.
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE SET NULL, note TEXT)",
+    );
+    execute(&mut database, "INSERT INTO parents VALUES (1)");
+    execute(&mut database, "INSERT INTO children VALUES (1, 'kept')");
+
+    assert_eq!(
+        execute(&mut database, "DELETE FROM parents WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT parent_id, note FROM children"),
+        vec![vec![Value::Null, Value::Text(String::from("kept"))]]
+    );
 }
 
 #[test]

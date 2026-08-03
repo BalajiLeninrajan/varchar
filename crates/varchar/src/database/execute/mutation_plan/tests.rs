@@ -172,12 +172,16 @@ fn direct_overlays_preserve_original_values_and_detect_conflicts() {
         .install_direct_update(&update, &mut budget)
         .expect("the direct update installs");
     assert!(matches!(
-        updated.request_delete(),
+        updated.request_delete(&mut budget),
         Err(Error::Constraint(_))
     ));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1), Value::Null]);
-    assert!(deleted.request_delete().expect("the delete installs"));
+    assert!(
+        deleted
+            .request_delete(&mut budget)
+            .expect("the delete installs")
+    );
     assert!(matches!(
         deleted.install_direct_update(&update, &mut budget),
         Err(Error::Constraint(_))
@@ -292,13 +296,58 @@ fn row_mutation_states_reject_incomplete_or_conflicting_transitions() {
     assert!(matches!(row.replacement(), Err(Error::Capacity { .. })));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1)]);
-    assert!(deleted.request_delete().expect("delete installs"));
+    assert!(
+        deleted
+            .request_delete(&mut budget)
+            .expect("delete installs")
+    );
     with_validated_row_encoder(layout, |encoder| {
         assert!(matches!(
             deleted.measure_direct_update(&update, &encoder),
             Err(Error::Constraint(_))
         ));
     });
+}
+
+#[test]
+fn set_null_columns_are_sorted_once_before_encoding() {
+    let columns = (0..4)
+        .map(|index| SchemaColumn {
+            name: format!("c{index}"),
+            data_type: DataType::Integer,
+            nullable: true,
+            default: None,
+        })
+        .collect::<Vec<_>>();
+    let layout = validate_row_layout(RowLayout {
+        table: "items",
+        columns: &columns,
+    })
+    .expect("valid layout");
+    let identity = RowIdentity::new(0..20).expect("valid identity");
+    let mut row = FrozenRow::new(
+        identity,
+        vec![
+            Value::Integer(0),
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3),
+        ],
+    );
+    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    for column in [3, 2, 1, 0, 2] {
+        row.request_set_null(column, &mut budget)
+            .expect("SET NULL request succeeds");
+    }
+
+    with_validated_row_encoder(layout, |encoder| {
+        row.encode_set_null(&encoder, &mut budget)
+            .expect("SET NULL row encodes");
+    });
+    assert_eq!(
+        row.replacement().expect("replacement is planned"),
+        Some("~R|items|N|N|N|N;")
+    );
 }
 
 #[test]

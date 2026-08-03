@@ -119,7 +119,7 @@ impl MutationPlan {
         let mut delete_queue = Vec::new();
         let mut queue_working_bytes = 0;
         for row in &mut rows {
-            if row.request_delete()? {
+            if row.request_delete(&mut budget)? {
                 push_delete_queue(
                     &mut delete_queue,
                     row.identity(),
@@ -138,7 +138,43 @@ impl MutationPlan {
         budget.release(queue_working_bytes);
         referential.release(&mut budget);
 
+        for row in &mut rows {
+            if !row.needs_set_null() {
+                continue;
+            }
+            let identity = row.identity();
+            let record = blob
+                .get(identity.range())
+                .ok_or_else(|| invalid_range(identity.start()))?;
+            let row_record = storage::row_record(record, identity.start())?;
+            let table = catalog.validated_table(row_record.table()).ok_or_else(|| {
+                Error::CorruptStorage {
+                    offset: identity.start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                }
+            })?;
+            with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+                row.encode_set_null(&encoder, &mut budget)
+            })?;
+        }
+
         sort_and_validate_ranges(&mut rows)?;
+        let mut projected = blob.len();
+        for row in &rows {
+            let replacement = row.replacement()?;
+            projected = replace_projected_bytes(
+                projected,
+                row.identity().len(),
+                replacement.map_or(0, str::len),
+                limits.max_database_bytes,
+            )?;
+        }
+        check_limit(
+            projected,
+            limits.max_database_bytes,
+            Resource::DatabaseBytes,
+        )?;
+
         Ok(Self {
             rows,
             direct_affected,

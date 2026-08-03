@@ -301,7 +301,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
                     }
                     ForeignKeyDeleteAction::Cascade => {
                         let index = self.freeze_child(edge.child, rows, budget)?;
-                        if rows[index].request_delete()? {
+                        if rows[index].request_delete(budget)? {
                             push_delete_queue(
                                 delete_queue,
                                 rows[index].identity(),
@@ -310,7 +310,10 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
                             )?;
                         }
                     }
-                    ForeignKeyDeleteAction::SetNull => return Err(self.restrict_error(edge)),
+                    ForeignKeyDeleteAction::SetNull => {
+                        let index = self.freeze_child(edge.child, rows, budget)?;
+                        rows[index].request_set_null(edge.column, budget)?;
+                    }
                 }
             }
         }
