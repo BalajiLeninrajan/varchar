@@ -71,6 +71,19 @@ pub(crate) struct Select {
     pub(crate) joins: Vec<Join>,
     pub(crate) projection: Projection,
     pub(crate) where_clause: Option<Expression>,
+    pub(crate) order_by: Vec<OrderTerm>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderTerm {
+    pub(crate) column: ColumnRef,
+    pub(crate) direction: OrderDirection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OrderDirection {
+    Ascending,
+    Descending,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

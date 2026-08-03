@@ -3,6 +3,7 @@
 use super::column::ColumnLocation;
 use super::expression::expression as resolve_expression;
 use super::join::{ResolvedJoin, resolve_joins};
+use super::order::{ResolvedOrderTerm, resolve_order};
 use super::projection::{expanded_len, resolve_projection};
 use super::source::resolve_sources;
 use crate::Result;
@@ -15,6 +16,7 @@ pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) projection: Vec<ColumnLocation>,
     pub(crate) joins: Vec<ResolvedJoin>,
     pub(crate) where_clause: Option<Program<'statement>>,
+    pub(crate) order_by: Vec<ResolvedOrderTerm>,
 }
 
 pub(crate) fn select<'catalog, 'statement>(
@@ -33,6 +35,7 @@ pub(crate) fn select<'catalog, 'statement>(
     let joins = resolve_joins(statement, &sources)?;
     let where_clause =
         resolve_expression(&sources, statement.where_clause.as_ref(), max_predicates)?;
+    let order_by = resolve_order(&sources, &statement.order_by)?;
     let projection = resolve_projection(
         &sources,
         &statement.projection,
@@ -45,5 +48,6 @@ pub(crate) fn select<'catalog, 'statement>(
         projection,
         joins,
         where_clause,
+        order_by,
     })
 }

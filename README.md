@@ -53,7 +53,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | Create | `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)` |
 | Insert | `INSERT INTO users VALUES (1, 'Ada', TRUE)` |
 | Insert by column | `INSERT INTO users (name) VALUES ('Grace')` |
-| Select | `SELECT * FROM users` or a named, ordered projection |
+| Select | `SELECT * FROM users` or a named projection, optionally followed by `ORDER BY` |
 | Join | `SELECT users.name, posts.body FROM users JOIN posts ON users.id = posts.user_id` |
 | Update | `UPDATE users SET active = FALSE WHERE id = 1` |
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
@@ -114,13 +114,23 @@ WHERE posts.body LIKE 'A%';
 
 An `ON` clause contains column-to-column equality terms joined by `AND`. Additional join clauses form a left-to-right chain, and later clauses may refer to any earlier source. Column references in projections, `ON`, and `WHERE` may be table-qualified; a bare column is accepted only when exactly one participating table contains that name. `table.*` expands one table in schema order, while unqualified `*` expands all sources in `FROM`/`JOIN` order.
 
-Join equality uses SQL null semantics: `NULL` never equals any value, including another `NULL`. Duplicate and many-to-many matches are preserved. Results use deterministic nested-loop order: physical row order from the `FROM` table, followed by physical row order from each joined table left to right.
+Join equality uses SQL null semantics: `NULL` never equals any value, including another `NULL`. Duplicate and many-to-many matches are preserved. Without ordering, results use deterministic nested-loop order: physical row order from the `FROM` table, followed by physical row order from each joined table left to right.
+
+`ORDER BY` accepts one or more real source columns, each optionally followed by `ASC` or `DESC`. Sort columns need not be projected, duplicate terms are retained, and joined columns may be qualified only with their real table name. Unqualified names must be unambiguous. Ordering is lexicographic across INTEGER, BOOLEAN (`FALSE < TRUE`), and decoded TEXT Unicode scalars. Ascending order puts NULL after non-NULL values; descending order puts NULL first. Final ties preserve the same physical or nested-loop order an unordered query would have produced.
+
+```sql
+SELECT children.name
+FROM parents JOIN children ON parents.id = children.parent_id
+ORDER BY parents.created_at, children.name DESC;
+```
+
+Aliases, ordinals, expressions, `COLLATE`, and configurable NULL placement are not supported as sort terms.
 
 Each library result column includes its display label and the table/column it originated from. When a joined result contains the same label from different sources, the CLI qualifies those headers with their table names.
 
 Unconstrained tables retain duplicate rows. Projection order, duplicate projected columns, and physical insertion order are preserved.
 
-The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, `ORDER BY`, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
+The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
 
 ## The one string
 
@@ -206,10 +216,10 @@ There is no public JavaScript/WASM package in v1. A future browser adapter can p
 
 The punchline is also the performance model:
 
-- Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts.
+- Every query scans the database string once. Unordered single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts. Unordered results stream in qualifying order. For `r` qualifying rows, `ORDER BY` retains each projection plus one owned value per sort key and a tie-breaking ordinal, then adds **O(r log r)** row comparisons; each comparison may inspect multiple keys, and each TEXT-key comparison may scan a shared Unicode-scalar prefix. The sort is allocation-free and unstable internally, with the ordinal preserving input order on final ties.
 - Every mutation builds and validates a candidate string before replacing the old state. Inserts and schema changes copy the authoritative blob, while updates and deletes scan and finish a candidate even when no row matches, so all mutation paths are **O(n)** in database size. A zero-match update or delete installs a separately validated but byte-identical state.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, and rows plus pointer state retained for joins. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
+- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, rows plus pointer state retained for joins, and every ordered pending-row descriptor, projected value, owned sort key, text payload, and `u64` ordinal before allocation. Ordered sorting itself uses no scratch allocation. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 

@@ -592,7 +592,6 @@ fn unsupported_and_malformed_sql_are_rejected_with_spans() {
         "SELECT * FROM t WHERE id =",
         "SELECT * FROM t; SELECT * FROM t",
         "SELECT * FROM t WHERE NOT id = 1",
-        "SELECT * FROM t ORDER BY id",
         "SELECT * FROM t JOIN t AS other ON t.id = other.id",
         "SELECT \"id\" FROM t",
         "SELECT * FROM t -- comment",

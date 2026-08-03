@@ -99,7 +99,7 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -
             continue;
         }
         let selected = [decoded.as_slice()];
-        collector.collect(&selected)?;
+        collector.collect(&selected, &mut working_budget, decoded_charge)?;
     }
 
     collector.finish(columns)
@@ -192,6 +192,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result
     let mut output = JoinOutput {
         plan,
         collector: &mut collector,
+        working_budget: &mut working_budget,
         residual_evaluator,
         join_steps: 0,
         limits,
@@ -204,6 +205,7 @@ fn select_join(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result
 struct JoinOutput<'a, 'plan, 'catalog, 'statement, 'limits> {
     plan: &'plan SelectPlan<'catalog, 'statement>,
     collector: &'a mut RowCollector<'plan>,
+    working_budget: &'a mut ByteBudget,
     residual_evaluator: Option<Evaluator>,
     join_steps: usize,
     limits: &'limits Limits,
@@ -223,7 +225,7 @@ fn emit_join_rows<'rows>(
         {
             return Ok(());
         }
-        output.collector.collect(chosen)?;
+        output.collector.collect(chosen, output.working_budget, 0)?;
         return Ok(());
     }
 
@@ -362,6 +364,19 @@ impl ByteBudget {
             .checked_add(amount)
             .ok_or_else(|| self.limit_error())?;
         check_limit(next, self.limit, self.resource)?;
+        self.used = next;
+        Ok(())
+    }
+
+    fn charge_with_transient(&mut self, amount: usize, transient: usize) -> Result<()> {
+        let next = self
+            .used
+            .checked_add(amount)
+            .ok_or_else(|| self.limit_error())?;
+        let peak = next
+            .checked_add(transient)
+            .ok_or_else(|| self.limit_error())?;
+        check_limit(peak, self.limit, self.resource)?;
         self.used = next;
         Ok(())
     }

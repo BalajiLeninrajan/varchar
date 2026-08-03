@@ -1,7 +1,9 @@
 //! `SELECT`, projection, joins, and `EXPLAIN REGEX` grammar.
 
 use super::{Parser, TokenKind};
-use crate::sql::ast::{ColumnRef, Join, JoinCondition, Projection, ProjectionItem, Select};
+use crate::sql::ast::{
+    ColumnRef, Join, JoinCondition, OrderDirection, OrderTerm, Projection, ProjectionItem, Select,
+};
 use crate::{Error, Result};
 
 impl Parser {
@@ -12,12 +14,63 @@ impl Parser {
         let table = self.expect_identifier()?;
         let joins = self.parse_joins()?;
         let where_clause = self.parse_optional_where()?;
+        let order_by = self.parse_optional_order_by()?;
         Ok(Select {
             table,
             joins,
             projection,
             where_clause,
+            order_by,
         })
+    }
+
+    fn parse_optional_order_by(&mut self) -> Result<Vec<OrderTerm>> {
+        if !self.consume_keyword("ORDER") {
+            return Ok(Vec::new());
+        }
+        self.expect_keyword("BY")?;
+
+        let mut terms = Vec::new();
+        loop {
+            terms.try_reserve(1).map_err(|_| Error::Allocation {
+                operation: "growing ORDER BY terms",
+            })?;
+            terms.push(self.parse_order_term()?);
+            if self.consume(&TokenKind::Comma) {
+                continue;
+            }
+            if self.order_by_is_terminated() {
+                break;
+            }
+
+            let span = self.current().span;
+            self.claimed_order_error = Some(self.position);
+            return Err(Error::parse("expected `,` between ORDER BY terms", span));
+        }
+        Ok(terms)
+    }
+
+    fn parse_order_term(&mut self) -> Result<OrderTerm> {
+        let column = self.parse_column_ref()?;
+        let direction = if self.consume_keyword("ASC") {
+            OrderDirection::Ascending
+        } else if self.consume_keyword("DESC") {
+            OrderDirection::Descending
+        } else {
+            OrderDirection::Ascending
+        };
+
+        Ok(OrderTerm { column, direction })
+    }
+
+    fn order_by_is_terminated(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::End | TokenKind::Semicolon | TokenKind::LexicalError(_)
+        ) || self
+            .current_word()
+            .and_then(super::trailing_feature)
+            .is_some()
     }
 
     fn parse_projection(&mut self) -> Result<Projection> {

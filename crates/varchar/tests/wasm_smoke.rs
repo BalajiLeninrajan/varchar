@@ -285,6 +285,71 @@ fn like_wildcards_use_unicode_scalars_in_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn ordered_collection_and_target_specific_working_boundaries_run_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE ordered (id INTEGER NOT NULL, key_ TEXT)")
+        .unwrap();
+    database
+        .execute("INSERT INTO ordered VALUES (1, '💾')")
+        .unwrap();
+    database
+        .execute("INSERT INTO ordered VALUES (2, NULL)")
+        .unwrap();
+    database
+        .execute("INSERT INTO ordered VALUES (3, 'a')")
+        .unwrap();
+    let blob = database.into_string();
+    let sql = "SELECT id FROM ordered ORDER BY key_";
+
+    let mut lower = 0_usize;
+    let mut upper = 8_192_usize;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let limits = Limits {
+            max_query_working_bytes: middle,
+            ..Limits::default()
+        };
+        let mut candidate = Database::from_string_with_limits(blob.clone(), limits).unwrap();
+        if candidate.execute(sql).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    let exact = lower;
+    assert!(exact > 0, "ordered collection has a nonzero working charge");
+
+    let limits = Limits {
+        max_query_working_bytes: exact,
+        ..Limits::default()
+    };
+    let mut candidate = Database::from_string_with_limits(blob.clone(), limits).unwrap();
+    assert_eq!(
+        rows(candidate.execute(sql).unwrap()),
+        vec![
+            vec![Value::Integer(3)],
+            vec![Value::Integer(1)],
+            vec![Value::Integer(2)],
+        ]
+    );
+
+    let limits = Limits {
+        max_query_working_bytes: exact - 1,
+        ..Limits::default()
+    };
+    let mut candidate = Database::from_string_with_limits(blob.clone(), limits).unwrap();
+    assert!(matches!(
+        candidate.execute(sql),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryWorkingBytes,
+            limit,
+        }) if limit == exact - 1
+    ));
+    assert_eq!(candidate.as_str(), blob);
+}
+
+#[wasm_bindgen_test]
 fn primary_and_foreign_keys_survive_reload_in_wasm() {
     let mut database = Database::new();
     database

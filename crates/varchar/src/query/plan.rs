@@ -4,7 +4,7 @@ use fancy_regex::Regex;
 
 use crate::expression::Program;
 use crate::output::SelectExplanation;
-use crate::resolve::{ColumnLocation, ResolvedJoin};
+use crate::resolve::{ColumnLocation, ResolvedJoin, ResolvedOrderTerm};
 use crate::storage::TableSchema;
 use crate::{Result, SchemaColumn};
 
@@ -25,6 +25,7 @@ pub(crate) struct SelectPlan<'catalog, 'statement> {
     pub(super) joins: Vec<ResolvedJoin>,
     pub(super) local_residuals: Vec<Option<Program<'statement>>>,
     pub(super) cross_source_residual: Option<Program<'statement>>,
+    pub(super) order_by: Vec<ResolvedOrderTerm>,
 }
 
 impl SelectPlan<'_, '_> {
