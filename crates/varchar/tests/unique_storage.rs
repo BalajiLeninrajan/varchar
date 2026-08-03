@@ -121,6 +121,36 @@ fn nullable_unique_values_reload_with_multiple_nulls() {
 }
 
 #[test]
+fn all_null_unique_columns_load_at_the_exact_database_limit() {
+    const COLUMN_COUNT: usize = 100;
+    const ROW_COUNT: usize = 100;
+
+    let mut blob = String::from("V3;~S|t");
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("|c{column}:I:?"));
+    }
+    blob.push(';');
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("~U|t|c{column};"));
+    }
+    for _ in 0..ROW_COUNT {
+        blob.push_str("~R|t");
+        for _ in 0..COLUMN_COUNT {
+            blob.push_str("|N");
+        }
+        blob.push(';');
+    }
+
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits)
+        .expect("all-NULL UNIQUE indexes fit the exact derived working limit");
+    assert_eq!(database.as_str(), blob);
+}
+
+#[test]
 fn dense_unique_columns_load_at_the_exact_database_limit() {
     const COLUMN_COUNT: usize = 10_000;
     const ROW_COUNT: usize = 10;

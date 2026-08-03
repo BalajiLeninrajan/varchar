@@ -39,11 +39,26 @@ impl SourceOffset for usize {
     }
 }
 
+/// The bits every value below `bound` fits in.
+fn bits_below(bound: usize) -> u32 {
+    usize::BITS - bound.leading_zeros()
+}
+
 /// Where the single fill pass keeps the UNIQUE values it reads.
 ///
-/// Each variant gives every UNIQUE index its own vector of source offsets, narrowed to
-/// `u32` when every offset into the blob fits one.
+/// [`Self::Tagged`] is one flat vector holding every value with the index that owns it packed
+/// above its source offset, so declaring a UNIQUE column costs nothing until the column holds a
+/// value. Small databases need exactly that: a vector per index charges a header for every
+/// UNIQUE column the schema declares, which is working memory owed before the first row is
+/// read, and the exactly sized allocation this replaced never owed it — that fixed cost is what
+/// closed column-heavy databases out of the working limit their own size derives.
+///
+/// A tag only fits beside an offset while the two share a `u32`. Past that the schema declares
+/// so many indexes that the blob spends at least fourteen bytes on each of them — fifty-six
+/// bytes of derived working limit — and a vector per index is affordable again, so the other
+/// two layouts give every index its own and pay no tag at all.
 enum UniqueValues {
+    Tagged { offset_bits: u32, values: Vec<u32> },
     NarrowPerIndex(Vec<Vec<u32>>),
     WidePerIndex(Vec<Vec<usize>>),
 }
@@ -57,6 +72,16 @@ impl UniqueValues {
         index_count: usize,
         budget: &mut WorkingBudget,
     ) -> Result<(Self, usize), Error> {
+        let offset_bits = bits_below(blob_len);
+        if bits_below(index_count) + offset_bits <= u32::BITS {
+            return Ok((
+                Self::Tagged {
+                    offset_bits,
+                    values: Vec::new(),
+                },
+                0,
+            ));
+        }
         if u32::try_from(blob_len.saturating_sub(1)).is_ok() {
             let (slots, charged) = per_index_slots(index_count, budget)?;
             return Ok((Self::NarrowPerIndex(slots), charged));
@@ -73,6 +98,14 @@ impl UniqueValues {
         budget: &mut WorkingBudget,
     ) -> Result<usize, Error> {
         match self {
+            Self::Tagged {
+                offset_bits,
+                values,
+            } => {
+                let tagged = u32::try_from((index << *offset_bits) | offset)
+                    .expect("a tagged value fits the width its index and offset chose");
+                budget.push_charged(values, tagged, VALUES_OPERATION)
+            }
             Self::NarrowPerIndex(slots) => {
                 budget.push_charged(&mut slots[index], u32::narrow(offset), VALUES_OPERATION)
             }
@@ -85,6 +118,10 @@ impl UniqueValues {
     /// The index and source offset of the earliest duplicate value, if the database holds one.
     fn earliest_duplicate(&mut self, blob: &str) -> Option<(usize, usize)> {
         match self {
+            Self::Tagged {
+                offset_bits,
+                values,
+            } => earliest_tagged_duplicate(values, *offset_bits, blob),
             Self::NarrowPerIndex(slots) => earliest_per_index_duplicate(slots, blob),
             Self::WidePerIndex(slots) => earliest_per_index_duplicate(slots, blob),
         }
@@ -105,6 +142,44 @@ fn per_index_slots<T>(
     budget.reserve_exact(&mut slots, index_count, INDEXES_OPERATION)?;
     slots.resize_with(index_count, Vec::new);
     Ok((slots, charged))
+}
+
+/// Groups the tagged values by index, orders each group, and reports the earliest repeat.
+///
+/// Comparing the tag first keeps two indexes' values from ever being compared as strings, so
+/// one sort over everything costs what a sort per index costs. The offset tie-break then reports
+/// the later occurrence of a colliding pair exactly as a per-index sort does, and the earliest
+/// occurrence over every index is the earliest of their per-index earliests.
+fn earliest_tagged_duplicate(
+    values: &mut [u32],
+    offset_bits: u32,
+    blob: &str,
+) -> Option<(usize, usize)> {
+    let parts = |tagged: u32| {
+        let tagged = usize::try_from(tagged).expect("a tagged value originated as usize");
+        (
+            tagged >> offset_bits,
+            tagged & (usize::MAX >> (usize::BITS - offset_bits)),
+        )
+    };
+    values.sort_unstable_by(|left, right| {
+        let (left_index, left_offset) = parts(*left);
+        let (right_index, right_offset) = parts(*right);
+        left_index
+            .cmp(&right_index)
+            .then_with(|| compare_unique_values(blob, left_offset, right_offset))
+            .then_with(|| left_offset.cmp(&right_offset))
+    });
+    values
+        .windows(2)
+        .filter_map(|pair| {
+            let (left_index, left_offset) = parts(pair[0]);
+            let (right_index, right_offset) = parts(pair[1]);
+            (left_index == right_index
+                && compare_encoded_cells(blob, left_offset, right_offset) == Ordering::Equal)
+                .then_some((right_index, right_offset))
+        })
+        .min_by_key(|(_, offset)| *offset)
 }
 
 fn earliest_per_index_duplicate<T: SourceOffset>(
@@ -304,10 +379,114 @@ pub(super) fn validate<'a>(
 mod tests {
     use std::cmp::Ordering;
 
-    use super::{COMPARED_CELL_BYTES, compare_encoded_cells, earliest_per_index_duplicate};
-    use crate::Error;
+    use super::{
+        COMPARED_CELL_BYTES, UniqueTable, UniqueValues, compare_encoded_cells,
+        earliest_per_index_duplicate, validate,
+    };
+    use crate::storage::budget::WorkingBudget;
     use crate::storage::budget::{reset_working_string_comparisons, working_string_comparisons};
     use crate::storage::validate::validate_and_catalog;
+    use crate::{Error, Resource};
+
+    /// The bytes one table with UNIQUE columns costs before it holds a value.
+    const TABLE: usize = std::mem::size_of::<UniqueTable<'static>>();
+    /// The bytes the first tagged value costs, growth reserving two before it lands.
+    const FIRST_VALUE: usize = 2 * std::mem::size_of::<u32>();
+
+    fn working_budget(bytes: usize) -> WorkingBudget {
+        WorkingBudget::new(bytes)
+    }
+
+    fn layout(blob_len: usize, index_count: usize) -> UniqueValues {
+        UniqueValues::new(blob_len, index_count, &mut working_budget(usize::MAX))
+            .expect("an unlimited budget reserves any layout")
+            .0
+    }
+
+    /// The tagged layout covers every database whose length and index count fit a `u32` between
+    /// them, and hands off to a vector per index rather than truncating a tag.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn tagged_values_give_way_to_per_index_vectors_when_a_tag_stops_fitting() {
+        assert!(matches!(layout(1 << 30, 1), UniqueValues::Tagged { .. }));
+        assert!(matches!(layout(1 << 25, 32), UniqueValues::Tagged { .. }));
+        assert!(matches!(
+            layout(1 << 30, 2),
+            UniqueValues::NarrowPerIndex(_)
+        ));
+        assert!(matches!(
+            layout(u32::MAX as usize + 1, 1),
+            UniqueValues::NarrowPerIndex(_)
+        ));
+        assert!(matches!(
+            layout(u32::MAX as usize + 2, 1),
+            UniqueValues::WidePerIndex(_)
+        ));
+    }
+
+    /// The regression this pins: declaring a UNIQUE column may not cost working bytes by
+    /// itself.
+    ///
+    /// Every fixture below holds exactly one value however many columns it declares, so all of
+    /// them have to load inside the same budget. A vector per index charges its header for every
+    /// declared column instead — fixed cost a database owes before it holds any rows, which
+    /// closed column-heavy databases out of the working limit their own size derives.
+    #[test]
+    fn declaring_a_unique_column_costs_nothing_until_it_holds_a_value() {
+        for columns in 1..=8 {
+            let mut blob = String::from("V3;~S|t");
+            for column in 0..columns {
+                blob.push_str(&format!("|c{column}:T:?"));
+            }
+            blob.push(';');
+            for column in 0..columns {
+                blob.push_str(&format!("~U|t|c{column};"));
+            }
+            blob.push_str("~R|t|Ta");
+            for _ in 1..columns {
+                blob.push_str("|N");
+            }
+            blob.push(';');
+
+            let (_, catalog) =
+                validate_and_catalog(&blob, usize::MAX).expect("the fixture is valid");
+            let exact = TABLE + FIRST_VALUE;
+            assert!(
+                validate(&blob, &catalog, &mut working_budget(exact)).is_ok(),
+                "{columns} declared UNIQUE columns holding one value cost {exact} bytes"
+            );
+            assert!(matches!(
+                validate(&blob, &catalog, &mut working_budget(exact - 1)),
+                Err(super::ValidationError::Storage(Error::ResourceLimit {
+                    resource: Resource::StorageWorkingBytes,
+                    limit,
+                })) if limit == exact - 1
+            ));
+        }
+    }
+
+    /// The database from the regression report: one row cannot collide with itself, so opening
+    /// it costs one table descriptor and the single value it holds.
+    #[test]
+    fn a_one_row_unique_table_charges_a_table_and_one_value() {
+        const BLOB: &str = "V3;~S|t0|i:T:!|u:T:?;~P|t0|i;~U|t0|u;~R|t0|Ta|Ta;";
+
+        let (_, catalog) =
+            validate_and_catalog(BLOB, usize::MAX).expect("the one-row fixture is valid");
+        let exact = TABLE + FIRST_VALUE;
+
+        assert!(
+            validate(BLOB, &catalog, &mut working_budget(exact)).is_ok(),
+            "a lone UNIQUE value costs one append"
+        );
+        assert!(matches!(
+            validate(BLOB, &catalog, &mut working_budget(exact - 1)),
+            Err(super::ValidationError::Storage(Error::ResourceLimit {
+                resource: Resource::StorageWorkingBytes,
+                limit,
+            })) if limit == exact - 1
+        ));
+    }
 
     #[test]
     fn encoded_comparison_stops_at_the_first_different_byte() {
@@ -324,7 +503,52 @@ mod tests {
         COMPARED_CELL_BYTES.with(|count| assert_eq!(count.get(), 2));
     }
 
-    /// The earliest collision in the blob wins, whichever index and table owns it.
+    #[test]
+    fn unique_indexes_accept_the_exact_logical_budget_and_reject_one_under() {
+        let blob = "V3;~S|t|value:T:?;~U|t|value;~R|t|Tone;~R|t|Ttwo;~R|t|Tsix;";
+        let (_, catalog) =
+            validate_and_catalog(blob, usize::MAX).expect("the UNIQUE fixture is valid");
+        // Growth reserves two values and then three, so three values are charged exactly.
+        let exact = TABLE + 3 * std::mem::size_of::<u32>();
+
+        assert!(
+            validate(blob, &catalog, &mut working_budget(exact)).is_ok(),
+            "the exact UNIQUE index budget is sufficient"
+        );
+        assert!(matches!(
+            validate(blob, &catalog, &mut working_budget(exact - 1)),
+            Err(super::ValidationError::Storage(Error::ResourceLimit {
+                resource: Resource::StorageWorkingBytes,
+                limit,
+            })) if limit == exact - 1
+        ));
+    }
+
+    #[test]
+    fn all_null_unique_indexes_need_only_a_table_descriptor() {
+        for blob in [
+            "V3;~S|t|value:T:?;~U|t|value;",
+            "V3;~S|t|value:T:?;~U|t|value;~R|t|N;~R|t|N;",
+            "V3;~S|t|a:T:?|b:T:?;~U|t|a;~U|t|b;~R|t|N|N;",
+        ] {
+            let (_, catalog) =
+                validate_and_catalog(blob, usize::MAX).expect("the UNIQUE fixture is valid");
+            assert!(
+                validate(blob, &catalog, &mut working_budget(TABLE)).is_ok(),
+                "NULL values need no stored value at all"
+            );
+            assert!(matches!(
+                validate(blob, &catalog, &mut working_budget(TABLE - 1)),
+                Err(super::ValidationError::Storage(Error::ResourceLimit {
+                    resource: Resource::StorageWorkingBytes,
+                    limit,
+                })) if limit == TABLE - 1
+            ));
+        }
+    }
+
+    /// One sort over every index still reports the earliest collision in the blob, whichever
+    /// index and table own it.
     #[test]
     fn the_earliest_duplicate_wins_across_indexes_and_tables() {
         let mut blob = String::from(
@@ -343,8 +567,8 @@ mod tests {
         ));
     }
 
-    /// The per-index layout reports the earliest repeat in the blob, against the index that
-    /// owns it.
+    /// The per-index layout selects the same collision the tagged one does: the earliest
+    /// repeat in the blob, reported against the index that owns it.
     #[test]
     fn per_index_vectors_select_the_same_earliest_duplicate() {
         let mut blob = String::from("V3;~S|t|a:T:?|b:T:?;~U|t|a;~U|t|b;");
