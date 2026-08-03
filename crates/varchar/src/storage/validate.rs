@@ -2,7 +2,6 @@
 
 mod metadata;
 
-use super::budget::WorkingBudget;
 use super::decode::{
     decode_auto_increment_record, decode_check_record, decode_default_record,
     decode_foreign_key_record, decode_primary_key_record, decode_schema_record,
@@ -10,7 +9,8 @@ use super::decode::{
 };
 use super::format::{FormatVersion, RecordKind, corrupt, decode_header, records};
 use super::{Catalog, integrity};
-use crate::{Error, Result};
+use crate::limits::ByteBudget;
+use crate::{Error, Resource, Result};
 
 use metadata::MetadataValidator;
 
@@ -72,7 +72,7 @@ fn validate_with_mode(
     check_like_work_limit: usize,
 ) -> Result<(FormatVersion, Catalog)> {
     let version = decode_header(blob)?;
-    let mut budget = WorkingBudget::new(max_storage_working_bytes);
+    let mut budget = ByteBudget::new(max_storage_working_bytes, Resource::StorageWorkingBytes);
     let mut metadata = MetadataValidator::new();
     let mut row_start = blob.len();
     let mut saw_row = false;

@@ -1,6 +1,6 @@
 //! Fallibly allocated ordered maps used by the reconstructed catalog.
 
-use super::super::budget::WorkingBudget;
+use crate::limits::ByteBudget;
 use crate::{Error, Result};
 
 const EMPTY_NODE: usize = usize::MAX;
@@ -72,7 +72,7 @@ impl<V> CatalogMap<V> {
         &mut self,
         key: String,
         value: V,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
         operation: &'static str,
     ) -> Result<()> {
         debug_assert!(!self.contains_key(&key));

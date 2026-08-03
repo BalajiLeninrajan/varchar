@@ -1,9 +1,8 @@
 use super::{decode_row, decode_schema_record, row_record, row_records};
+use crate::limits::ByteBudget;
 use crate::storage::RowLayout;
-use crate::storage::budget::{
-    WorkingBudget, reset_working_string_comparisons, working_string_comparisons,
-};
-use crate::{DataType, Error, SchemaColumn, Value};
+use crate::storage::budget::{reset_working_string_comparisons, working_string_comparisons};
+use crate::{DataType, Error, Resource, SchemaColumn, Value};
 
 #[test]
 fn row_view_exposes_the_complete_envelope_and_absolute_range() {
@@ -115,7 +114,7 @@ fn wide_schema_duplicate_detection_uses_indexed_comparisons() {
     }
     record.push(';');
 
-    let mut budget = WorkingBudget::new(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     reset_working_string_comparisons();
     let schema = decode_schema_record(&record, 0, &mut budget).expect("wide schema decodes");
     let (insert_comparisons, lookup_comparisons) = working_string_comparisons();
@@ -130,7 +129,7 @@ fn wide_schema_duplicate_detection_uses_indexed_comparisons() {
 
 #[test]
 fn indexed_column_detection_preserves_the_duplicate_diagnostic() {
-    let mut budget = WorkingBudget::new(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     let error = decode_schema_record("~S|items|a:I:!|b:I:!|c:I:!|d:I:!|a:T:?;", 17, &mut budget)
         .expect_err("duplicate column is rejected");
 

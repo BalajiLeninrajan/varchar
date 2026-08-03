@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use super::{ValidationError, ValidationResult, Violation};
 use crate::Error;
-use crate::storage::budget::WorkingBudget;
+use crate::limits::ByteBudget;
 use crate::storage::decode::row_records;
 use crate::storage::{Catalog, TableSchema};
 
@@ -66,11 +66,12 @@ enum UniqueValues {
 impl UniqueValues {
     /// Chooses the layout for this database and charges what it owes before any row is read.
     ///
-    /// Returns the layout beside the bytes it charged.
+    /// Returns the layout beside the bytes it charged, so the pass that owns it hands the budget
+    /// back exactly what it took.
     fn new(
         blob_len: usize,
         index_count: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<(Self, usize), Error> {
         let offset_bits = bits_below(blob_len);
         if bits_below(index_count) + offset_bits <= u32::BITS {
@@ -91,11 +92,15 @@ impl UniqueValues {
     }
 
     /// Records one value, returning the working bytes it charged.
+    ///
+    /// The count is returned rather than recovered from the vectors afterwards, so charge and
+    /// release come from one place instead of from a capacity the allocator was free to round
+    /// up.
     fn push(
         &mut self,
         index: usize,
         offset: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<usize, Error> {
         match self {
             Self::Tagged {
@@ -131,15 +136,10 @@ impl UniqueValues {
 /// Reserves one empty vector per index, returning them beside the bytes they charged.
 fn per_index_slots<T>(
     index_count: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<(Vec<Vec<T>>, usize), Error> {
-    let charged = index_count
-        .checked_mul(std::mem::size_of::<Vec<T>>())
-        .ok_or(Error::Capacity {
-            operation: INDEXES_OPERATION,
-        })?;
     let mut slots = Vec::new();
-    budget.reserve_exact(&mut slots, index_count, INDEXES_OPERATION)?;
+    let charged = budget.reserve_exact(&mut slots, index_count, INDEXES_OPERATION)?;
     slots.resize_with(index_count, Vec::new);
     Ok((slots, charged))
 }
@@ -266,7 +266,7 @@ fn table_index(tables: &[UniqueTable<'_>], table: &str) -> Option<usize> {
 pub(super) fn validate<'a>(
     blob: &'a str,
     catalog: &'a Catalog,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> ValidationResult<()> {
     let mut table_count = 0_usize;
     let mut index_count = 0_usize;
@@ -406,7 +406,7 @@ mod tests {
         COMPARED_CELL_BYTES, UniqueTable, UniqueValues, compare_encoded_cells,
         earliest_per_index_duplicate, validate,
     };
-    use crate::storage::budget::WorkingBudget;
+    use crate::limits::ByteBudget;
     use crate::storage::budget::{reset_working_string_comparisons, working_string_comparisons};
     use crate::storage::validate::validate_and_catalog;
     use crate::{Error, Resource};
@@ -416,8 +416,8 @@ mod tests {
     /// The bytes the first tagged value costs, growth reserving two before it lands.
     const FIRST_VALUE: usize = 2 * std::mem::size_of::<u32>();
 
-    fn working_budget(bytes: usize) -> WorkingBudget {
-        WorkingBudget::new(bytes)
+    fn working_budget(bytes: usize) -> ByteBudget {
+        ByteBudget::new(bytes, Resource::StorageWorkingBytes)
     }
 
     fn layout(blob_len: usize, index_count: usize) -> UniqueValues {

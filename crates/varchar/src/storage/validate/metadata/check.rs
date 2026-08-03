@@ -3,10 +3,10 @@
 mod syntax;
 
 use super::super::super::TableSchema;
-use super::super::super::budget::WorkingBudget;
 use super::super::super::decode::CheckMetadata;
 use super::super::super::format::corrupt;
 use crate::expression::{CheckProgram, CheckProgramNode};
+use crate::limits::ByteBudget;
 use crate::limits::check_limit;
 use crate::{Error, Resource, Result};
 use syntax::{Fields, LogicalOperator, decode_node, validate_node};
@@ -35,7 +35,7 @@ pub(super) fn decode_program(
     metadata: CheckMetadata<'_>,
     existing_predicates: usize,
     max_predicates: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<(CheckProgram, usize)> {
     let prevalidated =
         prevalidate_program(schema, metadata.program, metadata.program_offset, budget)?;
@@ -80,7 +80,7 @@ fn prevalidate_program(
     schema: &TableSchema,
     program: &str,
     program_offset: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<PrevalidatedProgram> {
     let structural = match prevalidate_structure(schema, program, program_offset) {
         Ok(structural) => structural,
@@ -203,7 +203,7 @@ fn linear_noncanonical_nesting(
     schema: &TableSchema,
     program: &str,
     program_offset: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<Option<usize>> {
     let mut fields = Fields::new(program, program_offset);
     let mut shape = Vec::new();
@@ -230,7 +230,7 @@ fn linear_noncanonical_nesting_inner(
     fields: &mut Fields<'_>,
     shape: &mut Vec<ShapeFrame>,
     charged_shape_frames: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<Option<usize>> {
     let mut saw_root = false;
     while let Some(opcode) = fields.next() {
@@ -295,7 +295,7 @@ fn decode_program_inner(
     nodes: &mut Vec<CheckProgramNode>,
     shape: &mut Vec<ShapeFrame>,
     charged_shape_frames: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let mut saw_root = false;
     while let Some(opcode) = fields.next() {
@@ -368,7 +368,7 @@ fn decode_program_inner(
 fn reserve_shape_frame(
     shape: &mut Vec<ShapeFrame>,
     charged_shape_frames: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     if shape.len() < *charged_shape_frames {
         return Ok(());

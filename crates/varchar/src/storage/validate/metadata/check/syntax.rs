@@ -1,6 +1,6 @@
 use crate::expression::{CheckPredicate, CheckProgramNode, LikeAtom};
+use crate::limits::ByteBudget;
 use crate::storage::TableSchema;
-use crate::storage::budget::WorkingBudget;
 use crate::storage::decode::{decode_check_value_at, validate_check_value_at};
 use crate::storage::format::{corrupt, scan_text};
 use crate::{DataType, Result};
@@ -22,7 +22,7 @@ pub(super) fn decode_node(
     schema: &TableSchema,
     opcode: Field<'_>,
     fields: &mut Fields<'_>,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<(CheckProgramNode, LogicalNode)> {
     match opcode.text {
         "AND" | "OR" => {
@@ -259,7 +259,7 @@ fn charge_text_operand(
     data_type: DataType,
     encoded: &str,
     offset: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     if data_type == DataType::Text && encoded != "N" {
         let payload = encoded

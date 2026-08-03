@@ -1,12 +1,13 @@
 //! Decoding of schema and constraint metadata records.
 
-use super::super::budget::{WorkingBudget, WorkingStringSet};
+use super::super::budget::WorkingStringSet;
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
     SCHEMA_PREFIX, UNIQUE_PREFIX, complete_record_body, corrupt, is_valid_identifier,
 };
 use super::super::{ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
 use super::decode_integer;
+use crate::limits::ByteBudget;
 use crate::{DataType, Result, SchemaColumn};
 
 const LINEAR_COLUMN_NAME_LIMIT: usize = 4;
@@ -52,7 +53,7 @@ pub(in crate::storage) struct CheckMetadata<'a> {
 pub(in crate::storage) fn decode_schema_record(
     record: &str,
     offset: usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<TableSchema> {
     let body = complete_record_body(record, SCHEMA_PREFIX, offset)?;
     let mut fields = body.split('|');
