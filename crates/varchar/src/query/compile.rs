@@ -6,7 +6,7 @@ use super::{ScanPlan, SelectPlan, pattern, pushdown};
 use crate::limits::Limits;
 use crate::resolve::{self, ResolvedSelect};
 use crate::sql::{Expression, Select};
-use crate::storage::{Catalog, TableSchema};
+use crate::storage::{Catalog, ValidatedTableSchema};
 use crate::{Error, Result};
 
 pub(crate) fn compile_select<'catalog, 'statement>(
@@ -71,10 +71,11 @@ pub(crate) fn compile_select<'catalog, 'statement>(
 }
 
 pub(crate) fn compile_scan<'statement>(
-    schema: &TableSchema,
+    table: ValidatedTableSchema<'_>,
     where_clause: Option<&'statement Expression>,
     limits: &Limits,
 ) -> Result<ScanPlan<'statement>> {
+    let schema = table.schema();
     let where_clause = resolve::local_expression(schema, where_clause, limits.max_predicates)?;
     let mut partition = pushdown::partition(where_clause, 1)?;
     let predicates = partition.regex_by_source.pop().ok_or(Error::Capacity {
@@ -98,8 +99,7 @@ pub(crate) fn compile_scan<'statement>(
     let regex = build_regex(&pattern, limits)?;
     Ok(ScanPlan {
         regex,
-        table: schema.name.clone(),
-        schema: schema.columns.clone(),
+        layout: table.try_clone_row_layout()?,
         local_residual,
     })
 }

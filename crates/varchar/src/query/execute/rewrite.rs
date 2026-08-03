@@ -3,7 +3,7 @@
 use super::map_regex_runtime;
 use crate::expression::Evaluator;
 use crate::limits::Limits;
-use crate::storage::{self, Candidate, RowLayout};
+use crate::storage::{self, Candidate};
 use crate::value::Value;
 use crate::{Error, Result};
 
@@ -18,10 +18,7 @@ pub(crate) fn rewrite_matching_rows<F>(
 where
     F: FnMut(Vec<Value>) -> Result<Option<Vec<Value>>>,
 {
-    let layout = RowLayout {
-        table: &plan.table,
-        columns: &plan.schema,
-    };
+    let layout = plan.row_layout();
     let mut affected = 0_usize;
     let blob = candidate.source();
     let mut evaluator = plan
