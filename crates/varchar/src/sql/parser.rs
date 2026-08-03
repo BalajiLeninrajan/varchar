@@ -257,7 +257,15 @@ impl Parser {
                 format!("reserved keyword `{word}` cannot be used as an identifier"),
                 span,
             )),
-            _ => Err(Error::parse("expected an unquoted identifier", span)),
+            TokenKind::QuotedIdentifier(identifier) if is_identifier(&identifier) => {
+                self.advance();
+                Ok(identifier.to_ascii_lowercase())
+            }
+            TokenKind::QuotedIdentifier(_) => Err(Error::parse(
+                "quoted identifiers must use the unquoted ASCII identifier grammar",
+                span,
+            )),
+            _ => Err(Error::parse("expected an identifier", span)),
         }
     }
 
@@ -419,6 +427,15 @@ fn is_reserved(word: &str) -> bool {
             | "DESCRIBE"
             | "TABLES"
     )
+}
+
+fn is_identifier(identifier: &str) -> bool {
+    let mut bytes = identifier.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]

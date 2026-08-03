@@ -74,6 +74,28 @@ fn metadata_statement_words_are_reserved_identifiers() {
             "expected {keyword} to be reserved for {sql:?}"
         );
     }
+
+    // Quoting stays the escape hatch.
+    execute(
+        &mut database,
+        "CREATE TABLE \"show\" (\"describe\" INTEGER, \"tables\" TEXT)",
+    );
+    execute(&mut database, "INSERT INTO \"show\" VALUES (7, 'kept')");
+
+    let mut reloaded =
+        Database::from_string(database.into_string()).expect("quoted metadata identifiers reload");
+    assert_eq!(
+        row_set(
+            &mut reloaded,
+            "SELECT \"describe\", \"tables\" FROM \"show\""
+        )
+        .into_rows(),
+        vec![vec![Value::Integer(7), Value::Text(String::from("kept"))]]
+    );
+    assert_eq!(
+        row_set(&mut reloaded, "DESCRIBE \"show\"").rows()[0][0],
+        Value::Text(String::from("describe"))
+    );
 }
 
 #[test]

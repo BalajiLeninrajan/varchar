@@ -32,7 +32,21 @@ fn metadata_statements_report_exact_missing_argument_spans() {
             ref message,
             span_start: 8,
             span_end: 8,
-        }) if message == "expected an unquoted identifier"
+        }) if message == "expected an identifier"
+    ));
+}
+
+#[test]
+fn quoted_identifiers_disambiguate_reserved_words() {
+    parse("CREATE TABLE \"select\" (\"from\" INTEGER, CHECK (\"from\" >= 0))")
+        .expect("quoted reserved identifiers parse");
+    assert!(matches!(
+        parse("CREATE TABLE \"1x\" (id INTEGER)"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 13,
+            span_end: 17,
+        }) if message == "quoted identifiers must use the unquoted ASCII identifier grammar"
     ));
 }
 
@@ -78,6 +92,14 @@ fn metadata_statement_words_are_reserved_and_cannot_be_used_as_identifiers() {
         parse("DESCRIBE accounts").expect("DESCRIBE parses"),
         Statement::DescribeTable(DescribeTable {
             table: String::from("accounts"),
+        })
+    );
+
+    // Quoting them names the tables they would otherwise have been mistaken for.
+    assert_eq!(
+        parse("DESCRIBE \"show\"").expect("a quoted SHOW is a DESCRIBE argument"),
+        Statement::DescribeTable(DescribeTable {
+            table: String::from("show"),
         })
     );
 }
