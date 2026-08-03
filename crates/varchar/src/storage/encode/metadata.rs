@@ -25,6 +25,12 @@ pub(in crate::storage) struct MeasuredTableMetadata {
     encoded_len: usize,
 }
 
+impl MeasuredTableMetadata {
+    pub(in crate::storage) const fn encoded_len(self) -> usize {
+        self.encoded_len
+    }
+}
+
 /// Validate metadata without allocation and compute its exact canonical byte length.
 pub(in crate::storage) fn measure_table_metadata(
     schema: &TableSchema,

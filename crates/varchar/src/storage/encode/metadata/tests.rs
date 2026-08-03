@@ -54,7 +54,7 @@ fn exact_measurement_preserves_every_metadata_phase() {
     );
 
     let measured = measure_table_metadata(&schema, Some((0, 0))).expect("metadata measures");
-    assert_eq!(measured.encoded_len, expected.len());
+    assert_eq!(measured.encoded_len(), expected.len());
     assert_eq!(
         encode_table_metadata(&schema, Some((0, 0)), measured).expect("metadata encodes"),
         expected
