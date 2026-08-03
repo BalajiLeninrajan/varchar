@@ -1,8 +1,20 @@
 use super::like;
 use super::truth::Truth;
-use super::{Evaluator, LikeAtom, Predicate, Program, ProgramNode, compile_pattern};
+use super::{
+    Evaluator, LikeAtom, Predicate, Program, ProgramNode, compile_pattern, is_well_formed,
+};
 use crate::resolve::ColumnLocation;
+use crate::sql::{ColumnRef, ExpressionNode, Predicate as ParsedPredicate, PredicateOperator};
 use crate::{Error, Resource, Value};
+
+fn where_leaf() -> ProgramNode<'static> {
+    ProgramNode::Predicate(Predicate::IsNull {
+        column: ColumnLocation {
+            source: 0,
+            column: 0,
+        },
+    })
+}
 
 fn passes_where(predicate: Predicate<'_>, row: &[Value]) -> bool {
     let program = Program::new(vec![ProgramNode::Predicate(predicate)]);
@@ -428,4 +440,43 @@ fn in_membership_honors_matches_nulls_and_duplicates() {
         },
         &[Value::Integer(2)],
     ));
+}
+
+/// One walk backs every pipeline, so each node type rejects the same shapes.
+#[test]
+fn every_pipeline_rejects_the_same_malformed_programs() {
+    let parsed_empty_in = vec![ExpressionNode::Predicate(ParsedPredicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("value"),
+        },
+        operator: PredicateOperator::In(Vec::new()),
+    })];
+    assert!(!is_well_formed(&parsed_empty_in));
+
+    let resolved_empty_in = vec![ProgramNode::Predicate(Predicate::In {
+        column: ColumnLocation {
+            source: 0,
+            column: 0,
+        },
+        values: &[],
+    })];
+    assert!(!is_well_formed(&resolved_empty_in));
+
+    assert!(
+        !is_well_formed(&[] as &[ProgramNode<'_>]),
+        "an empty program has no root"
+    );
+    assert!(
+        !is_well_formed(&[ProgramNode::And { children: 1 }, where_leaf()]),
+        "a logical node needs at least two children"
+    );
+    assert!(
+        !is_well_formed(&[ProgramNode::And { children: 2 }, where_leaf()]),
+        "a program cannot end before all children are encoded"
+    );
+    assert!(
+        !is_well_formed(&[where_leaf(), where_leaf()]),
+        "a program cannot carry a second root"
+    );
 }
