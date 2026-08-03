@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use super::encode::{encode_auto_increment_record, encode_table_metadata};
+use super::encode::{encode_auto_increment_record, encode_table_metadata, measure_table_metadata};
 use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
 use super::{RowLayout, StorageState, TableSchema, encode_row};
 use crate::{Error, Resource, Result, Value};
@@ -62,7 +62,9 @@ impl<'a> Candidate<'a> {
                 "extended schema metadata requires storage format V3",
             )));
         }
-        let encoded = encode_table_metadata(schema, auto_increment.map(|column| (column, 0)))?;
+        let auto_increment = auto_increment.map(|column| (column, 0));
+        let measured = measure_table_metadata(schema, auto_increment)?;
+        let encoded = encode_table_metadata(schema, auto_increment, measured)?;
         let row_start = self.state.catalog().row_start;
         self.splice(row_start..row_start, &encoded)
     }
