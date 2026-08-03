@@ -61,7 +61,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 
 Column types are `TEXT`, signed 64-bit `INTEGER`, and `BOOLEAN`. Columns are nullable unless declared `NOT NULL`; `NULL` is represented as its own typed value. A column may declare one literal `DEFAULT`, including an explicit `DEFAULT NULL`.
 
-Varchar supports one single-column primary key per table, any number of single-column UNIQUE declarations recorded in the schema, and single-column foreign keys. Constraints may be written inline:
+Varchar supports one single-column primary key per table, any number of single-column UNIQUE constraints, and single-column foreign keys. Constraints may be written inline:
 
 ```sql
 CREATE TABLE users (
@@ -77,7 +77,7 @@ CREATE TABLE posts (
 );
 ```
 
-The equivalent table-level forms include `PRIMARY KEY (id)`, `UNIQUE (email)`, and `FOREIGN KEY (user_id) REFERENCES users(id)`. Composite key and UNIQUE constraints are not supported. A primary key implies `NOT NULL` and is unique across the table; one UNIQUE declaration on that same column is accepted and normalized away. A foreign key must reference an existing primary-key column with the same type; UNIQUE columns are not foreign-key targets. Foreign-key columns remain nullable unless they also use `NOT NULL`; a `NULL` value does not need a matching parent row.
+The equivalent table-level forms include `PRIMARY KEY (id)`, `UNIQUE (email)`, and `FOREIGN KEY (user_id) REFERENCES users(id)`. Composite key and UNIQUE constraints are not supported. A primary key implies `NOT NULL` and is unique across the table; one UNIQUE declaration on that same column is accepted and normalized away. A non-primary UNIQUE column rejects duplicate non-NULL values but permits multiple NULLs. Text equality remains case- and normalization-sensitive. A foreign key must reference an existing primary-key column with the same type; UNIQUE columns are not foreign-key targets. Foreign-key columns remain nullable unless they also use `NOT NULL`; a `NULL` value does not need a matching parent row.
 
 Key constraints are checked when data is inserted or updated and when a persisted database is loaded. Parent-key changes and parent-row deletions use `RESTRICT`: they fail while a child row contains that key. Like every failed mutation, a key violation leaves the authoritative string unchanged.
 

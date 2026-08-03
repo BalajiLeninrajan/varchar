@@ -26,6 +26,94 @@ fn atomic_error(database: &mut Database, sql: &str) -> Error {
 }
 
 #[test]
+fn inline_and_table_unique_constraints_persist_and_work_after_reload() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT UNIQUE, handle TEXT, UNIQUE (handle))",
+    );
+    assert_eq!(
+        database.as_str(),
+        "V3;~S|accounts|id:I:!|email:T:?|handle:T:?;~P|accounts|id;~U|accounts|email;~U|accounts|handle;"
+    );
+
+    execute(
+        &mut database,
+        "INSERT INTO accounts VALUES (1, 'one@example.com', 'one')",
+    );
+    execute(
+        &mut database,
+        "INSERT INTO accounts VALUES (2, 'two@example.com', 'two')",
+    );
+    assert!(matches!(
+        atomic_error(
+            &mut database,
+            "INSERT INTO accounts VALUES (3, 'one@example.com', 'three')",
+        ),
+        Error::Constraint(ref message)
+            if message == "duplicate UNIQUE value for table \"accounts\" column \"email\""
+    ));
+
+    let blob = database.into_string();
+    let mut reloaded = Database::from_string(blob.clone()).expect("UNIQUE metadata reloads");
+    assert_eq!(reloaded.as_str(), blob);
+    assert!(matches!(
+        atomic_error(
+            &mut reloaded,
+            "INSERT INTO accounts VALUES (3, 'three@example.com', 'two')",
+        ),
+        Error::Constraint(ref message)
+            if message == "duplicate UNIQUE value for table \"accounts\" column \"handle\""
+    ));
+}
+
+#[test]
+fn nullable_unique_excludes_null_and_text_equality_is_exact() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE tokens (value TEXT UNIQUE)");
+    for sql in [
+        "INSERT INTO tokens VALUES (NULL)",
+        "INSERT INTO tokens VALUES (NULL)",
+        "INSERT INTO tokens VALUES ('Token')",
+        "INSERT INTO tokens VALUES ('token')",
+        "INSERT INTO tokens VALUES ('é')",
+        "INSERT INTO tokens VALUES ('é')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert!(matches!(
+        atomic_error(&mut database, "INSERT INTO tokens VALUES ('Token')"),
+        Error::Constraint(_)
+    ));
+    assert_eq!(rows(&mut database, "SELECT value FROM tokens").len(), 6);
+}
+
+#[test]
+fn unique_tables_need_no_primary_key_and_updates_roll_back_atomically() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE aliases (name TEXT UNIQUE, enabled BOOLEAN)",
+    );
+    execute(&mut database, "INSERT INTO aliases VALUES ('one', TRUE)");
+    execute(&mut database, "INSERT INTO aliases VALUES ('two', FALSE)");
+
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE aliases SET name = 'same'"),
+        Error::Constraint(ref message)
+            if message == "duplicate UNIQUE value for table \"aliases\" column \"name\""
+    ));
+    assert_eq!(
+        rows(&mut database, "SELECT name FROM aliases"),
+        vec![
+            vec![Value::Text("one".to_owned())],
+            vec![Value::Text("two".to_owned())],
+        ]
+    );
+}
+
+#[test]
 fn primary_key_unique_is_normalized_without_a_v3_upgrade() {
     for sql in [
         "CREATE TABLE ids (id INTEGER PRIMARY KEY UNIQUE)",

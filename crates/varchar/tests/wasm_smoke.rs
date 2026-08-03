@@ -538,3 +538,29 @@ fn v2_load_and_atomic_default_upgrade_work_inside_wasm() {
         vec![vec![Value::Boolean(true), Value::Null]]
     );
 }
+
+#[wasm_bindgen_test]
+fn unique_constraints_persist_and_validate_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE accounts (email TEXT UNIQUE)")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES ('one@example.com')")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES (NULL)")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES (NULL)")
+        .unwrap();
+    assert!(matches!(
+        database.execute("INSERT INTO accounts VALUES ('one@example.com')"),
+        Err(varchar::Error::Constraint(_))
+    ));
+
+    let blob = database.into_string();
+    let reloaded = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(reloaded.as_str(), blob);
+    assert!(reloaded.as_str().contains("~U|accounts|email;"));
+}

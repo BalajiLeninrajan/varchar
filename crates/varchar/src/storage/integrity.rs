@@ -1,4 +1,6 @@
-//! Cross-row primary-key and foreign-key integrity validation.
+//! Deterministic cross-row constraint validation.
+
+mod unique;
 
 use std::cmp::Ordering;
 
@@ -147,7 +149,6 @@ pub(super) fn validate_rows(
         .any(|schema| !schema.foreign_keys.is_empty());
     if primary_count == 0 {
         debug_assert!(!has_foreign_keys, "every foreign key targets a primary key");
-        return Ok(());
     }
 
     let mut primary_values = Vec::new();
@@ -268,6 +269,8 @@ pub(super) fn validate_rows(
     if let Some(violation) = earliest_primary_violation {
         return Err(violation.into());
     }
+
+    unique::validate(blob, catalog, budget)?;
 
     if !has_foreign_keys {
         return Ok(());

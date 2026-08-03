@@ -115,6 +115,19 @@ fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
         2,
         "a referenced load adds only the foreign-key pass"
     );
+
+    let mut keyed_unique = String::from("V3;~S|items|value:T:?;~U|items|value;");
+    for key in 0..ROW_COUNT {
+        keyed_unique.push_str(&format!("~R|items|Tk{key};"));
+    }
+
+    reset_blob_row_scans();
+    validate_and_catalog(&keyed_unique, usize::MAX).expect("a UNIQUE fixture validates");
+    assert_eq!(
+        blob_row_scans(),
+        2,
+        "a UNIQUE load fills its validation offsets in the pass that reads them"
+    );
 }
 
 /// The growth factor is bounded by the derived working limit rather than chosen for comfort.

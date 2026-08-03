@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Database, Error};
+use varchar::{Database, Error, Limits};
 
 fn corruption(blob: &str) -> (usize, String) {
     match Database::from_string(blob.to_owned()) {
@@ -101,8 +101,74 @@ fn malformed_unique_records_anchor_at_the_record_start() {
 }
 
 #[test]
+fn persisted_duplicate_unique_values_are_corrupt_at_the_later_row() {
+    let blob = "V3;~S|t|value:T:?;~U|t|value;~R|t|Tx;~R|t|Tx;";
+    let second = blob.rfind("~R|").expect("second row exists");
+    assert_eq!(
+        corruption(blob),
+        (
+            second,
+            "duplicate UNIQUE value for table \"t\" column \"value\"".to_owned(),
+        )
+    );
+}
+
+#[test]
 fn nullable_unique_values_reload_with_multiple_nulls() {
     let blob = String::from("V3;~S|t|value:T:?;~U|t|value;~R|t|N;~R|t|N;");
     let database = Database::from_string(blob.clone()).expect("multiple NULL values are valid");
     assert_eq!(database.as_str(), blob);
+}
+
+#[test]
+fn dense_unique_columns_load_at_the_exact_database_limit() {
+    const COLUMN_COUNT: usize = 10_000;
+    const ROW_COUNT: usize = 10;
+
+    let mut blob = String::from("V3;~S|t");
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("|c{column}:I:?"));
+    }
+    blob.push(';');
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("~U|t|c{column};"));
+    }
+    for value in 0..ROW_COUNT {
+        blob.push_str("~R|t");
+        for _ in 0..COLUMN_COUNT {
+            blob.push_str(&format!("|I{value}"));
+        }
+        blob.push(';');
+    }
+
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits)
+        .expect("dense UNIQUE indexes fit the exact derived working limit");
+    assert_eq!(database.as_str(), blob);
+}
+
+#[test]
+fn duplicate_unique_diagnostics_follow_later_row_source_order() {
+    let mut blob = String::from(
+        "V3;~S|first|a:T:?|b:T:?;~U|first|a;~U|first|b;\
+         ~S|second|c:T:?;~U|second|c;\
+         ~R|first|Tone|Tone;\
+         ~R|second|Tone;",
+    );
+    let earliest_duplicate = blob.len();
+    blob.push_str(
+        "~R|first|Ttwo|Tone;\
+         ~R|first|Tone|Ttwo;\
+         ~R|second|Tone;",
+    );
+
+    assert!(matches!(
+        Database::from_string(blob),
+        Err(Error::CorruptStorage { offset, message })
+            if offset == earliest_duplicate
+                && message == "duplicate UNIQUE value for table \"first\" column \"b\""
+    ));
 }
