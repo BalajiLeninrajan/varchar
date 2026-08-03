@@ -12,7 +12,10 @@ impl Database {
         let auto_increment = self.storage.catalog().auto_increment(&statement.table);
         let assignments = resolve::assignments(schema, auto_increment, &statement.assignments)?;
         let plan = query::compile_scan(schema, statement.where_clause.as_ref(), &self.limits)?;
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate_with_validation_limits(
+            self.limits.max_database_bytes,
+            self.limits.max_predicates,
+        )?;
         if let Some(last) = assignments.next_auto_increment {
             candidate.defer_auto_increment(&statement.table, last)?;
         }

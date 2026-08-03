@@ -4,8 +4,9 @@ mod metadata;
 
 use super::budget::WorkingBudget;
 use super::decode::{
-    decode_auto_increment_record, decode_default_record, decode_foreign_key_record,
-    decode_primary_key_record, decode_schema_record, decode_unique_record, validate_row_record,
+    decode_auto_increment_record, decode_check_record, decode_default_record,
+    decode_foreign_key_record, decode_primary_key_record, decode_schema_record,
+    decode_unique_record, validate_row_record,
 };
 use super::format::{FormatVersion, RecordKind, corrupt, decode_header, records};
 use super::{Catalog, integrity};
@@ -20,11 +21,26 @@ pub(super) enum ValidationMode {
 }
 
 /// Validate an authoritative blob and reconstruct its derived schema catalog.
+#[cfg(test)]
 pub(crate) fn validate_and_catalog(
     blob: &str,
     max_storage_working_bytes: usize,
 ) -> Result<(FormatVersion, Catalog)> {
-    validate_with_mode(blob, ValidationMode::Persisted, max_storage_working_bytes)
+    validate_and_catalog_with_limits(blob, max_storage_working_bytes, usize::MAX)
+}
+
+/// Validate an authoritative blob under the caller's CHECK limits.
+pub(crate) fn validate_and_catalog_with_limits(
+    blob: &str,
+    max_storage_working_bytes: usize,
+    max_predicates: usize,
+) -> Result<(FormatVersion, Catalog)> {
+    validate_with_mode(
+        blob,
+        ValidationMode::Persisted,
+        max_storage_working_bytes,
+        max_predicates,
+    )
 }
 
 /// Validate a database assembled by a SQL mutation.
@@ -34,14 +50,21 @@ pub(crate) fn validate_and_catalog(
 pub(crate) fn validate_candidate(
     blob: &str,
     max_storage_working_bytes: usize,
+    max_predicates: usize,
 ) -> Result<(FormatVersion, Catalog)> {
-    validate_with_mode(blob, ValidationMode::Candidate, max_storage_working_bytes)
+    validate_with_mode(
+        blob,
+        ValidationMode::Candidate,
+        max_storage_working_bytes,
+        max_predicates,
+    )
 }
 
 fn validate_with_mode(
     blob: &str,
     mode: ValidationMode,
     max_storage_working_bytes: usize,
+    max_predicates: usize,
 ) -> Result<(FormatVersion, Catalog)> {
     let version = decode_header(blob)?;
     let mut budget = WorkingBudget::new(max_storage_working_bytes);
@@ -88,6 +111,18 @@ fn validate_with_mode(
                 reject_after_rows(saw_row, record.range.start, "UNIQUE metadata")?;
                 let unique = decode_unique_record(record.text, record.range.start)?;
                 metadata.apply_unique(unique, record.range.start, mode, &mut budget)?;
+            }
+            RecordKind::Check => {
+                reject_extension_in_v2(version, record.range.start)?;
+                reject_after_rows(saw_row, record.range.start, "CHECK metadata")?;
+                let check = decode_check_record(record.text, record.range.start)?;
+                metadata.apply_check(
+                    check,
+                    record.range.start,
+                    mode,
+                    max_predicates,
+                    &mut budget,
+                )?;
             }
             RecordKind::Row => {
                 if !saw_row {

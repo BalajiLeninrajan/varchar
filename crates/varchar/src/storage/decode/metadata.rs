@@ -3,8 +3,8 @@
 use super::super::TableSchema;
 use super::super::budget::{WorkingBudget, WorkingStringSet};
 use super::super::format::{
-    AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
-    UNIQUE_PREFIX, complete_record_body, corrupt, is_valid_identifier,
+    AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
+    SCHEMA_PREFIX, UNIQUE_PREFIX, complete_record_body, corrupt, is_valid_identifier,
 };
 use super::decode_integer;
 use crate::{DataType, Result, SchemaColumn};
@@ -39,6 +39,12 @@ pub(in crate::storage) struct DefaultMetadata<'a> {
 pub(in crate::storage) struct UniqueMetadata<'a> {
     pub(in crate::storage) table: &'a str,
     pub(in crate::storage) column: &'a str,
+}
+
+pub(in crate::storage) struct CheckMetadata<'a> {
+    pub(in crate::storage) table: &'a str,
+    pub(in crate::storage) program: &'a str,
+    pub(in crate::storage) program_offset: usize,
 }
 
 pub(in crate::storage) fn decode_schema_record(
@@ -227,4 +233,35 @@ pub(in crate::storage) fn decode_unique_record(
         return Err(corrupt(offset, "malformed UNIQUE metadata"));
     }
     Ok(UniqueMetadata { table, column })
+}
+
+pub(in crate::storage) fn decode_check_record(
+    record: &str,
+    offset: usize,
+) -> Result<CheckMetadata<'_>> {
+    let body = complete_record_body(record, CHECK_PREFIX, offset)?;
+    let (table, program) = body.split_once('|').ok_or_else(|| {
+        corrupt(
+            offset + record.len() - 1,
+            "CHECK metadata is missing its program",
+        )
+    })?;
+    if !is_valid_identifier(table) {
+        return Err(corrupt(
+            offset + CHECK_PREFIX.len(),
+            "invalid or noncanonical CHECK table name",
+        ));
+    }
+    let program_offset = offset + CHECK_PREFIX.len() + table.len() + 1;
+    if program.is_empty() {
+        return Err(corrupt(
+            program_offset,
+            "CHECK metadata is missing its program",
+        ));
+    }
+    Ok(CheckMetadata {
+        table,
+        program,
+        program_offset,
+    })
 }
