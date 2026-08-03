@@ -119,6 +119,33 @@ fn geometric_growth_fails_with_the_budgeted_resource() {
 }
 
 #[test]
+fn one_budget_reports_whichever_resource_it_was_built_for() {
+    let mut output = ByteBudget::new(4, Resource::QueryOutputBytes);
+    assert!(matches!(
+        output.charge(5),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryOutputBytes,
+            limit: 4,
+        })
+    ));
+
+    let mut working = ByteBudget::for_database_limit(1);
+    assert_eq!(
+        working
+            .charge_items::<u8>(4)
+            .expect("four bytes fit a four-byte working limit"),
+        4
+    );
+    assert!(matches!(
+        working.charge(1),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit: 4,
+        })
+    ));
+}
+
+#[test]
 fn a_failed_reservation_refunds_its_charge() {
     let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     let mut values: Vec<u64> = Vec::new();

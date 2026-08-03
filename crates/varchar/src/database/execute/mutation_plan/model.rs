@@ -4,9 +4,9 @@ use std::cell::Cell;
 use std::mem::size_of;
 use std::ops::Range;
 
-use crate::limits::{check_limit, storage_working_limit};
+use crate::limits::ByteBudget;
 use crate::storage::{MeasuredRowEncoding, ValidatedRowEncoder};
-use crate::{Error, Resource, Result, Value};
+use crate::{Error, Result, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RowIdentity {
@@ -159,7 +159,7 @@ impl FrozenRow {
     pub(super) fn install_direct_update(
         &mut self,
         update: &PreparedDirectUpdate<'_>,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         if !matches!(self.mutation, MutationState::Fresh) {
             return Err(direct_conflict(self.identity));
@@ -207,7 +207,7 @@ impl FrozenRow {
         &mut self,
         column: usize,
         value: &Value,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<bool> {
         if column >= self.original_values.len() {
             return Err(Error::Schema(format!(
@@ -277,7 +277,7 @@ impl FrozenRow {
     pub(super) fn clone_effective_value(
         &self,
         column: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<(Value, usize)> {
         let value = self.effective_value(column).ok_or(Error::Capacity {
             operation: "reading an effective mutation value",
@@ -295,7 +295,7 @@ impl FrozenRow {
 
     fn allocate_update_overlays(
         &self,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<(Vec<Option<UpdateOverlay>>, usize)> {
         let mut overlays = Vec::new();
         let working_bytes = budget.reserve_exact(
@@ -307,7 +307,7 @@ impl FrozenRow {
         Ok((overlays, working_bytes))
     }
 
-    pub(super) fn request_delete(&mut self, budget: &mut WorkingBudget) -> Result<bool> {
+    pub(super) fn request_delete(&mut self, budget: &mut ByteBudget) -> Result<bool> {
         match &self.mutation {
             MutationState::Fresh => {
                 self.mutation = MutationState::Deleted;
@@ -330,7 +330,7 @@ impl FrozenRow {
     pub(super) fn request_set_null(
         &mut self,
         column: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         match &mut self.mutation {
             MutationState::Fresh => {
@@ -373,7 +373,7 @@ impl FrozenRow {
     pub(super) fn encode_set_null(
         &mut self,
         encoder: &ValidatedRowEncoder<'_, '_>,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let (columns, working_bytes) = match &mut self.mutation {
             MutationState::PendingSetNull {
@@ -427,7 +427,7 @@ impl FrozenRow {
         &mut self,
         encoder: &ValidatedRowEncoder<'_, 'brand>,
         measured: MeasuredRowEncoding<'brand>,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let (overlays, overlay_working_bytes) = match &self.mutation {
             MutationState::PendingUpdate {
@@ -497,114 +497,10 @@ fn effective_update_value<'values>(
     )
 }
 
-pub(super) struct WorkingBudget {
-    used: usize,
-    limit: usize,
-}
-
-impl WorkingBudget {
-    pub(super) const fn for_database_limit(max_database_bytes: usize) -> Self {
-        Self {
-            used: 0,
-            limit: storage_working_limit(max_database_bytes),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) const fn with_limit(limit: usize) -> Self {
-        Self { used: 0, limit }
-    }
-
-    pub(super) fn charge(&mut self, amount: usize) -> Result<()> {
-        let next = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| self.limit_error())?;
-        check_limit(next, self.limit, Resource::StorageWorkingBytes)?;
-        self.used = next;
-        Ok(())
-    }
-
-    pub(super) fn check_transient(&self, amount: usize) -> Result<()> {
-        let peak = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| self.limit_error())?;
-        check_limit(peak, self.limit, Resource::StorageWorkingBytes)
-    }
-
-    pub(super) fn release(&mut self, amount: usize) {
-        self.used = self
-            .used
-            .checked_sub(amount)
-            .expect("only a live storage-working charge can be released");
-    }
-
-    pub(super) fn reserve_for_push<T>(
-        &mut self,
-        values: &mut Vec<T>,
-        operation: &'static str,
-    ) -> Result<()> {
-        let _ = self.reserve_for_push_charged(values, operation)?;
-        Ok(())
-    }
-
-    pub(super) fn reserve_for_push_charged<T>(
-        &mut self,
-        values: &mut Vec<T>,
-        operation: &'static str,
-    ) -> Result<usize> {
-        if values.len() < values.capacity() {
-            return Ok(0);
-        }
-        let target_capacity = if values.capacity() == 0 {
-            1
-        } else {
-            values
-                .capacity()
-                .checked_mul(2)
-                .ok_or_else(|| self.limit_error())?
-        };
-        let additional = target_capacity
-            .checked_sub(values.len())
-            .ok_or_else(|| self.limit_error())?;
-        self.reserve_exact(values, additional, operation)
-    }
-
-    pub(super) fn reserve_exact<T>(
-        &mut self,
-        values: &mut Vec<T>,
-        additional: usize,
-        operation: &'static str,
-    ) -> Result<usize> {
-        let bytes = additional
-            .checked_mul(size_of::<T>())
-            .ok_or_else(|| self.limit_error())?;
-        self.charge(bytes)?;
-        if values.try_reserve_exact(additional).is_err() {
-            self.release(bytes);
-            return Err(Error::Allocation { operation });
-        }
-        Ok(bytes)
-    }
-
-    pub(super) const fn limit_error(&self) -> Error {
-        Error::ResourceLimit {
-            resource: Resource::StorageWorkingBytes,
-            limit: self.limit,
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) const fn used(&self) -> usize {
-        self.used
-    }
-}
-
 pub(super) fn decoded_values_bytes(
     column_count: usize,
     encoded_row_bytes: usize,
-    budget: &WorkingBudget,
+    budget: &ByteBudget,
 ) -> Result<usize> {
     column_count
         .checked_mul(size_of::<Value>())

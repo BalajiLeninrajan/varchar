@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use super::model::{
-    FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
+    FrozenRow, PreparedDirectUpdate, RowIdentity, decoded_values_bytes,
     set_value_clone_failure_after,
 };
 use super::referential::{ReferentialAction, ReferentialIndex};
@@ -9,6 +9,7 @@ use super::{
     defer_auto_increment, freeze_rows, measure_and_check_update_database_size, push_update_queue,
     sequence_edit_lengths_for_targets, sort_and_validate_ranges,
 };
+use crate::limits::ByteBudget;
 use crate::storage::{RowLayout, StorageState, validate_row_layout, with_validated_row_encoder};
 use crate::{DataType, Error, Resource, SchemaColumn, Value};
 
@@ -32,7 +33,7 @@ fn original_ranges_are_decoded_and_evaluated_once() {
         columns: &columns,
     };
     let ranges = [Ok(0..first.len()), Ok(first.len()..blob.len())];
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     let mut evaluations = 0;
 
     let (rows, direct_affected) = freeze_rows(&blob, ranges, layout, &mut budget, |values| {
@@ -136,7 +137,7 @@ fn direct_overlays_preserve_original_values_and_detect_conflicts() {
     let update =
         PreparedDirectUpdate::new(&mut assignments, validated_layout.column_count(), identity)
             .expect("valid direct update");
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
 
     with_validated_row_encoder(validated_layout, |encoder| {
         let measured = row
@@ -227,7 +228,7 @@ fn prepared_updates_sort_once_and_merge_sparse_assignments_canonically() {
             Value::Boolean(false),
         ],
     );
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
 
     with_validated_row_encoder(layout, |encoder| {
         let measured = row
@@ -277,7 +278,7 @@ fn row_mutation_states_reject_incomplete_or_conflicting_transitions() {
     let mut assignments = vec![(0, Value::Integer(2))];
     let update = PreparedDirectUpdate::new(&mut assignments, layout.column_count(), identity)
         .expect("valid update");
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     let mut row = FrozenRow::new(identity, vec![Value::Integer(1)]);
 
     assert!(matches!(row.replacement(), Err(Error::Capacity { .. })));
@@ -334,7 +335,7 @@ fn set_null_columns_are_sorted_once_before_encoding() {
             Value::Integer(3),
         ],
     );
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     for column in [3, 2, 1, 0, 2] {
         row.request_set_null(column, &mut budget)
             .expect("SET NULL request succeeds");
@@ -376,7 +377,7 @@ fn storage_working_budget_releases_overlays_at_exact_multi_row_boundaries() {
         let first_identity = RowIdentity::new(0..original_record.len())?;
         let update =
             PreparedDirectUpdate::new(&mut assignments, layout.column_count(), first_identity)?;
-        let mut budget = WorkingBudget::with_limit(limit);
+        let mut budget = ByteBudget::new(limit, Resource::StorageWorkingBytes);
         let mut rows = Vec::new();
         let _ = budget.reserve_exact(&mut rows, 2, "reserving test targets")?;
         for index in 0..2 {
@@ -401,13 +402,13 @@ fn storage_working_budget_releases_overlays_at_exact_multi_row_boundaries() {
             )?;
             let encoded_len = measurements[0].encoded_len();
             assert_eq!(measurements[1].encoded_len(), encoded_len);
-            let after_measurement = budget.used();
+            let after_measurement = budget.used;
 
             rows[0].install_direct_update(&update, &mut budget)?;
-            let one_overlay = budget.used() - after_measurement;
+            let one_overlay = budget.used - after_measurement;
             rows[1].install_direct_update(&update, &mut budget)?;
-            assert_eq!(budget.used() - after_measurement, one_overlay * 2);
-            let all_overlays = budget.used();
+            assert_eq!(budget.used - after_measurement, one_overlay * 2);
+            let all_overlays = budget.used;
             let exact_peak =
                 (all_overlays + encoded_len).max(all_overlays - one_overlay + encoded_len * 2);
 
@@ -415,7 +416,7 @@ fn storage_working_budget_releases_overlays_at_exact_multi_row_boundaries() {
                 row.encode_effective_update(&encoder, measured, &mut budget)?;
             }
             budget.release(measurement_working_bytes);
-            Ok((budget.used(), exact_peak))
+            Ok((budget.used, exact_peak))
         })
     }
 
@@ -477,11 +478,11 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
             .measure_direct_update(&payload_update, &encoder)
             .expect("probe update measures");
     });
-    let mut probe_budget = WorkingBudget::with_limit(usize::MAX);
+    let mut probe_budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     probe_row
         .install_direct_update(&payload_update, &mut probe_budget)
         .expect("probe overlay installs");
-    let installed_bytes = probe_budget.used();
+    let installed_bytes = probe_budget.used;
 
     let mut payload_row = FrozenRow::new(
         identity,
@@ -492,7 +493,8 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
             .measure_direct_update(&payload_update, &encoder)
             .expect("payload update measures");
         let encoded_len = payload_measurement.encoded_len();
-        let mut payload_budget = WorkingBudget::with_limit(installed_bytes - 1);
+        let mut payload_budget =
+            ByteBudget::new(installed_bytes - 1, Resource::StorageWorkingBytes);
         assert!(matches!(
             payload_row.install_direct_update(&payload_update, &mut payload_budget),
             Err(Error::ResourceLimit {
@@ -500,16 +502,16 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
                 limit,
             }) if limit == installed_bytes - 1
         ));
-        assert_eq!(payload_budget.used(), 0);
+        assert_eq!(payload_budget.used, 0);
 
-        let mut retry_budget = WorkingBudget::with_limit(usize::MAX);
+        let mut retry_budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
         payload_row
             .install_direct_update(&payload_update, &mut retry_budget)
             .expect("payload update remains installable");
         payload_row
             .encode_effective_update(&encoder, payload_measurement, &mut retry_budget)
             .expect("retried payload update encodes");
-        assert_eq!(retry_budget.used(), encoded_len);
+        assert_eq!(retry_budget.used, encoded_len);
     });
 
     let mut clone_assignments = vec![(0, Value::Integer(2)), (1, Value::Text(long_text))];
@@ -525,7 +527,7 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
             .measure_direct_update(&clone_update, &encoder)
             .expect("clone update measures");
         let clone_encoded_len = clone_measurement.encoded_len();
-        let mut clone_budget = WorkingBudget::with_limit(usize::MAX);
+        let mut clone_budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
         set_value_clone_failure_after(Some(1));
         let clone_error = clone_row
             .install_direct_update(&clone_update, &mut clone_budget)
@@ -537,7 +539,7 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
                 operation: "cloning a direct mutation value"
             }
         ));
-        assert_eq!(clone_budget.used(), 0);
+        assert_eq!(clone_budget.used, 0);
 
         clone_row
             .install_direct_update(&clone_update, &mut clone_budget)
@@ -545,7 +547,7 @@ fn overlay_installation_refunds_failed_payload_and_clone_charges() {
         clone_row
             .encode_effective_update(&encoder, clone_measurement, &mut clone_budget)
             .expect("retried clone update encodes");
-        assert_eq!(clone_budget.used(), clone_encoded_len);
+        assert_eq!(clone_budget.used, clone_encoded_len);
     });
 }
 
@@ -563,7 +565,7 @@ fn deferred_sequence_peak_excludes_consumed_measurements_and_overlays() {
         let identity = RowIdentity::new(0..original_record.len())?;
         let mut assignments = vec![(1, Value::Text(String::new()))];
         let update = PreparedDirectUpdate::new(&mut assignments, layout.column_count(), identity)?;
-        let mut budget = WorkingBudget::with_limit(limit);
+        let mut budget = ByteBudget::new(limit, Resource::StorageWorkingBytes);
         budget.charge(descriptor)?;
         let mut rows = Vec::new();
         let _ = budget.reserve_exact(&mut rows, 1, "reserving a sequence test target")?;
@@ -587,7 +589,7 @@ fn deferred_sequence_peak_excludes_consumed_measurements_and_overlays() {
             let encoded_row_bytes = measurements[0].encoded_len();
             rows[0].install_direct_update(&update, &mut budget)?;
             let row_encoding_peak = budget
-                .used()
+                .used
                 .checked_add(encoded_row_bytes)
                 .expect("the test peak fits");
             rows[0].encode_effective_update(
@@ -599,7 +601,7 @@ fn deferred_sequence_peak_excludes_consumed_measurements_and_overlays() {
                 &mut budget,
             )?;
             budget.release(measurement_working_bytes);
-            let retained_after_row = budget.used();
+            let retained_after_row = budget.used;
             budget.check_transient(sequence_bytes)?;
             Ok((retained_after_row, row_encoding_peak))
         })
@@ -686,7 +688,7 @@ fn deferred_sequence_reservation_is_charged_before_candidate_allocation() {
     let reservation = candidate
         .deferred_auto_increment_reservation_bytes()
         .expect("the deferred index can be measured");
-    let mut budget = WorkingBudget::with_limit(reservation - 1);
+    let mut budget = ByteBudget::new(reservation - 1, Resource::StorageWorkingBytes);
 
     assert!(matches!(
         defer_auto_increment(&mut candidate, "t", 10, &mut budget),
@@ -695,7 +697,7 @@ fn deferred_sequence_reservation_is_charged_before_candidate_allocation() {
             limit,
         }) if limit == reservation - 1
     ));
-    assert_eq!(budget.used(), 0);
+    assert_eq!(budget.used, 0);
     assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
     assert_eq!(
         candidate
@@ -707,7 +709,7 @@ fn deferred_sequence_reservation_is_charged_before_candidate_allocation() {
 
 #[test]
 fn governed_reservations_report_allocation_failures() {
-    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
     budget.charge(7).expect("baseline fits");
     let mut values = Vec::<u8>::new();
     let impossible = (isize::MAX as usize).saturating_add(1);
@@ -723,7 +725,7 @@ fn governed_reservations_report_allocation_failures() {
         })
     ));
     assert!(values.is_empty());
-    assert_eq!(budget.used(), 7, "failed reservations refund their charge");
+    assert_eq!(budget.used, 7, "failed reservations refund their charge");
 }
 
 #[test]
@@ -759,7 +761,7 @@ fn update_restrict_releases_only_edges_the_same_statement_retargets() {
             table: "nodes",
             columns: &columns,
         };
-        let mut budget = WorkingBudget::with_limit(usize::MAX);
+        let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
         let (mut rows, _) = freeze_rows(
             state.as_str(),
             [Ok(start..start + record.len())],

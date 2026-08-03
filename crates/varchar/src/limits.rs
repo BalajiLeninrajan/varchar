@@ -199,6 +199,14 @@ impl ByteBudget {
         }
     }
 
+    /// Builds the storage-side working budget implied by the database limit.
+    pub(crate) const fn for_database_limit(max_database_bytes: usize) -> Self {
+        Self::new(
+            storage_working_limit(max_database_bytes),
+            Resource::StorageWorkingBytes,
+        )
+    }
+
     pub(crate) fn charge(&mut self, amount: usize) -> Result<()> {
         let next = self
             .used
@@ -293,6 +301,39 @@ impl ByteBudget {
         Ok(bytes)
     }
 
+    /// Doubles `values` when a push would otherwise reallocate outside the budget.
+    pub(crate) fn reserve_for_push<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        operation: &'static str,
+    ) -> Result<()> {
+        let _ = self.reserve_for_push_charged(values, operation)?;
+        Ok(())
+    }
+
+    /// Doubles `values` as [`Self::reserve_for_push`] does, returning the bytes charged.
+    pub(crate) fn reserve_for_push_charged<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        operation: &'static str,
+    ) -> Result<usize> {
+        if values.len() < values.capacity() {
+            return Ok(0);
+        }
+        let target_capacity = if values.capacity() == 0 {
+            1
+        } else {
+            values
+                .capacity()
+                .checked_mul(2)
+                .ok_or_else(|| self.limit_error())?
+        };
+        let additional = target_capacity
+            .checked_sub(values.len())
+            .ok_or_else(|| self.limit_error())?;
+        self.reserve_exact(values, additional, operation)
+    }
+
     /// Charges and copies `value` into an owned string.
     pub(crate) fn clone_text(&mut self, value: &str, operation: &'static str) -> Result<String> {
         self.charge(value.len())?;
@@ -302,6 +343,14 @@ impl ByteBudget {
             .map_err(|_| Error::Allocation { operation })?;
         owned.push_str(value);
         Ok(owned)
+    }
+
+    pub(crate) fn check_transient(&self, amount: usize) -> Result<()> {
+        let peak = self
+            .used
+            .checked_add(amount)
+            .ok_or_else(|| self.limit_error())?;
+        check_limit(peak, self.limit, self.resource)
     }
 
     pub(crate) const fn limit_error(&self) -> Error {
