@@ -10,13 +10,13 @@ mod referential;
 use std::ops::Range;
 
 use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
-use referential::enforce_update_restrict;
+use referential::{ReferentialIndex, enforce_update_restrict};
 
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
 use crate::query::{self, ScanPlan};
 use crate::storage::{
-    self, Candidate, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
+    self, Candidate, Catalog, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
     with_validated_row_encoder,
 };
 use crate::{Error, Resource, Result, Value};
@@ -92,12 +92,53 @@ impl MutationPlan {
         })
     }
 
-    pub(super) fn delete(blob: &str, scan: &ScanPlan<'_>, limits: &Limits) -> Result<Self> {
-        let (mut rows, direct_affected, _) = freeze_direct_targets(blob, scan, limits, 0)?;
+    pub(super) fn delete(
+        blob: &str,
+        catalog: &Catalog,
+        scan: &ScanPlan<'_>,
+        limits: &Limits,
+    ) -> Result<Self> {
+        let (mut rows, direct_affected, mut budget) = freeze_direct_targets(blob, scan, limits, 0)?;
         sort_and_validate_ranges(&mut rows)?;
-        for row in &mut rows {
-            row.mark_direct_delete()?;
+        if rows.is_empty() {
+            return Ok(Self {
+                rows,
+                direct_affected,
+            });
         }
+
+        let referential = ReferentialIndex::build(
+            blob,
+            catalog,
+            scan.row_layout().table,
+            &rows,
+            true,
+            &mut budget,
+        )?;
+        referential.initialize_direct_rows(&rows)?;
+        let mut delete_queue = Vec::new();
+        let mut queue_working_bytes = 0;
+        for row in &mut rows {
+            if row.request_delete()? {
+                push_delete_queue(
+                    &mut delete_queue,
+                    row.identity(),
+                    &mut queue_working_bytes,
+                    &mut budget,
+                )?;
+            }
+        }
+        referential.expand_delete_actions(
+            &mut rows,
+            &mut delete_queue,
+            &mut queue_working_bytes,
+            &mut budget,
+        )?;
+        drop(delete_queue);
+        budget.release(queue_working_bytes);
+        referential.release(&mut budget);
+
+        sort_and_validate_ranges(&mut rows)?;
         Ok(Self {
             rows,
             direct_affected,
@@ -112,6 +153,21 @@ impl MutationPlan {
         }
         Ok(direct_affected)
     }
+}
+
+fn push_delete_queue(
+    queue: &mut Vec<RowIdentity>,
+    identity: RowIdentity,
+    queue_working_bytes: &mut usize,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let charged =
+        budget.reserve_for_push_charged(queue, "reserving the referential delete queue")?;
+    *queue_working_bytes = queue_working_bytes
+        .checked_add(charged)
+        .ok_or_else(|| budget.limit_error())?;
+    queue.push(identity);
+    Ok(())
 }
 
 fn row_record_for_identity<'a>(

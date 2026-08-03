@@ -172,12 +172,12 @@ fn direct_overlays_preserve_original_values_and_detect_conflicts() {
         .install_direct_update(&update, &mut budget)
         .expect("the direct update installs");
     assert!(matches!(
-        updated.mark_direct_delete(),
+        updated.request_delete(),
         Err(Error::Constraint(_))
     ));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1), Value::Null]);
-    deleted.mark_direct_delete().expect("the delete installs");
+    assert!(deleted.request_delete().expect("the delete installs"));
     assert!(matches!(
         deleted.install_direct_update(&update, &mut budget),
         Err(Error::Constraint(_))
@@ -292,7 +292,7 @@ fn row_mutation_states_reject_incomplete_or_conflicting_transitions() {
     assert!(matches!(row.replacement(), Err(Error::Capacity { .. })));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1)]);
-    deleted.mark_direct_delete().expect("delete installs");
+    assert!(deleted.request_delete().expect("delete installs"));
     with_validated_row_encoder(layout, |encoder| {
         assert!(matches!(
             deleted.measure_direct_update(&update, &encoder),

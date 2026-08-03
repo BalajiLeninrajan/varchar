@@ -3,9 +3,11 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 
-use super::model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget};
-use super::row_record_for_identity;
-use crate::storage::{Catalog, ForeignKeyUpdateAction, TableSchema};
+use super::model::{
+    FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
+};
+use super::{invalid_range, push_delete_queue, row_record_for_identity};
+use crate::storage::{self, Catalog, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
 use crate::{Error, Result, Value};
 
 const UNFROZEN: usize = usize::MAX;
@@ -15,6 +17,7 @@ const RELEVANT_CHILD: u8 = 1 << 1;
 struct ReferentialRelevance {
     tables: Vec<u8>,
     root: usize,
+    filter_root_keys: bool,
     working_bytes: usize,
 }
 
@@ -45,16 +48,24 @@ struct IndexedChildRow<'catalog> {
     frozen_index: Cell<usize>,
 }
 
+#[derive(Clone, Copy)]
+struct SchemaCascadeEdge {
+    parent: usize,
+    child: usize,
+}
+
 struct ReferentialEdge<'catalog, 'blob> {
     referenced_table: &'catalog str,
     parent_key: &'blob str,
     child: usize,
     column: usize,
+    on_delete: ForeignKeyDeleteAction,
     on_update: ForeignKeyUpdateAction,
 }
 
 pub(super) struct ReferentialIndex<'catalog, 'blob> {
     blob: &'blob str,
+    catalog: &'catalog Catalog,
     children: Vec<IndexedChildRow<'catalog>>,
     edges: Vec<ReferentialEdge<'catalog, 'blob>>,
     working_bytes: usize,
@@ -85,7 +96,7 @@ pub(super) fn enforce_update_restrict(
         return Ok(());
     }
 
-    let index = ReferentialIndex::build(blob, catalog, &parent_schema.name, rows, budget)?;
+    let index = ReferentialIndex::build(blob, catalog, &parent_schema.name, rows, false, budget)?;
     index.initialize_direct_rows(rows)?;
     index.enforce_update_restrict(parent_schema, rows, update)?;
     index.release(budget);
@@ -98,11 +109,13 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         catalog: &'catalog Catalog,
         root_table: &str,
         root_rows: &[FrozenRow],
+        follow_delete_cascades: bool,
         budget: &mut WorkingBudget,
     ) -> Result<Self> {
-        let relevance = referential_relevance(catalog, root_table, budget)?;
+        let relevance = referential_relevance(catalog, root_table, follow_delete_cascades, budget)?;
         let mut index = Self {
             blob,
+            catalog,
             children: Vec::new(),
             edges: Vec::new(),
             working_bytes: 0,
@@ -112,8 +125,11 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
             return Ok(index);
         }
 
-        let (root_keys, root_key_bytes) =
-            direct_parent_keys(blob, catalog, root_table, root_rows, budget)?;
+        let (root_keys, root_key_bytes) = if relevance.filter_root_keys {
+            direct_parent_keys(blob, catalog, root_table, root_rows, budget)?
+        } else {
+            (Vec::new(), 0)
+        };
         for row in catalog.row_records(blob) {
             let row = row?;
             let (table_order, schema) =
@@ -156,7 +172,8 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
                 if !relevance.is_parent(referenced_order) || parent_key == "N" {
                     continue;
                 }
-                if referenced_order == relevance.root
+                if relevance.filter_root_keys
+                    && referenced_order == relevance.root
                     && root_keys.binary_search(&parent_key).is_err()
                 {
                     continue;
@@ -183,6 +200,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
                     parent_key,
                     child: child_index,
                     column: foreign_key.column,
+                    on_delete: foreign_key.on_delete,
                     on_update: foreign_key.on_update,
                 });
             }
@@ -219,6 +237,82 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
                 });
             }
             self.children[child].frozen_index.set(frozen_index);
+        }
+        Ok(())
+    }
+
+    pub(super) fn expand_delete_actions(
+        &self,
+        rows: &mut Vec<FrozenRow>,
+        delete_queue: &mut Vec<RowIdentity>,
+        queue_working_bytes: &mut usize,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        // Every direct target is frozen and marked deleted before expansion
+        // starts, so this prefix is a statement-wide fact rather than a
+        // snapshot of how far the queue happens to have been drained.
+        let direct_rows = rows.len();
+        let mut cursor = 0;
+        while let Some(parent_identity) = delete_queue.get(cursor).copied() {
+            cursor = cursor.checked_add(1).ok_or(Error::Capacity {
+                operation: "advancing the referential delete queue",
+            })?;
+            let parent_record = row_record_for_identity(self.blob, parent_identity)?;
+            let has_inbound = self
+                .edges
+                .partition_point(|edge| edge.referenced_table < parent_record.table());
+            if self
+                .edges
+                .get(has_inbound)
+                .is_none_or(|edge| edge.referenced_table != parent_record.table())
+            {
+                continue;
+            }
+            let parent_schema =
+                self.catalog
+                    .table(parent_record.table())
+                    .ok_or_else(|| Error::CorruptStorage {
+                        offset: parent_identity.start(),
+                        message: String::from("deleted row references an unknown table"),
+                    })?;
+            let primary_key = parent_schema
+                .primary_key
+                .ok_or_else(|| Error::CorruptStorage {
+                    offset: parent_identity.start(),
+                    message: String::from("referenced row table has no primary key"),
+                })?;
+            let parent_key =
+                parent_record
+                    .cell(primary_key)
+                    .ok_or_else(|| Error::CorruptStorage {
+                        offset: parent_identity.start(),
+                        message: String::from("deleted row is missing its primary-key cell"),
+                    })?;
+
+            for edge in self.matching_edges(&parent_schema.name, parent_key) {
+                match edge.on_delete {
+                    ForeignKeyDeleteAction::Restrict => {
+                        // A child the same statement deletes outright takes the
+                        // reference with it, so the edge cannot dangle in the
+                        // candidate database.
+                        if self.direct_target(edge.child, direct_rows).is_none() {
+                            return Err(self.restrict_error(edge));
+                        }
+                    }
+                    ForeignKeyDeleteAction::Cascade => {
+                        let index = self.freeze_child(edge.child, rows, budget)?;
+                        if rows[index].request_delete()? {
+                            push_delete_queue(
+                                delete_queue,
+                                rows[index].identity(),
+                                queue_working_bytes,
+                                budget,
+                            )?;
+                        }
+                    }
+                    ForeignKeyDeleteAction::SetNull => return Err(self.restrict_error(edge)),
+                }
+            }
         }
         Ok(())
     }
@@ -319,6 +413,37 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         self.edges[start..end].iter()
     }
 
+    fn freeze_child(
+        &self,
+        child: usize,
+        rows: &mut Vec<FrozenRow>,
+        budget: &mut WorkingBudget,
+    ) -> Result<usize> {
+        let child = &self.children[child];
+        let frozen_index = child.frozen_index.get();
+        if frozen_index != UNFROZEN {
+            return Ok(frozen_index);
+        }
+
+        let record = self
+            .blob
+            .get(child.identity.range())
+            .ok_or_else(|| invalid_range(child.identity.start()))?;
+        let decoded_bytes =
+            decoded_values_bytes(child.schema.columns.len(), child.identity.len(), budget)?;
+        budget.check_transient(decoded_bytes)?;
+        let values = storage::decode_row(record, child.schema.row_layout())?;
+        budget.charge(decoded_bytes)?;
+        if let Err(error) = budget.reserve_for_push(rows, "reserving induced mutation targets") {
+            budget.release(decoded_bytes);
+            return Err(error);
+        }
+        let frozen_index = rows.len();
+        rows.push(FrozenRow::new(child.identity, values));
+        child.frozen_index.set(frozen_index);
+        Ok(frozen_index)
+    }
+
     fn restrict_error(&self, edge: &ReferentialEdge<'_, '_>) -> Error {
         let child = &self.children[edge.child];
         Error::Constraint(format!(
@@ -353,6 +478,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
 fn referential_relevance(
     catalog: &Catalog,
     root_table: &str,
+    follow_delete_cascades: bool,
     budget: &mut WorkingBudget,
 ) -> Result<ReferentialRelevance> {
     let table_count = catalog.table_count();
@@ -369,22 +495,29 @@ fn referential_relevance(
     tables[root] |= RELEVANT_PARENT;
 
     let mut has_inbound = false;
+    let mut has_cascade = false;
     for (_, schema) in catalog.tables() {
         for foreign_key in &schema.foreign_keys {
             if foreign_key.referenced_table != root_table {
                 continue;
             }
             has_inbound = true;
+            has_cascade |= foreign_key.on_delete == ForeignKeyDeleteAction::Cascade;
         }
     }
     if !has_inbound {
         return Ok(ReferentialRelevance {
             tables,
             root,
+            filter_root_keys: true,
             working_bytes,
         });
     }
 
+    let mut root_reentered = false;
+    if follow_delete_cascades && has_cascade {
+        root_reentered = expand_cascade_tables(catalog, root, &mut tables, budget)?;
+    }
     for (child, (_, schema)) in catalog.tables().enumerate() {
         if schema.foreign_keys.iter().any(|foreign_key| {
             let (parent, _) = catalog
@@ -399,8 +532,73 @@ fn referential_relevance(
     Ok(ReferentialRelevance {
         tables,
         root,
+        filter_root_keys: !follow_delete_cascades || !root_reentered,
         working_bytes,
     })
+}
+
+fn expand_cascade_tables(
+    catalog: &Catalog,
+    root: usize,
+    relevant: &mut [u8],
+    budget: &mut WorkingBudget,
+) -> Result<bool> {
+    let mut cascade_edges = Vec::new();
+    let mut cascade_edge_bytes = 0_usize;
+    for (child, (_, schema)) in catalog.tables().enumerate() {
+        for foreign_key in &schema.foreign_keys {
+            if foreign_key.on_delete != ForeignKeyDeleteAction::Cascade {
+                continue;
+            }
+            let (parent, _) = catalog
+                .table_with_order(&foreign_key.referenced_table)
+                .expect("validated foreign keys reference catalog tables");
+            let charged = budget.reserve_for_push_charged(
+                &mut cascade_edges,
+                "reserving referential schema edges",
+            )?;
+            cascade_edge_bytes = cascade_edge_bytes
+                .checked_add(charged)
+                .ok_or_else(|| budget.limit_error())?;
+            cascade_edges.push(SchemaCascadeEdge { parent, child });
+        }
+    }
+    cascade_edges.sort_unstable_by_key(|edge| edge.parent);
+
+    let mut queue = Vec::new();
+    let mut queue_bytes =
+        budget.reserve_exact(&mut queue, 1, "reserving the referential table queue")?;
+    queue.push(root);
+    let mut root_reentered = false;
+    let mut cursor = 0;
+    while let Some(parent) = queue.get(cursor).copied() {
+        cursor = cursor.checked_add(1).ok_or(Error::Capacity {
+            operation: "advancing the referential table queue",
+        })?;
+        let start = cascade_edges.partition_point(|edge| edge.parent < parent);
+        let end = start + cascade_edges[start..].partition_point(|edge| edge.parent == parent);
+        for edge in &cascade_edges[start..end] {
+            if edge.child == root {
+                root_reentered = true;
+            }
+            if relevant[edge.child] & RELEVANT_PARENT != 0 {
+                continue;
+            }
+            relevant[edge.child] |= RELEVANT_PARENT;
+            let charged = budget
+                .reserve_for_push_charged(&mut queue, "reserving the referential table queue")?;
+            queue_bytes = queue_bytes
+                .checked_add(charged)
+                .ok_or_else(|| budget.limit_error())?;
+            queue.push(edge.child);
+        }
+    }
+
+    drop(queue);
+    budget.release(queue_bytes);
+    drop(cascade_edges);
+    budget.release(cascade_edge_bytes);
+    Ok(root_reentered)
 }
 
 fn direct_parent_keys<'blob>(

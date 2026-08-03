@@ -208,12 +208,17 @@ impl FrozenRow {
         Ok(())
     }
 
-    pub(super) fn mark_direct_delete(&mut self) -> Result<()> {
-        if !matches!(self.mutation, MutationState::Fresh) {
-            return Err(direct_conflict(self.identity));
+    pub(super) fn request_delete(&mut self) -> Result<bool> {
+        match &self.mutation {
+            MutationState::Fresh => {
+                self.mutation = MutationState::Deleted;
+                Ok(true)
+            }
+            MutationState::Deleted => Ok(false),
+            MutationState::MeasuredUpdate
+            | MutationState::InstalledUpdate { .. }
+            | MutationState::EncodedUpdate(_) => Err(direct_conflict(self.identity)),
         }
-        self.mutation = MutationState::Deleted;
-        Ok(())
     }
 
     pub(super) fn encode_effective_update<'brand>(

@@ -15,7 +15,8 @@ impl Database {
             self.limits.max_predicates,
             self.limits.regex_backtrack_limit,
         )?;
-        let mutation = MutationPlan::delete(candidate.source(), &plan, &self.limits)?;
+        let mutation =
+            MutationPlan::delete(candidate.source(), candidate.catalog(), &plan, &self.limits)?;
         let affected = mutation.apply(&mut candidate)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: affected })
