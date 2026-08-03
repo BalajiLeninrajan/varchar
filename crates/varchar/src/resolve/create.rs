@@ -22,6 +22,64 @@ pub(crate) struct ResolvedCreate {
     pub(crate) auto_increment: Option<usize>,
 }
 
+enum SemanticEvent {
+    Default { order: usize, column: usize },
+}
+
+impl SemanticEvent {
+    const fn order(&self) -> usize {
+        match self {
+            Self::Default { order, .. } => *order,
+        }
+    }
+}
+
+/// Deferred `CREATE TABLE` semantics, replayed in declaration order.
+struct SemanticResolution {
+    events: Vec<SemanticEvent>,
+    next_event: usize,
+}
+
+impl SemanticResolution {
+    fn new(column_count: usize) -> Result<Self> {
+        let mut events = Vec::new();
+        events
+            .try_reserve_exact(column_count)
+            .map_err(|_| Error::Allocation {
+                operation: "reserving CREATE semantic events",
+            })?;
+        Ok(Self {
+            events,
+            next_event: 0,
+        })
+    }
+
+    fn queue_default(&mut self, order: usize, column: usize) {
+        self.events.push(SemanticEvent::Default { order, column });
+    }
+
+    fn drain_before(
+        &mut self,
+        table: &str,
+        columns: &[SchemaColumn],
+        auto_increment: Option<usize>,
+        before: usize,
+    ) -> Result<()> {
+        while let Some(event) = self.events.get(self.next_event) {
+            if event.order() >= before {
+                break;
+            }
+            match event {
+                SemanticEvent::Default { column, .. } => {
+                    validate_default(table, &columns[*column], auto_increment == Some(*column))?;
+                }
+            }
+            self.next_event += 1;
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result<ResolvedCreate> {
     let CreateTable { table, elements } = statement;
     if catalog.table(&table).is_some() {
@@ -62,9 +120,9 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     let mut unique_columns = Vec::new();
     let mut foreign_keys = Vec::new();
     let mut foreign_key_orders = Vec::new();
+    let mut semantic_resolution = SemanticResolution::new(columns.len())?;
     let mut auto_increment = None;
     let mut auto_increment_order = None;
-    let mut default_orders = vec![None; columns.len()];
     let mut saw_not_null = vec![false; columns.len()];
     let mut saw_unique = vec![false; columns.len()];
     let mut saw_foreign_key = vec![false; columns.len()];
@@ -84,11 +142,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                     match modifier {
                         ColumnModifier::NotNull => {
                             if saw_not_null[index] {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(Error::Schema(format!(
@@ -107,11 +164,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 &mut primary_key,
                                 &mut columns,
                             ) {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -124,11 +180,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 &mut saw_unique,
                                 &mut unique_columns,
                             ) {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -144,11 +199,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 &mut saw_foreign_key,
                                 &mut foreign_keys,
                             ) {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -162,11 +216,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 index,
                                 &mut auto_increment,
                             ) {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -175,11 +228,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                         }
                         ColumnModifier::Default(value) => {
                             if columns[index].default.is_some() {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(Error::Schema(format!(
@@ -188,7 +240,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 )));
                             }
                             columns[index].default = Some(value);
-                            default_orders[index] = Some(order);
+                            semantic_resolution.queue_default(order, index);
                         }
                     }
                 }
@@ -206,11 +258,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                         ) {
                             Ok(index) => index,
                             Err(error) => {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -223,11 +274,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             &mut primary_key,
                             &mut columns,
                         ) {
-                            validate_defaults_before(
+                            semantic_resolution.drain_before(
                                 &table,
                                 &columns,
                                 auto_increment,
-                                &default_orders,
                                 order,
                             )?;
                             return Err(error);
@@ -239,11 +289,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             {
                                 Ok(index) => index,
                                 Err(error) => {
-                                    validate_defaults_before(
+                                    semantic_resolution.drain_before(
                                         &table,
                                         &columns,
                                         auto_increment,
-                                        &default_orders,
                                         order,
                                     )?;
                                     return Err(error);
@@ -252,11 +301,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                         if let Err(error) =
                             declare_unique(&name, index, &mut saw_unique, &mut unique_columns)
                         {
-                            validate_defaults_before(
+                            semantic_resolution.drain_before(
                                 &table,
                                 &columns,
                                 auto_increment,
-                                &default_orders,
                                 order,
                             )?;
                             return Err(error);
@@ -271,11 +319,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                         ) {
                             Ok(index) => index,
                             Err(error) => {
-                                validate_defaults_before(
+                                semantic_resolution.drain_before(
                                     &table,
                                     &columns,
                                     auto_increment,
-                                    &default_orders,
                                     order,
                                 )?;
                                 return Err(error);
@@ -290,11 +337,10 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             &mut saw_foreign_key,
                             &mut foreign_keys,
                         ) {
-                            validate_defaults_before(
+                            semantic_resolution.drain_before(
                                 &table,
                                 &columns,
                                 auto_increment,
-                                &default_orders,
                                 order,
                             )?;
                             return Err(error);
@@ -316,18 +362,15 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         unique_columns,
         foreign_keys: Vec::new(),
     };
-    let mut next_default = 0;
     for (foreign_key, order) in foreign_keys.iter().zip(foreign_key_orders) {
         if let Err(error) = validate_foreign_key(catalog, &schema, foreign_key) {
             let earlier_auto_increment = auto_increment
                 .filter(|_| auto_increment_order.is_some_and(|auto_order| auto_order < order));
-            validate_defaults_from(
+            semantic_resolution.drain_before(
                 &schema.name,
                 &schema.columns,
                 earlier_auto_increment,
-                &default_orders,
                 order,
-                next_default,
             )?;
             return Err(error);
         }
@@ -336,68 +379,14 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     schema.foreign_keys = foreign_keys;
     if let Some(column) = auto_increment {
         let order = auto_increment_order.expect("auto-increment declarations retain their order");
-        next_default = validate_defaults_from(
-            &schema.name,
-            &schema.columns,
-            auto_increment,
-            &default_orders,
-            order,
-            next_default,
-        )?;
+        semantic_resolution.drain_before(&schema.name, &schema.columns, auto_increment, order)?;
         validate_auto_increment(&schema, column)?;
     }
-    validate_defaults_from(
-        &schema.name,
-        &schema.columns,
-        auto_increment,
-        &default_orders,
-        usize::MAX,
-        next_default,
-    )?;
+    semantic_resolution.drain_before(&schema.name, &schema.columns, auto_increment, usize::MAX)?;
     Ok(ResolvedCreate {
         schema,
         auto_increment,
     })
-}
-
-fn validate_defaults_before(
-    table: &str,
-    columns: &[SchemaColumn],
-    auto_increment: Option<usize>,
-    default_orders: &[Option<usize>],
-    before: usize,
-) -> Result<()> {
-    validate_defaults_from(table, columns, auto_increment, default_orders, before, 0).map(|_| ())
-}
-
-fn validate_defaults_from(
-    table: &str,
-    columns: &[SchemaColumn],
-    auto_increment: Option<usize>,
-    default_orders: &[Option<usize>],
-    before: usize,
-    mut next: usize,
-) -> Result<usize> {
-    if let Some(index) = auto_increment
-        && index < next
-        && default_orders[index].is_some_and(|order| order < before)
-    {
-        validate_default(table, &columns[index], true)?;
-    }
-
-    while next < columns.len() {
-        let index = next;
-        let Some(order) = default_orders[index] else {
-            next += 1;
-            continue;
-        };
-        if order >= before {
-            break;
-        }
-        validate_default(table, &columns[index], auto_increment == Some(index))?;
-        next += 1;
-    }
-    Ok(next)
 }
 
 fn validate_default(table: &str, column: &SchemaColumn, auto_increment: bool) -> Result<()> {
