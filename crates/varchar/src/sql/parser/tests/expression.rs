@@ -49,6 +49,7 @@ fn and_binds_more_tightly_than_or() {
     ));
     assert_eq!(predicate_name(&expression.nodes()[3]), "b");
     assert_eq!(predicate_name(&expression.nodes()[4]), "c");
+    assert_eq!(expression.to_string(), "a = 1 OR b = 2 AND c = 3");
 }
 
 #[test]
@@ -62,6 +63,7 @@ fn parentheses_override_precedence_and_associative_nodes_flatten() {
         grouped.nodes()[1],
         ExpressionNode::Or { children: 2 }
     ));
+    assert_eq!(grouped.to_string(), "(a = 1 OR b = 2) AND c = 3");
 
     let flattened = expression("SELECT * FROM t WHERE (a = 1 AND b = 2) AND (c = 3 AND d = 4)");
     assert!(matches!(
@@ -178,5 +180,8 @@ fn deep_parse_format_and_destruction_use_explicit_stacks() {
     };
     let expression = statement.where_clause.expect("WHERE exists");
     assert_eq!(expression.predicate_units().expect("count fits"), DEPTH + 1);
+    let formatted = expression.to_string();
+    assert!(formatted.starts_with("("));
+    drop(formatted);
     drop(expression);
 }
