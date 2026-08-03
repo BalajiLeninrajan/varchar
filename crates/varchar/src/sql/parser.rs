@@ -6,12 +6,15 @@ mod mutation;
 mod select;
 
 use super::ast::{ColumnRef, Statement};
-use super::lexer::{Token, TokenKind, lex};
+use super::lexer::{Token, TokenKind, lex_for_parser};
 use crate::{Error, Result, Value};
 
 pub(super) fn parse(input: &str) -> Result<Statement> {
-    let tokens = lex(input)?;
-    Parser::new(tokens).parse()
+    let tokens = lex_for_parser(input)?;
+    let mut parser = Parser::new(tokens);
+    let result = parser.parse();
+    parser.reject_deferred_lexical_errors()?;
+    result
 }
 
 struct Parser {
@@ -27,7 +30,7 @@ impl Parser {
         }
     }
 
-    fn parse(mut self) -> Result<Statement> {
+    fn parse(&mut self) -> Result<Statement> {
         let statement = match self.current_word() {
             Some("CREATE") => Statement::CreateTable(self.parse_create_table()?),
             Some("INSERT") => Statement::Insert(self.parse_insert()?),
@@ -63,6 +66,15 @@ impl Parser {
             return Err(Error::unsupported(feature, self.current().span));
         }
         Ok(statement)
+    }
+
+    fn reject_deferred_lexical_errors(&self) -> Result<()> {
+        for token in &self.tokens {
+            if let TokenKind::LexicalError(error) = &token.kind {
+                return Err(error.error(token.span));
+            }
+        }
+        Ok(())
     }
 
     fn parse_column_ref(&mut self) -> Result<ColumnRef> {

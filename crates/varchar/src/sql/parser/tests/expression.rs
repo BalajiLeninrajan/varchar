@@ -35,6 +35,26 @@ fn assert_unsupported(sql: &str, expected_feature: &str, marker: &str) {
     }
 }
 
+fn assert_parse_error(sql: &str, expected_message: &str, marker: &str) {
+    let span_start = sql.find(marker).expect("fixture contains error marker");
+    let span_end = span_start + marker.len();
+    match parse(sql) {
+        Err(Error::Parse {
+            message,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(message, expected_message, "message for {sql:?}");
+            assert_eq!(
+                (actual_start, actual_end),
+                (span_start, span_end),
+                "span for {sql:?}"
+            );
+        }
+        other => panic!("expected exact Parse error for {sql:?}, got {other:?}"),
+    }
+}
+
 #[test]
 fn and_binds_more_tightly_than_or() {
     let expression = expression("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
@@ -159,6 +179,23 @@ fn excluded_expression_forms_have_structured_features_and_exact_spans() {
     ] {
         assert_unsupported(sql, feature, marker);
     }
+}
+
+#[test]
+fn deferred_lexical_errors_surface_with_their_original_diagnostics() {
+    assert_parse_error(
+        "SELECT * FROM t WHERE a = '\u{e9}",
+        "unterminated string literal",
+        "'\u{e9}",
+    );
+    assert_parse_error(
+        "SELECT \u{1f4a5} FROM t",
+        "unexpected character '\u{1f4a5}'",
+        "\u{1f4a5}",
+    );
+    assert_unsupported("SELECT \"a\" FROM t", "quoted identifiers", "\"");
+    assert_unsupported("SELECT a FROM t -- tail", "SQL comments", "-- tail");
+    assert_unsupported("SELECT a FROM t /* tail", "SQL comments", "/* tail");
 }
 
 #[test]
