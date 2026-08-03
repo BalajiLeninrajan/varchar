@@ -454,6 +454,10 @@ impl FrozenRow {
         Ok(())
     }
 
+    pub(super) fn needs_update(&self) -> bool {
+        matches!(self.mutation, MutationState::PendingUpdate { .. })
+    }
+
     pub(super) fn replacement(&self) -> Result<Option<&str>> {
         match &self.mutation {
             MutationState::EncodedUpdate(encoded) => Ok(Some(encoded)),

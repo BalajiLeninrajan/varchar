@@ -742,6 +742,52 @@ fn restricted_references_stay_coordinated_while_cascades_expand() {
 }
 
 #[test]
+fn update_cascade_advances_every_auto_increment_sequence_in_the_chain() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE roots (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE branches (id INTEGER PRIMARY KEY AUTOINCREMENT REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE leaves (id INTEGER PRIMARY KEY AUTOINCREMENT REFERENCES branches(id) ON UPDATE CASCADE)",
+    );
+    for sql in [
+        "INSERT INTO roots VALUES (1)",
+        "INSERT INTO branches VALUES (1)",
+        "INSERT INTO leaves VALUES (1)",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        execute(&mut database, "UPDATE roots SET id = 10 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    for table in ["roots", "branches", "leaves"] {
+        assert!(
+            database.as_str().contains(&format!("~A|{table}|id|I10;")),
+            "{table} sequence did not advance"
+        );
+    }
+    for sql in [
+        "INSERT INTO roots VALUES (NULL)",
+        "INSERT INTO branches VALUES (NULL)",
+        "INSERT INTO leaves VALUES (NULL)",
+    ] {
+        execute(&mut database, sql);
+    }
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM leaves ORDER BY id"),
+        vec![vec![Value::Integer(10)], vec![Value::Integer(11)]]
+    );
+}
+
+#[test]
 fn set_null_nullability_precedes_later_declaration_errors() {
     let mut database = Database::new();
     execute(

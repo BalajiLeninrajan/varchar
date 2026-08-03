@@ -36,8 +36,20 @@ fn deferred_sequence_edit_reports_working_and_replacement_bytes() {
     assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
     assert_eq!(
         candidate
+            .deferred_auto_increment_reservation_bytes()
+            .expect("the deferred index can be measured"),
+        std::mem::size_of::<DeferredAutoIncrement<'_>>()
+    );
+    assert_eq!(
+        candidate
             .deferred_auto_increment_lengths()
             .expect("an absent edit has no lengths"),
+        None
+    );
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_max_replacement_bytes()
+            .expect("an absent edit has no replacement peak"),
         None
     );
 
@@ -50,9 +62,21 @@ fn deferred_sequence_edit_reports_working_and_replacement_bytes() {
     );
     assert_eq!(
         candidate
+            .deferred_auto_increment_reservation_bytes()
+            .expect("the initialized deferred index needs no reservation"),
+        0
+    );
+    assert_eq!(
+        candidate
             .deferred_auto_increment_lengths()
             .expect("the deferred edit has exact lengths"),
         Some(("~A|t|id|I1;".len(), "~A|t|id|I10;".len()))
+    );
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_max_replacement_bytes()
+            .expect("the deferred edit has an exact replacement peak"),
+        Some("~A|t|id|I10;".len())
     );
     candidate.discard_deferred_auto_increment();
     assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
@@ -63,6 +87,116 @@ fn deferred_sequence_edit_reports_working_and_replacement_bytes() {
             .as_str(),
         state.as_str()
     );
+}
+
+#[test]
+fn deferred_sequence_edits_merge_per_table_and_report_aggregate_bytes() {
+    let source = "V2;~S|first|id:I:!;~P|first|id;~A|first|id|I1;~S|second|id:I:!;~P|second|id;~A|second|id|I9;~R|first|I1;~R|second|I9;";
+    let state = StorageState::load(String::from(source), usize::MAX).expect("source is valid");
+    let mut candidate = state.candidate(usize::MAX).expect("source fits");
+
+    candidate
+        .defer_auto_increment("second", 20)
+        .expect("the second sequence can advance");
+    candidate
+        .defer_auto_increment("first", 100)
+        .expect("the first sequence can advance");
+    candidate
+        .defer_auto_increment("second", 15)
+        .expect("a repeated request keeps the larger high-water mark");
+
+    assert_eq!(candidate.deferred_auto_increments.len(), 2);
+    assert_eq!(candidate.deferred_auto_increments[0].table, "first");
+    assert_eq!(candidate.deferred_auto_increments[0].last, 100);
+    assert_eq!(candidate.deferred_auto_increments[1].table, "second");
+    assert_eq!(candidate.deferred_auto_increments[1].last, 20);
+    assert_eq!(
+        candidate.deferred_auto_increment_working_bytes(),
+        2 * std::mem::size_of::<DeferredAutoIncrement<'_>>()
+    );
+
+    let first_original = "~A|first|id|I1;".len();
+    let first_replacement = "~A|first|id|I100;".len();
+    let second_original = "~A|second|id|I9;".len();
+    let second_replacement = "~A|second|id|I20;".len();
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_lengths()
+            .expect("all deferred edits have exact aggregate lengths"),
+        Some((
+            first_original + second_original,
+            first_replacement + second_replacement,
+        ))
+    );
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_max_replacement_bytes()
+            .expect("all deferred edits have an exact replacement peak"),
+        Some(first_replacement.max(second_replacement))
+    );
+
+    assert_eq!(
+        candidate
+            .finish()
+            .expect("zero matches discard every deferred edit")
+            .as_str(),
+        source
+    );
+}
+
+#[test]
+fn deferred_sequence_edits_apply_in_metadata_source_order_before_the_first_row() {
+    let source = "V2;~S|first|id:I:!;~P|first|id;~A|first|id|I1;~S|second|id:I:!;~P|second|id;~A|second|id|I9;~R|first|I1;~R|second|I9;";
+    let state = StorageState::load(String::from(source), usize::MAX).expect("source is valid");
+    let mut candidate = state.candidate(usize::MAX).expect("source fits");
+    candidate
+        .defer_auto_increment("second", 20)
+        .expect("the later metadata record can be requested first");
+    candidate
+        .defer_auto_increment("first", 100)
+        .expect("the earlier metadata record is sorted before it");
+
+    let row_start = source.find("~R|first|I1;").expect("the first row exists");
+    let row_end = row_start + "~R|first|I1;".len();
+    candidate
+        .rewrite_encoded_row(row_start..row_end, Some("~R|first|I2;"))
+        .expect("all metadata edits apply before the row rewrite");
+
+    let expected = source
+        .replacen("~A|first|id|I1;", "~A|first|id|I100;", 1)
+        .replacen("~A|second|id|I9;", "~A|second|id|I20;", 1)
+        .replacen("~R|first|I1;", "~R|first|I2;", 1);
+    assert_eq!(
+        candidate
+            .finish()
+            .expect("the ordered multi-table edit validates")
+            .as_str(),
+        expected
+    );
+}
+
+#[test]
+fn deferred_sequence_edit_skips_earlier_non_sequence_table_slots() {
+    let source = "V2;~S|first|value:I:!;~S|second|id:I:!;~P|second|id;~A|second|id|I1;~R|first|I1;~R|second|I1;";
+    let state = StorageState::load(String::from(source), usize::MAX).expect("source is valid");
+    let mut candidate = state.candidate(usize::MAX).expect("source fits");
+    candidate
+        .defer_auto_increment("second", 10)
+        .expect("the later table sequence can advance");
+
+    let row_start = source.find("~R|first|I1;").expect("the first row exists");
+    let row_end = row_start + "~R|first|I1;".len();
+    candidate
+        .rewrite_encoded_row(row_start..row_end, Some("~R|first|I2;"))
+        .expect("the sparse deferred index applies before rows");
+
+    let expected = source
+        .replacen("~A|second|id|I1;", "~A|second|id|I10;", 1)
+        .replacen("~R|first|I1;", "~R|first|I2;", 1);
+    let finished = candidate.finish().expect("the sparse edit validates");
+    assert_eq!(finished.as_str(), expected);
+    StorageState::load(finished.as_str().to_owned(), usize::MAX)
+        .expect("the sparse deferred edit reloads");
 }
 
 #[test]

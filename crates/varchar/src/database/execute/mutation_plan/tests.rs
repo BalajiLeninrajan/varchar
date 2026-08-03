@@ -6,7 +6,7 @@ use super::model::{
 };
 use super::referential::{ReferentialAction, ReferentialIndex};
 use super::{
-    freeze_rows, measure_and_check_update_database_size, push_update_queue,
+    defer_auto_increment, freeze_rows, measure_and_check_update_database_size, push_update_queue,
     sequence_edit_lengths_for_targets, sort_and_validate_ranges,
 };
 use crate::storage::{RowLayout, StorageState, validate_row_layout, with_validated_row_encoder};
@@ -676,6 +676,33 @@ fn deferred_sequence_peak_excludes_consumed_measurements_and_overlays() {
             limit,
         }) if limit == exact - 1
     ));
+}
+
+#[test]
+fn deferred_sequence_reservation_is_charged_before_candidate_allocation() {
+    let blob = String::from("V2;~S|t|id:I:!;~P|t|id;~A|t|id|I1;~R|t|I1;");
+    let state = StorageState::load(blob, usize::MAX).expect("sequence fixture loads");
+    let mut candidate = state.candidate(state.as_str().len()).expect("source fits");
+    let reservation = candidate
+        .deferred_auto_increment_reservation_bytes()
+        .expect("the deferred index can be measured");
+    let mut budget = WorkingBudget::with_limit(reservation - 1);
+
+    assert!(matches!(
+        defer_auto_increment(&mut candidate, "t", 10, &mut budget),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit,
+        }) if limit == reservation - 1
+    ));
+    assert_eq!(budget.used(), 0);
+    assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_lengths()
+            .expect("the failed reservation leaves no edit"),
+        None
+    );
 }
 
 #[test]

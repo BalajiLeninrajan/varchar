@@ -18,11 +18,13 @@ impl Database {
             self.limits.max_predicates,
             self.limits.regex_backtrack_limit,
         )?;
-        if let Some(last) = assignments.next_auto_increment {
-            candidate.defer_auto_increment(&statement.table, last)?;
-        }
-        let mutation =
-            MutationPlan::update(&candidate, &plan, &self.limits, &mut assignments.values)?;
+        let mutation = MutationPlan::update(
+            &mut candidate,
+            &plan,
+            &self.limits,
+            &mut assignments.values,
+            assignments.next_auto_increment,
+        )?;
         let affected = mutation.apply(&mut candidate)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: affected })

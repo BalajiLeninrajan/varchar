@@ -24,6 +24,21 @@ struct DeferredAutoIncrement<'a> {
     record_range: Range<usize>,
 }
 
+impl DeferredAutoIncrement<'_> {
+    const fn empty() -> Self {
+        Self {
+            table: "",
+            column: 0,
+            last: 0,
+            record_range: 0..0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.record_range.is_empty()
+    }
+}
+
 /// A bounded, ordered edit of one validated authoritative database string.
 pub(crate) struct Candidate<'a> {
     state: &'a StorageState,
@@ -33,7 +48,7 @@ pub(crate) struct Candidate<'a> {
     max_predicates: usize,
     check_like_work_limit: usize,
     format: FormatVersion,
-    deferred_auto_increment: Option<DeferredAutoIncrement<'a>>,
+    deferred_auto_increments: Vec<DeferredAutoIncrement<'a>>,
 }
 
 impl<'a> Candidate<'a> {
@@ -57,7 +72,7 @@ impl<'a> Candidate<'a> {
             max_predicates,
             check_like_work_limit,
             format: state.format(),
-            deferred_auto_increment: None,
+            deferred_auto_increments: Vec::new(),
         })
     }
 
@@ -104,37 +119,110 @@ impl<'a> Candidate<'a> {
         self.splice(edit.record_range, &encoded)
     }
 
-    /// Defer the sequence edit until a row is actually rewritten.
+    /// Defer sequence edits until a row is actually rewritten.
     ///
     /// `UPDATE` resolves assignments before it knows whether any row matches.
-    /// Keeping only this logical edit avoids allocating or applying a replacement
-    /// metadata record for a zero-match statement.
+    /// Keeping only these logical edits avoids allocating or applying replacement
+    /// metadata records for a zero-match statement.
     pub(crate) fn defer_auto_increment(&mut self, table: &str, last: i64) -> Result<()> {
-        self.deferred_auto_increment = Some(self.auto_increment_edit(table, last)?);
+        let (table_order, _) = self
+            .state
+            .catalog()
+            .table_with_order(table)
+            .ok_or_else(|| Error::Schema(format!("unknown table {table:?}")))?;
+        let edit = self.auto_increment_edit(table, last)?;
+        if self.deferred_auto_increments.is_empty() {
+            let table_count = self.state.catalog().table_count();
+            self.deferred_auto_increments
+                .try_reserve_exact(table_count)
+                .map_err(|_| allocation_error("reserving deferred auto-increment edits"))?;
+            self.deferred_auto_increments
+                .resize_with(table_count, DeferredAutoIncrement::empty);
+        }
+
+        let slot = self
+            .deferred_auto_increments
+            .get_mut(table_order)
+            .expect("catalog table order fits the deferred edit index");
+        if slot.is_empty() {
+            *slot = edit;
+        } else {
+            debug_assert_eq!(slot.table, edit.table);
+            slot.last = slot.last.max(edit.last);
+        }
         Ok(())
     }
 
-    pub(crate) fn deferred_auto_increment_working_bytes(&self) -> usize {
-        self.deferred_auto_increment
-            .as_ref()
-            .map_or(0, |_| std::mem::size_of::<DeferredAutoIncrement<'_>>())
+    pub(crate) fn deferred_auto_increment_reservation_bytes(&self) -> Result<usize> {
+        if self.deferred_auto_increments.is_empty() {
+            self.state
+                .catalog()
+                .table_count()
+                .checked_mul(std::mem::size_of::<DeferredAutoIncrement<'_>>())
+                .ok_or(Error::Capacity {
+                    operation: "measuring deferred auto-increment edits",
+                })
+        } else {
+            Ok(0)
+        }
     }
 
+    pub(crate) fn deferred_auto_increment_working_bytes(&self) -> usize {
+        if self.deferred_auto_increments.is_empty() {
+            0
+        } else {
+            self.state
+                .catalog()
+                .table_count()
+                .saturating_mul(std::mem::size_of::<DeferredAutoIncrement<'_>>())
+        }
+    }
+
+    /// Aggregate source and replacement bytes across all deferred sequence edits.
     pub(crate) fn deferred_auto_increment_lengths(&self) -> Result<Option<(usize, usize)>> {
-        self.deferred_auto_increment
-            .as_ref()
-            .map(|edit| {
-                let schema = self
-                    .state
-                    .catalog()
-                    .table(edit.table)
-                    .expect("a deferred auto-increment edit names a catalog table");
-                Ok((
-                    edit.record_range.len(),
-                    encoded_auto_increment_record_len_prevalidated(schema, edit.column, edit.last)?,
-                ))
-            })
-            .transpose()
+        self.deferred_auto_increment_length_summary()
+            .map(|summary| summary.map(|(original, replacement, _)| (original, replacement)))
+    }
+
+    /// Largest single replacement allocation needed while applying deferred edits.
+    pub(crate) fn deferred_auto_increment_max_replacement_bytes(&self) -> Result<Option<usize>> {
+        self.deferred_auto_increment_length_summary()
+            .map(|summary| summary.map(|(_, _, max_replacement)| max_replacement))
+    }
+
+    fn deferred_auto_increment_length_summary(&self) -> Result<Option<(usize, usize, usize)>> {
+        if self.deferred_auto_increments.is_empty() {
+            return Ok(None);
+        }
+
+        let mut original = 0_usize;
+        let mut replacement = 0_usize;
+        let mut max_replacement = 0_usize;
+        for edit in self
+            .deferred_auto_increments
+            .iter()
+            .filter(|edit| !edit.is_empty())
+        {
+            let schema = self
+                .state
+                .catalog()
+                .table(edit.table)
+                .expect("a deferred auto-increment edit names a catalog table");
+            let edit_replacement =
+                encoded_auto_increment_record_len_prevalidated(schema, edit.column, edit.last)?;
+            original = original
+                .checked_add(edit.record_range.len())
+                .ok_or(Error::Capacity {
+                    operation: "measuring deferred auto-increment source records",
+                })?;
+            replacement = replacement
+                .checked_add(edit_replacement)
+                .ok_or(Error::Capacity {
+                    operation: "measuring deferred auto-increment replacement records",
+                })?;
+            max_replacement = max_replacement.max(edit_replacement);
+        }
+        Ok(Some((original, replacement, max_replacement)))
     }
 
     fn auto_increment_edit(&self, table: &str, last: i64) -> Result<DeferredAutoIncrement<'a>> {
@@ -168,11 +256,12 @@ impl<'a> Candidate<'a> {
     }
 
     fn apply_deferred_auto_increment(&mut self) -> Result<()> {
-        let Some(edit) = self.deferred_auto_increment.take() else {
-            return Ok(());
-        };
-        let encoded = self.encode_auto_increment_edit(&edit)?;
-        self.splice(edit.record_range, &encoded)
+        let edits = std::mem::take(&mut self.deferred_auto_increments);
+        for edit in edits.into_iter().filter(|edit| !edit.is_empty()) {
+            let encoded = self.encode_auto_increment_edit(&edit)?;
+            self.splice(edit.record_range, &encoded)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn append_row(&mut self, layout: RowLayout<'_>, values: &[Value]) -> Result<()> {
@@ -199,7 +288,7 @@ impl<'a> Candidate<'a> {
     }
 
     fn discard_deferred_auto_increment(&mut self) {
-        let _ = self.deferred_auto_increment.take();
+        let _ = std::mem::take(&mut self.deferred_auto_increments);
     }
 
     pub(crate) fn finish(mut self) -> Result<StorageState> {

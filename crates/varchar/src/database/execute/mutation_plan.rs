@@ -27,24 +27,25 @@ pub(super) struct MutationPlan {
 
 impl MutationPlan {
     pub(super) fn update(
-        candidate: &Candidate<'_>,
+        candidate: &mut Candidate<'_>,
         scan: &ScanPlan<'_>,
         limits: &Limits,
         assignments: &mut [(usize, Value)],
+        direct_auto_increment: Option<i64>,
     ) -> Result<Self> {
-        let sequence_working_bytes = candidate.deferred_auto_increment_working_bytes();
+        let initial_sequence_working_bytes = candidate.deferred_auto_increment_working_bytes();
         let blob = candidate.source();
         let (mut rows, direct_affected, mut budget) =
-            freeze_direct_targets(blob, scan, limits, sequence_working_bytes)?;
+            freeze_direct_targets(blob, scan, limits, initial_sequence_working_bytes)?;
         sort_and_validate_ranges(&mut rows)?;
-        let sequence_edit_lengths = sequence_edit_lengths_for_targets(rows.len(), || {
-            candidate.deferred_auto_increment_lengths()
-        })?;
         if rows.is_empty() {
             return Ok(Self {
                 rows,
                 direct_affected,
             });
+        }
+        if let Some(last) = direct_auto_increment {
+            defer_auto_increment(candidate, scan.row_layout().table, last, &mut budget)?;
         }
 
         let layout = scan.validated_row_layout();
@@ -94,6 +95,8 @@ impl MutationPlan {
         }
 
         sort_and_validate_ranges(&mut rows)?;
+        defer_induced_auto_increments(candidate, blob, &rows, &mut budget)?;
+        let sequence_edit_lengths = candidate.deferred_auto_increment_lengths()?;
         encode_and_check_updates(
             candidate.catalog(),
             blob,
@@ -102,7 +105,9 @@ impl MutationPlan {
             sequence_edit_lengths,
             &mut budget,
         )?;
-        if let Some((_, sequence_replacement_bytes)) = sequence_edit_lengths {
+        if let Some(sequence_replacement_bytes) =
+            candidate.deferred_auto_increment_max_replacement_bytes()?
+        {
             budget.check_transient(sequence_replacement_bytes)?;
         }
 
@@ -255,6 +260,7 @@ fn row_record_for_identity<'a>(
     Ok(row_record)
 }
 
+#[cfg(test)]
 fn sequence_edit_lengths_for_targets(
     target_count: usize,
     lengths: impl FnOnce() -> Result<Option<(usize, usize)>>,
@@ -333,6 +339,45 @@ fn measure_and_check_update_database_size<'brand>(
     }
     check_limit(projected, limit, Resource::DatabaseBytes)?;
     Ok((measurements, measurement_working_bytes))
+}
+
+fn defer_auto_increment(
+    candidate: &mut Candidate<'_>,
+    table: &str,
+    last: i64,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let reservation_bytes = candidate.deferred_auto_increment_reservation_bytes()?;
+    budget.charge(reservation_bytes)?;
+    if let Err(error) = candidate.defer_auto_increment(table, last) {
+        budget.release(reservation_bytes);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn defer_induced_auto_increments(
+    candidate: &mut Candidate<'_>,
+    blob: &str,
+    rows: &[FrozenRow],
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    for row in rows {
+        if !row.needs_update() {
+            continue;
+        }
+        let record = row_record_for_identity(blob, row.identity())?;
+        let Some(auto_increment) = candidate.catalog().auto_increment(record.table()) else {
+            continue;
+        };
+        let Some(Value::Integer(value)) = row.effective_value(auto_increment.column) else {
+            continue;
+        };
+        if *value > auto_increment.last {
+            defer_auto_increment(candidate, record.table(), *value, budget)?;
+        }
+    }
+    Ok(())
 }
 
 fn encode_and_check_updates(
