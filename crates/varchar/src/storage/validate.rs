@@ -5,7 +5,7 @@ mod metadata;
 use super::budget::WorkingBudget;
 use super::decode::{
     decode_auto_increment_record, decode_default_record, decode_foreign_key_record,
-    decode_primary_key_record, decode_schema_record, validate_row_record,
+    decode_primary_key_record, decode_schema_record, decode_unique_record, validate_row_record,
 };
 use super::format::{FormatVersion, RecordKind, corrupt, decode_header, records};
 use super::{Catalog, integrity};
@@ -82,6 +82,12 @@ fn validate_with_mode(
                 reject_after_rows(saw_row, record.range.start, "DEFAULT metadata")?;
                 let default = decode_default_record(record.text, record.range.start)?;
                 metadata.apply_default(default, record.range.start, mode, &mut budget)?;
+            }
+            RecordKind::Unique => {
+                reject_extension_in_v2(version, record.range.start)?;
+                reject_after_rows(saw_row, record.range.start, "UNIQUE metadata")?;
+                let unique = decode_unique_record(record.text, record.range.start)?;
+                metadata.apply_unique(unique, record.range.start, mode, &mut budget)?;
             }
             RecordKind::Row => {
                 if !saw_row {

@@ -188,9 +188,100 @@ fn default_is_reserved_and_cannot_be_used_as_an_identifier() {
 }
 
 #[test]
+fn parses_inline_and_table_unique_declarations_in_source_order() {
+    let statement = create_table(
+        "CREATE TABLE accounts (email TEXT UNIQUE, UNIQUE (handle), handle TEXT UNIQUE)",
+    );
+    assert_eq!(
+        statement.elements,
+        vec![
+            CreateElement::Column(ColumnDef {
+                name: "email".to_owned(),
+                data_type: DataType::Text,
+                modifiers: vec![ColumnModifier::Unique],
+            }),
+            CreateElement::Constraint(TableConstraint::Unique("handle".to_owned())),
+            CreateElement::Column(ColumnDef {
+                name: "handle".to_owned(),
+                data_type: DataType::Text,
+                modifiers: vec![ColumnModifier::Unique],
+            }),
+        ]
+    );
+}
+
+#[test]
+fn unique_is_reserved_and_cannot_be_used_as_an_identifier() {
+    for sql in [
+        "CREATE TABLE unique (id INTEGER)",
+        "CREATE TABLE t (unique INTEGER)",
+        "INSERT INTO unique (id) VALUES (1)",
+        "SELECT unique FROM t",
+        "SELECT * FROM unique",
+        "SELECT * FROM t WHERE unique = 1",
+        "UPDATE unique SET id = 1",
+        "UPDATE t SET unique = 1",
+        "DELETE FROM unique",
+    ] {
+        let span_start = sql.find("unique").expect("fixture contains error marker");
+        match parse(sql) {
+            Err(Error::Parse {
+                message,
+                span_start: actual_start,
+                span_end,
+            }) => {
+                assert_eq!(
+                    message, "reserved keyword `UNIQUE` cannot be used as an identifier",
+                    "message for {sql:?}"
+                );
+                assert_eq!(
+                    (actual_start, span_end),
+                    (span_start, span_start + "unique".len()),
+                    "span for {sql:?}"
+                );
+            }
+            other => panic!("expected exact Parse error for {sql:?}, got {other:?}"),
+        }
+    }
+
+    // The keyword still parses where the grammar expects it.
+    let statement = create_table("CREATE TABLE accounts (value TEXT UNIQUE, UNIQUE (value))");
+    let CreateElement::Column(value) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(value.modifiers, vec![ColumnModifier::Unique]);
+    assert_eq!(
+        statement.elements[1],
+        CreateElement::Constraint(TableConstraint::Unique("value".to_owned()))
+    );
+}
+
+#[test]
+fn preserves_duplicate_unique_declarations_for_resolution() {
+    let statement = create_table(
+        "CREATE TABLE accounts (email TEXT UNIQUE UNIQUE, handle TEXT, UNIQUE (handle), UNIQUE (handle))",
+    );
+    let CreateElement::Column(email) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        email.modifiers,
+        vec![ColumnModifier::Unique, ColumnModifier::Unique]
+    );
+    assert_eq!(
+        &statement.elements[2..],
+        [
+            CreateElement::Constraint(TableConstraint::Unique("handle".to_owned())),
+            CreateElement::Constraint(TableConstraint::Unique("handle".to_owned())),
+        ]
+    );
+}
+
+#[test]
 fn rejects_composite_key_constraints_explicitly() {
     for sql in [
         "CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b))",
+        "CREATE TABLE t (a INTEGER, b INTEGER, UNIQUE (a, b))",
         "CREATE TABLE t (a INTEGER, b INTEGER, FOREIGN KEY (a, b) REFERENCES p(a))",
         "CREATE TABLE t (a INTEGER REFERENCES p(a, b))",
     ] {

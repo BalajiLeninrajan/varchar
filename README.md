@@ -61,12 +61,13 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 
 Column types are `TEXT`, signed 64-bit `INTEGER`, and `BOOLEAN`. Columns are nullable unless declared `NOT NULL`; `NULL` is represented as its own typed value. A column may declare one literal `DEFAULT`, including an explicit `DEFAULT NULL`.
 
-Varchar supports one single-column primary key per table and single-column foreign keys. Constraints may be written inline:
+Varchar supports one single-column primary key per table, any number of single-column UNIQUE declarations recorded in the schema, and single-column foreign keys. Constraints may be written inline:
 
 ```sql
 CREATE TABLE users (
   id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  email TEXT UNIQUE
 );
 
 CREATE TABLE posts (
@@ -76,7 +77,7 @@ CREATE TABLE posts (
 );
 ```
 
-The equivalent table-level forms are `PRIMARY KEY (id)` and `FOREIGN KEY (user_id) REFERENCES users(id)`. Composite keys are not supported. A primary key implies `NOT NULL` and is unique across the table. A foreign key must reference an existing primary-key column with the same type. Foreign-key columns remain nullable unless they also use `NOT NULL`; a `NULL` value does not need a matching parent row.
+The equivalent table-level forms include `PRIMARY KEY (id)`, `UNIQUE (email)`, and `FOREIGN KEY (user_id) REFERENCES users(id)`. Composite key and UNIQUE constraints are not supported. A primary key implies `NOT NULL` and is unique across the table; one UNIQUE declaration on that same column is accepted and normalized away. A foreign key must reference an existing primary-key column with the same type; UNIQUE columns are not foreign-key targets. Foreign-key columns remain nullable unless they also use `NOT NULL`; a `NULL` value does not need a matching parent row.
 
 Key constraints are checked when data is inserted or updated and when a persisted database is loaded. Parent-key changes and parent-row deletions use `RESTRICT`: they fail while a child row contains that key. Like every failed mutation, a key violation leaves the authoritative string unchanged.
 
@@ -165,7 +166,7 @@ V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~A|users|id|I1;~R|users|I1|TA
 
 Schema and row records carry explicit tags. Key constraints are metadata records before the row records: `~P|users|id;` declares a primary key, while `~F|posts|user_id|users|id;` declares a foreign key. An auto-incrementing key has exactly one record such as `~A|users|id|I42;`, placed after that table's primary- and foreign-key metadata. Its nonnegative high-water mark must cover every stored key for the generated column.
 
-V2 remains the canonical format for databases that use only legacy metadata. A first nonredundant V3 feature such as DEFAULT atomically changes the header to `V3;` and inserts records such as `~D|jobs|state|Tqueued;`; explicit `DEFAULT NULL` is encoded as `N`. Per table, DEFAULT records follow optional auto-increment metadata in increasing column order. Loading accepts V2 and V3 without rewriting either one, V3 never downgrades during later mutations, and a V3-only record under a V2 header is corruption. V1 blobs remain unsupported rather than being migrated implicitly.
+V2 remains the canonical format for databases that use only legacy metadata. A first nonredundant V3 feature such as DEFAULT or UNIQUE atomically changes the header to `V3;`. DEFAULT records such as `~D|jobs|state|Tqueued;` use canonical typed cells, with explicit `DEFAULT NULL` encoded as `N`; UNIQUE records use `~U|users|email;`. Per table, DEFAULT records follow optional auto-increment metadata in increasing column order, followed by UNIQUE records in increasing column order. Loading accepts V2 and V3 without rewriting either one, V3 never downgrades during later mutations, and a V3-only record under a V2 header is corruption. Redundant primary-key UNIQUE declarations emit no `~U` record and do not require V3. V1 blobs remain unsupported rather than being migrated implicitly.
 
 Cell prefixes distinguish text, integers, booleans, and nulls, while structural and line-breaking characters are escaped reversibly. Loading validates the complete header, schemas, constraint metadata, key integrity, escapes, row widths, types, and canonical encoding; malformed records are never silently skipped.
 

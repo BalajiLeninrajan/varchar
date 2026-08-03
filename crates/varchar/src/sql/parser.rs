@@ -371,6 +371,7 @@ fn is_reserved(word: &str) -> bool {
             | "ALTER"
             | "DROP"
             | "DEFAULT"
+            | "UNIQUE"
     )
 }
 

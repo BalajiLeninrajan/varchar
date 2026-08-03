@@ -4,7 +4,7 @@ use super::super::TableSchema;
 use super::super::budget::{WorkingBudget, WorkingStringSet};
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
-    complete_record_body, corrupt, is_valid_identifier,
+    UNIQUE_PREFIX, complete_record_body, corrupt, is_valid_identifier,
 };
 use super::decode_integer;
 use crate::{DataType, Result, SchemaColumn};
@@ -34,6 +34,11 @@ pub(in crate::storage) struct DefaultMetadata<'a> {
     pub(in crate::storage) column: &'a str,
     pub(in crate::storage) encoded_value: &'a str,
     pub(in crate::storage) value_offset: usize,
+}
+
+pub(in crate::storage) struct UniqueMetadata<'a> {
+    pub(in crate::storage) table: &'a str,
+    pub(in crate::storage) column: &'a str,
 }
 
 pub(in crate::storage) fn decode_schema_record(
@@ -115,6 +120,7 @@ pub(in crate::storage) fn decode_schema_record(
         name: table_name,
         columns,
         primary_key: None,
+        unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
     })
 }
@@ -206,4 +212,18 @@ pub(in crate::storage) fn decode_default_record(
         encoded_value,
         value_offset,
     })
+}
+
+pub(in crate::storage) fn decode_unique_record(
+    record: &str,
+    offset: usize,
+) -> Result<UniqueMetadata<'_>> {
+    let body = complete_record_body(record, UNIQUE_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
+        return Err(corrupt(offset, "malformed UNIQUE metadata"));
+    }
+    Ok(UniqueMetadata { table, column })
 }

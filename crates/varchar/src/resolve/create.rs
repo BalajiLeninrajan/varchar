@@ -3,12 +3,14 @@
 mod auto_increment;
 mod foreign_key;
 mod primary_key;
+mod unique;
 
 use std::collections::BTreeMap;
 
 use auto_increment::{declare_auto_increment, validate_auto_increment};
 use foreign_key::{declare_foreign_key, validate_foreign_key};
 use primary_key::declare_primary_key;
+use unique::declare_unique;
 
 use crate::sql::{ColumnModifier, CreateElement, CreateTable, TableConstraint};
 use crate::storage::{Catalog, TableSchema};
@@ -57,12 +59,14 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
     }
 
     let mut primary_key = None;
+    let mut unique_columns = Vec::new();
     let mut foreign_keys = Vec::new();
     let mut foreign_key_orders = Vec::new();
     let mut auto_increment = None;
     let mut auto_increment_order = None;
     let mut default_orders = vec![None; columns.len()];
     let mut saw_not_null = vec![false; columns.len()];
+    let mut saw_unique = vec![false; columns.len()];
     let mut saw_foreign_key = vec![false; columns.len()];
     let mut column_index = 0;
     let mut declaration_order = 0;
@@ -102,6 +106,23 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                                 index,
                                 &mut primary_key,
                                 &mut columns,
+                            ) {
+                                validate_defaults_before(
+                                    &table,
+                                    &columns,
+                                    auto_increment,
+                                    &default_orders,
+                                    order,
+                                )?;
+                                return Err(error);
+                            }
+                        }
+                        ColumnModifier::Unique => {
+                            if let Err(error) = declare_unique(
+                                &column.name,
+                                index,
+                                &mut saw_unique,
+                                &mut unique_columns,
                             ) {
                                 validate_defaults_before(
                                     &table,
@@ -212,6 +233,35 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
                             return Err(error);
                         }
                     }
+                    TableConstraint::Unique(name) => {
+                        let index =
+                            match local_constraint_column(&column_indices, &table, &name, "UNIQUE")
+                            {
+                                Ok(index) => index,
+                                Err(error) => {
+                                    validate_defaults_before(
+                                        &table,
+                                        &columns,
+                                        auto_increment,
+                                        &default_orders,
+                                        order,
+                                    )?;
+                                    return Err(error);
+                                }
+                            };
+                        if let Err(error) =
+                            declare_unique(&name, index, &mut saw_unique, &mut unique_columns)
+                        {
+                            validate_defaults_before(
+                                &table,
+                                &columns,
+                                auto_increment,
+                                &default_orders,
+                                order,
+                            )?;
+                            return Err(error);
+                        }
+                    }
                     TableConstraint::ForeignKey { column, reference } => {
                         let index = match local_constraint_column(
                             &column_indices,
@@ -256,10 +306,14 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
         }
     }
 
+    unique_columns.retain(|column| Some(*column) != primary_key);
+    unique_columns.sort_unstable();
+
     let mut schema = TableSchema {
         name: table,
         columns,
         primary_key,
+        unique_columns,
         foreign_keys: Vec::new(),
     };
     let mut next_default = 0;

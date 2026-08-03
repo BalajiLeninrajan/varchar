@@ -12,6 +12,7 @@ pub(super) const PRIMARY_KEY_PREFIX: &str = "~P|";
 pub(super) const FOREIGN_KEY_PREFIX: &str = "~F|";
 pub(super) const AUTO_INCREMENT_PREFIX: &str = "~A|";
 pub(super) const DEFAULT_PREFIX: &str = "~D|";
+pub(super) const UNIQUE_PREFIX: &str = "~U|";
 pub(crate) const ROW_PREFIX: &str = "~R|";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +51,7 @@ pub(super) enum RecordKind {
     ForeignKey,
     AutoIncrement,
     Default,
+    Unique,
     Row,
     Unknown,
 }
@@ -116,6 +118,8 @@ impl<'a> Iterator for RecordIter<'a> {
             RecordKind::AutoIncrement
         } else if text.starts_with(DEFAULT_PREFIX) {
             RecordKind::Default
+        } else if text.starts_with(UNIQUE_PREFIX) {
+            RecordKind::Unique
         } else if text.starts_with(ROW_PREFIX) {
             RecordKind::Row
         } else {

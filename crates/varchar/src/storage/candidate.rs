@@ -51,14 +51,15 @@ impl<'a> Candidate<'a> {
         schema: &TableSchema,
         auto_increment: Option<usize>,
     ) -> Result<()> {
-        let requires_v3 = schema.columns.iter().any(|column| column.default.is_some());
+        let requires_v3 = schema.columns.iter().any(|column| column.default.is_some())
+            || !schema.unique_columns.is_empty();
         if requires_v3 && self.format == FormatVersion::V2 {
             self.splice(0..V2_HEADER.len(), V3_HEADER)?;
             self.format = FormatVersion::V3;
         }
         if requires_v3 && !self.format.supports_extensions() {
             return Err(Error::Schema(String::from(
-                "DEFAULT metadata requires storage format V3",
+                "extended schema metadata requires storage format V3",
             )));
         }
         let encoded = encode_table_metadata(schema, auto_increment.map(|column| (column, 0)))?;

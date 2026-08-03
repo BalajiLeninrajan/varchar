@@ -70,11 +70,43 @@ fn wide_foreign_key_defaults_are_validated_once() {
 }
 
 #[test]
+fn create_schema_normalizes_single_column_unique_metadata() {
+    let resolved = create_schema(
+        &Catalog::empty(),
+        create_table(
+            "CREATE TABLE accounts (id INTEGER UNIQUE PRIMARY KEY, email TEXT UNIQUE, handle TEXT, UNIQUE (handle))",
+        ),
+    )
+    .expect("UNIQUE declarations resolve");
+    assert_eq!(resolved.schema.primary_key, Some(0));
+    assert_eq!(resolved.schema.unique_columns, vec![1, 2]);
+}
+
+#[test]
+fn duplicate_unique_declarations_are_schema_errors_even_on_primary_keys() {
+    for sql in [
+        "CREATE TABLE t (value TEXT UNIQUE UNIQUE)",
+        "CREATE TABLE t (value TEXT UNIQUE, UNIQUE (value))",
+        "CREATE TABLE t (value TEXT PRIMARY KEY UNIQUE, UNIQUE (value))",
+    ] {
+        assert!(matches!(
+            create_schema(&Catalog::empty(), create_table(sql)),
+            Err(Error::Schema(ref message))
+                if message == "duplicate UNIQUE declaration for column \"value\""
+        ));
+    }
+}
+
+#[test]
 fn create_schema_owns_table_constraint_policy() {
     for (sql, expected) in [
         (
             "CREATE TABLE items (id INTEGER, PRIMARY KEY (missing))",
             "PRIMARY KEY references unknown column \"missing\" in table \"items\"",
+        ),
+        (
+            "CREATE TABLE items (id INTEGER, UNIQUE (missing))",
+            "UNIQUE references unknown column \"missing\" in table \"items\"",
         ),
         (
             "CREATE TABLE items (id INTEGER, FOREIGN KEY (missing) REFERENCES parents(id))",
@@ -140,6 +172,8 @@ fn default_diagnostics_follow_source_order() {
         "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER NOT NULL NOT NULL)",
         "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER PRIMARY KEY PRIMARY KEY)",
         "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER REFERENCES parents(id) REFERENCES parents(id))",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong' UNIQUE UNIQUE)",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', UNIQUE (missing))",
         "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER, PRIMARY KEY (missing))",
         "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER, FOREIGN KEY (missing) REFERENCES parents(id))",
     ] {
@@ -179,6 +213,22 @@ fn default_diagnostics_follow_source_order() {
         Err(Error::Schema(ref message))
             if message == "auto-increment column \"items\".\"id\" must be its INTEGER primary key"
     ));
+
+    for (sql, expected) in [
+        (
+            "CREATE TABLE items (value INTEGER UNIQUE UNIQUE DEFAULT 'wrong')",
+            "duplicate UNIQUE declaration for column \"value\"",
+        ),
+        (
+            "CREATE TABLE items (UNIQUE (missing), value INTEGER DEFAULT 'wrong')",
+            "UNIQUE references unknown column \"missing\" in table \"items\"",
+        ),
+    ] {
+        assert!(matches!(
+            create_schema(&Catalog::empty(), create_table(sql)),
+            Err(Error::Schema(ref message)) if message == expected
+        ));
+    }
 
     let activated_auto_increment = create_table(
         "CREATE TABLE items (id INTEGER PRIMARY KEY DEFAULT 1 REFERENCES parents(id) AUTO_INCREMENT, other INTEGER REFERENCES missing(id))",
