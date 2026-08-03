@@ -2,28 +2,32 @@
 
 use fancy_regex::Regex;
 
+use crate::expression::Program;
 use crate::output::SelectExplanation;
 use crate::resolve::{ColumnLocation, ResolvedJoin};
 use crate::storage::TableSchema;
 use crate::{Result, SchemaColumn};
 
 /// An owned mutation scan that remains valid while a candidate is assembled.
-pub(crate) struct ScanPlan {
+pub(crate) struct ScanPlan<'statement> {
     pub(super) regex: Regex,
     pub(super) table: String,
     pub(super) schema: Vec<SchemaColumn>,
+    pub(super) local_residual: Option<Program<'statement>>,
 }
 
 /// A read-only plan borrowing the catalog schemas used by one `SELECT`.
-pub(crate) struct SelectPlan<'catalog> {
+pub(crate) struct SelectPlan<'catalog, 'statement> {
     pub(super) pattern: String,
     pub(super) regex: Regex,
     pub(super) sources: Vec<&'catalog TableSchema>,
     pub(super) projection: Vec<ColumnLocation>,
     pub(super) joins: Vec<ResolvedJoin>,
+    pub(super) local_residuals: Vec<Option<Program<'statement>>>,
+    pub(super) cross_source_residual: Option<Program<'statement>>,
 }
 
-impl SelectPlan<'_> {
+impl SelectPlan<'_, '_> {
     pub(crate) fn into_explanation(
         self,
         max_query_output_bytes: usize,

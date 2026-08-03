@@ -9,16 +9,32 @@ use super::like::LikeAtom;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program<'statement> {
     nodes: Vec<ProgramNode<'statement>>,
+    logical_nodes: usize,
 }
 
 impl<'statement> Program<'statement> {
     pub(crate) fn new(nodes: Vec<ProgramNode<'statement>>) -> Self {
         debug_assert!(valid_program(&nodes));
-        Self { nodes }
+        let logical_nodes = nodes
+            .iter()
+            .filter(|node| !matches!(node, ProgramNode::Predicate(_)))
+            .count();
+        Self {
+            nodes,
+            logical_nodes,
+        }
+    }
+
+    pub(crate) fn nodes(&self) -> &[ProgramNode<'statement>] {
+        &self.nodes
     }
 
     pub(crate) fn into_nodes(self) -> Vec<ProgramNode<'statement>> {
         self.nodes
+    }
+
+    pub(super) const fn logical_node_count(&self) -> usize {
+        self.logical_nodes
     }
 }
 

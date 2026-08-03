@@ -55,7 +55,10 @@ impl Database {
         check_limit(sql.len(), self.limits.max_sql_bytes, Resource::SqlBytes)
     }
 
-    fn compile_select_ast(&self, statement: &Select) -> Result<SelectPlan<'_>> {
+    fn compile_select_ast<'statement>(
+        &self,
+        statement: &'statement Select,
+    ) -> Result<SelectPlan<'_, 'statement>> {
         query::compile_select(self.storage.catalog(), statement, &self.limits)
     }
 }

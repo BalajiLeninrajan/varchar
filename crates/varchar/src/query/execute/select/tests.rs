@@ -1,4 +1,6 @@
-use super::{ByteBudget, retained_row_charge};
+use super::{ByteBudget, residual_evaluator, retained_row_charge};
+use crate::expression::{Evaluator, Predicate, Program, ProgramNode};
+use crate::resolve::ColumnLocation;
 use crate::storage::row_record;
 use crate::value::Value;
 use crate::{Error, Resource};
@@ -49,4 +51,53 @@ fn retained_join_rows_charge_four_vector_descriptors() {
         retained_row_charge(&row, 2, &budget).expect("charge fits"),
         expected
     );
+}
+
+#[test]
+fn one_evaluator_stack_is_charged_for_all_join_residuals() {
+    let predicate = || {
+        ProgramNode::Predicate(Predicate::IsNull {
+            column: ColumnLocation {
+                source: 0,
+                column: 0,
+            },
+        })
+    };
+    let small = Program::new(vec![
+        ProgramNode::And { children: 2 },
+        predicate(),
+        predicate(),
+    ]);
+    let large = Program::new(vec![
+        ProgramNode::And { children: 2 },
+        ProgramNode::And { children: 2 },
+        predicate(),
+        predicate(),
+        predicate(),
+    ]);
+    let cross = Program::new(vec![
+        ProgramNode::And { children: 2 },
+        predicate(),
+        predicate(),
+    ]);
+    let expected = Evaluator::working_bytes(&large).expect("stack size fits");
+    let local = [Some(small), Some(large)];
+
+    let mut exact = ByteBudget::new(expected, Resource::QueryWorkingBytes);
+    assert!(
+        residual_evaluator(&local, Some(&cross), &mut exact)
+            .expect("largest reusable evaluator fits")
+            .is_some()
+    );
+    assert_eq!(exact.used, expected);
+
+    let mut one_under = ByteBudget::new(expected - 1, Resource::QueryWorkingBytes);
+    assert!(matches!(
+        residual_evaluator(&local, Some(&cross), &mut one_under),
+        Err(Error::ResourceLimit {
+            resource: Resource::QueryWorkingBytes,
+            limit,
+        }) if limit == expected - 1
+    ));
+    assert_eq!(one_under.used, 0);
 }

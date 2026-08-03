@@ -1,6 +1,7 @@
 //! Bounded selection, joins, explanations, and result materialization.
 
 use super::map_regex_runtime;
+use crate::expression::{Evaluator, Program};
 use crate::limits::{Limits, check_limit};
 use crate::output::{ColumnOrigin, ResultColumn, RowSet, SelectExplanation};
 use crate::resolve::ResolvedJoinCondition;
@@ -10,7 +11,7 @@ use crate::{Error, Resource, Result};
 
 use super::super::SelectPlan;
 
-pub(crate) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
+pub(crate) fn select(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result<RowSet> {
     if plan.sources.len() == 1 {
         select_single_table(blob, plan, limits)
     } else {
@@ -19,7 +20,7 @@ pub(crate) fn select(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Resu
 }
 
 pub(crate) fn explain(
-    plan: SelectPlan<'_>,
+    plan: SelectPlan<'_, '_>,
     max_query_output_bytes: usize,
 ) -> Result<SelectExplanation> {
     let mut output_budget = ByteBudget::new(max_query_output_bytes, Resource::QueryOutputBytes);
@@ -45,7 +46,7 @@ pub(crate) fn explain(
     Ok(SelectExplanation::new(plan.pattern, sources, columns))
 }
 
-fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
+fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result<RowSet> {
     let source = plan
         .sources
         .first()
@@ -55,11 +56,19 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
         ByteBudget::new(limits.max_query_output_bytes, Resource::QueryOutputBytes);
     output_budget.charge(std::mem::size_of::<RowSet>())?;
     let columns = materialize_result_columns(plan, &mut output_budget)?;
-    let working_budget =
+    let mut working_budget =
         ByteBudget::new(limits.max_query_working_bytes, Resource::QueryWorkingBytes);
 
     let mut rows = Vec::new();
     let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
+    let local_residual = plan.local_residuals.first().ok_or(Error::Capacity {
+        operation: "reading a single-table residual program",
+    })?;
+    let mut evaluator = residual_evaluator(
+        std::slice::from_ref(local_residual),
+        None,
+        &mut working_budget,
+    )?;
 
     for matched in plan.regex.find_iter(blob) {
         let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
@@ -71,6 +80,11 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
         )?)?;
 
         let decoded = storage::decode_row(matched.as_str(), layout)?;
+        if let (Some(program), Some(evaluator)) = (local_residual, &mut evaluator)
+            && !evaluator.evaluate_where_local(program, 0, &decoded)?
+        {
+            continue;
+        }
         let payload_bytes = plan
             .projection
             .iter()
@@ -99,7 +113,7 @@ fn select_single_table(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Re
     Ok(RowSet::new(columns, rows))
 }
 
-fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<RowSet> {
+fn select_join(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result<RowSet> {
     let mut output_budget =
         ByteBudget::new(limits.max_query_output_bytes, Resource::QueryOutputBytes);
     output_budget.charge(std::mem::size_of::<RowSet>())?;
@@ -119,26 +133,6 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
         .map_err(|_| allocation_error("reserving JOIN source buckets"))?;
     source_rows.resize_with(plan.sources.len(), Vec::new);
 
-    for matched in plan.regex.find_iter(blob) {
-        let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
-        let row_record = storage::row_record(matched.as_str(), matched.start())?;
-        let table = row_record.table();
-        let source_index = plan
-            .sources
-            .iter()
-            .position(|source| source.name == table)
-            .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
-        let source = plan.sources[source_index];
-        let retained_row_charge =
-            retained_row_charge(&row_record, source.columns.len(), &working_budget)?;
-        working_budget.charge(retained_row_charge)?;
-        let decoded = storage::decode_row(matched.as_str(), source.row_layout())?;
-        source_rows[source_index]
-            .try_reserve(1)
-            .map_err(|_| allocation_error("retaining decoded JOIN rows"))?;
-        source_rows[source_index].push(decoded);
-    }
-
     let chosen_slots = plan
         .sources
         .len()
@@ -149,12 +143,65 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
     chosen
         .try_reserve_exact(plan.sources.len())
         .map_err(|_| allocation_error("reserving the chosen JOIN row stack"))?;
+
+    let mut evaluator = residual_evaluator(
+        &plan.local_residuals,
+        plan.cross_source_residual.as_ref(),
+        &mut working_budget,
+    )?;
+
+    for matched in plan.regex.find_iter(blob) {
+        let matched = matched.map_err(|error| map_regex_runtime(error, limits))?;
+        let row_record = storage::row_record(matched.as_str(), matched.start())?;
+        let table = row_record.table();
+        let source_index = plan
+            .sources
+            .iter()
+            .position(|source| source.name == table)
+            .ok_or_else(|| Error::RegexRuntime(format!("matched unexpected table {table:?}")))?;
+        let source = plan.sources[source_index];
+        working_budget.check_transient(decoded_row_charge(
+            &row_record,
+            source.columns.len(),
+            &working_budget,
+        )?)?;
+        let decoded = storage::decode_row(matched.as_str(), source.row_layout())?;
+        let residual = plan
+            .local_residuals
+            .get(source_index)
+            .ok_or(Error::Capacity {
+                operation: "reading a JOIN source-local residual program",
+            })?;
+        if let Some(program) = residual {
+            let evaluator = evaluator.as_mut().ok_or(Error::Capacity {
+                operation: "reading the reusable JOIN residual evaluator",
+            })?;
+            if !evaluator.evaluate_where_local(program, source_index, &decoded)? {
+                continue;
+            }
+        }
+
+        let retained_row_charge =
+            retained_row_charge(&row_record, source.columns.len(), &working_budget)?;
+        working_budget.charge(retained_row_charge)?;
+        source_rows[source_index]
+            .try_reserve(1)
+            .map_err(|_| allocation_error("retaining decoded JOIN rows"))?;
+        source_rows[source_index].push(decoded);
+    }
+
     let mut rows = Vec::new();
     let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
+    let residual_evaluator = if plan.cross_source_residual.is_some() {
+        evaluator
+    } else {
+        None
+    };
     let mut output = JoinOutput {
         plan,
         rows: &mut rows,
         output_budget: &mut output_budget,
+        residual_evaluator,
         join_steps: 0,
         row_structure,
         limits,
@@ -164,10 +211,11 @@ fn select_join(blob: &str, plan: &SelectPlan<'_>, limits: &Limits) -> Result<Row
     Ok(RowSet::new(columns, rows))
 }
 
-struct JoinOutput<'a, 'catalog> {
-    plan: &'a SelectPlan<'catalog>,
+struct JoinOutput<'a, 'catalog, 'statement> {
+    plan: &'a SelectPlan<'catalog, 'statement>,
     rows: &'a mut Vec<Vec<Value>>,
     output_budget: &'a mut ByteBudget,
+    residual_evaluator: Option<Evaluator>,
     join_steps: usize,
     row_structure: usize,
     limits: &'a Limits,
@@ -177,9 +225,16 @@ fn emit_join_rows<'rows>(
     source: usize,
     chosen: &mut Vec<&'rows [Value]>,
     source_rows: &'rows [Vec<Vec<Value>>],
-    output: &mut JoinOutput<'_, '_>,
+    output: &mut JoinOutput<'_, '_, '_>,
 ) -> Result<()> {
     if source == source_rows.len() {
+        if let (Some(program), Some(evaluator)) = (
+            &output.plan.cross_source_residual,
+            &mut output.residual_evaluator,
+        ) && !evaluator.evaluate_where(program, chosen)?
+        {
+            return Ok(());
+        }
         let payload = output
             .plan
             .projection
@@ -263,8 +318,32 @@ fn join_conditions_match(
     Ok(true)
 }
 
+fn residual_evaluator(
+    local_residuals: &[Option<Program<'_>>],
+    cross_source_residual: Option<&Program<'_>>,
+    working_budget: &mut ByteBudget,
+) -> Result<Option<Evaluator>> {
+    let mut largest = None;
+    for program in local_residuals
+        .iter()
+        .filter_map(Option::as_ref)
+        .chain(cross_source_residual)
+    {
+        let bytes = Evaluator::working_bytes(program)?;
+        if largest.is_none_or(|(_, largest_bytes)| bytes > largest_bytes) {
+            largest = Some((program, bytes));
+        }
+    }
+
+    let Some((program, bytes)) = largest else {
+        return Ok(None);
+    };
+    working_budget.charge(bytes)?;
+    Evaluator::new(program).map(Some)
+}
+
 fn materialize_result_columns(
-    plan: &SelectPlan<'_>,
+    plan: &SelectPlan<'_, '_>,
     output_budget: &mut ByteBudget,
 ) -> Result<Vec<ResultColumn>> {
     let column_slots = plan
