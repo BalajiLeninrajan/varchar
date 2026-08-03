@@ -46,10 +46,26 @@ pub(crate) enum ColumnModifier {
     Check(Expression),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ForeignKeyDeleteAction {
+    #[default]
+    Restrict,
+    Cascade,
+    SetNull,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ForeignKeyUpdateAction {
+    #[default]
+    Restrict,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ForeignKeyReference {
     pub(crate) table: String,
     pub(crate) column: String,
+    pub(crate) on_delete: ForeignKeyDeleteAction,
+    pub(crate) on_update: ForeignKeyUpdateAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

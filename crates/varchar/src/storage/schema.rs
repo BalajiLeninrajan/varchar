@@ -115,6 +115,40 @@ impl TableSchema {
     }
 }
 
+/// The action taken when a referenced row is deleted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ForeignKeyDeleteAction {
+    #[default]
+    Restrict,
+    Cascade,
+    SetNull,
+}
+
+impl ForeignKeyDeleteAction {
+    pub(super) const fn storage_tag(self) -> char {
+        match self {
+            Self::Restrict => 'R',
+            Self::Cascade => 'C',
+            Self::SetNull => 'N',
+        }
+    }
+}
+
+/// The action taken when a referenced key is updated.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ForeignKeyUpdateAction {
+    #[default]
+    Restrict,
+}
+
+impl ForeignKeyUpdateAction {
+    pub(super) const fn storage_tag(self) -> char {
+        match self {
+            Self::Restrict => 'R',
+        }
+    }
+}
+
 /// A single-column foreign key reconstructed from schema metadata.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ForeignKey {
@@ -122,6 +156,8 @@ pub(crate) struct ForeignKey {
     pub(crate) column: usize,
     pub(crate) referenced_table: String,
     pub(crate) referenced_column: String,
+    pub(crate) on_delete: ForeignKeyDeleteAction,
+    pub(crate) on_update: ForeignKeyUpdateAction,
 }
 
 pub(crate) fn validate_row_layout<'layout>(

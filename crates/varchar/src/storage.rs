@@ -19,8 +19,8 @@ pub(crate) use encode::{
 };
 pub(crate) use format::{ROW_PREFIX, encode_text_into};
 pub(crate) use schema::{
-    ForeignKey, OwnedValidatedRowLayout, RowLayout, TableSchema, ValidatedRowLayout,
-    ValidatedTableSchema, validate_row_layout,
+    ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, OwnedValidatedRowLayout, RowLayout,
+    TableSchema, ValidatedRowLayout, ValidatedTableSchema, validate_row_layout,
 };
 #[cfg(test)]
 pub(crate) use schema::{reset_row_layout_validations, row_layout_validations};

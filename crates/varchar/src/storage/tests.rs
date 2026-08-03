@@ -3,7 +3,7 @@ mod state;
 use super::budget::{reset_working_string_comparisons, working_string_comparisons};
 use super::decode::{blob_row_scans, reset_blob_row_scans};
 use super::validate::validate_and_catalog;
-use super::{StorageState, TableSchema};
+use super::{ForeignKeyDeleteAction, ForeignKeyUpdateAction, StorageState, TableSchema};
 use crate::limits::storage_working_limit;
 use crate::{DataType, Database, Error, Limits, Resource, SchemaColumn, Value};
 
@@ -252,6 +252,84 @@ fn geometric_growth_stays_inside_the_derived_working_limit() {
             resource: Resource::StorageWorkingBytes,
             limit: 128,
         })
+    ));
+}
+
+#[test]
+fn legacy_restrict_foreign_key_metadata_is_canonical_in_v2_and_v3() {
+    for header in ["V2;", "V3;"] {
+        let blob = format!(
+            "{header}~S|parents|id:I:!;~P|parents|id;\
+             ~S|children|parent_id:I:?;~F|children|parent_id|parents|id;"
+        );
+        let (_, catalog) =
+            validate_and_catalog(&blob, usize::MAX).expect("legacy foreign-key metadata decodes");
+        let foreign_key = &catalog
+            .table("children")
+            .expect("children schema exists")
+            .foreign_keys[0];
+        assert_eq!(foreign_key.on_delete, ForeignKeyDeleteAction::Restrict);
+        assert_eq!(foreign_key.on_update, ForeignKeyUpdateAction::Restrict);
+    }
+}
+
+#[test]
+fn extended_foreign_key_action_metadata_requires_v3() {
+    let prefix = "V2;~S|parents|id:I:!;~P|parents|id;~S|children|parent_id:I:?;";
+    for actions in ["C|R", "N|R", "R|R", "R|C"] {
+        let blob = format!("{prefix}~F|children|parent_id|parents|id|{actions};");
+        let offset = blob.find("~F|").expect("foreign key exists");
+        assert!(matches!(
+            validate_and_catalog(&blob, usize::MAX),
+            Err(Error::CorruptStorage { offset: actual, message })
+                if actual == offset && message == "V3 metadata is invalid under a V2 header"
+        ));
+    }
+
+    let blob = "V3;~S|parents|id:I:!;~P|parents|id;\
+                ~S|children|cascading:I:?|nulling:I:?;\
+                ~F|children|cascading|parents|id|C|R;\
+                ~F|children|nulling|parents|id|N|R;";
+    let (_, catalog) =
+        validate_and_catalog(blob, usize::MAX).expect("V3 foreign-key actions decode");
+    let foreign_keys = &catalog
+        .table("children")
+        .expect("children schema exists")
+        .foreign_keys;
+    assert_eq!(foreign_keys[0].on_delete, ForeignKeyDeleteAction::Cascade);
+    assert_eq!(foreign_keys[1].on_delete, ForeignKeyDeleteAction::SetNull);
+}
+
+#[test]
+fn persisted_v3_foreign_key_actions_must_be_canonical_and_applicable() {
+    let prefix = "V3;~S|parents|id:I:!;~P|parents|id;~S|children|parent_id:I:?;";
+    let explicit_defaults = format!("{prefix}~F|children|parent_id|parents|id|R|R;");
+    let offset = explicit_defaults.find("~F|").expect("foreign key exists");
+    assert!(matches!(
+        validate_and_catalog(&explicit_defaults, usize::MAX),
+        Err(Error::CorruptStorage { offset: actual, message })
+            if actual == offset
+                && message == "explicit RESTRICT/RESTRICT foreign-key actions are noncanonical"
+    ));
+
+    let update_cascade = format!("{prefix}~F|children|parent_id|parents|id|R|C;");
+    let offset = update_cascade.find("~F|").expect("foreign key exists");
+    assert!(matches!(
+        validate_and_catalog(&update_cascade, usize::MAX),
+        Err(Error::CorruptStorage { offset: actual, message })
+            if actual == offset && message == "malformed foreign-key action metadata"
+    ));
+
+    let invalid_set_null = "V3;~S|parents|id:I:!;~P|parents|id;\
+                            ~S|children|parent_id:I:!;\
+                            ~F|children|parent_id|parents|id|N|R;";
+    let offset = invalid_set_null.find("~F|").expect("foreign key exists");
+    assert!(matches!(
+        validate_and_catalog(invalid_set_null, usize::MAX),
+        Err(Error::CorruptStorage { offset: actual, message })
+            if actual == offset
+                && message
+                    == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
     ));
 }
 

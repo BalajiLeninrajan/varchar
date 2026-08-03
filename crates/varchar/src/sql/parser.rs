@@ -410,6 +410,8 @@ fn is_reserved(word: &str) -> bool {
             | "DEFAULT"
             | "UNIQUE"
             | "CHECK"
+            | "CASCADE"
+            | "RESTRICT"
     )
 }
 

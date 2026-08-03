@@ -91,6 +91,9 @@ fn validate_with_mode(
                 metadata.apply_primary_key(primary_key, record.range.start, mode)?;
             }
             RecordKind::ForeignKey => {
+                if foreign_key_record_uses_extension(record.text) {
+                    reject_extension_in_v2(version, record.range.start)?;
+                }
                 reject_after_rows(saw_row, record.range.start, "foreign-key metadata")?;
                 let foreign_key = decode_foreign_key_record(record.text, record.range.start)?;
                 metadata.apply_foreign_key(foreign_key, record.range.start, mode, &mut budget)?;
@@ -155,6 +158,10 @@ fn validate_with_mode(
         });
     }
     Ok((version, catalog))
+}
+
+fn foreign_key_record_uses_extension(record: &str) -> bool {
+    record.bytes().filter(|byte| *byte == b'|').count() == 6
 }
 
 fn reject_extension_in_v2(version: FormatVersion, offset: usize) -> Result<()> {

@@ -10,14 +10,20 @@ use std::collections::BTreeMap;
 
 use auto_increment::{declare_auto_increment, validate_auto_increment};
 use check::resolve_check;
-use foreign_key::{declare_foreign_key, validate_foreign_key};
+use foreign_key::{declare_foreign_key, validate_foreign_key, validate_set_null_column};
 use primary_key::declare_primary_key;
 use unique::declare_unique;
 
 use crate::expression::CheckProgram;
 use crate::limits::check_limit;
-use crate::sql::{ColumnModifier, CreateElement, CreateTable, Expression, TableConstraint};
-use crate::storage::{Catalog, TableSchema};
+use crate::sql::{
+    ColumnModifier, CreateElement, CreateTable, Expression,
+    ForeignKeyDeleteAction as ParsedDeleteAction, ForeignKeyUpdateAction as ParsedUpdateAction,
+    TableConstraint,
+};
+use crate::storage::{
+    Catalog, ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema,
+};
 use crate::value::validate_value;
 use crate::{Error, Resource, Result, SchemaColumn, Value};
 
@@ -35,12 +41,18 @@ enum SemanticEvent {
         order: usize,
         expression: Expression,
     },
+    SetNull {
+        order: usize,
+        column: usize,
+    },
 }
 
 impl SemanticEvent {
     const fn order(&self) -> usize {
         match self {
-            Self::Default { order, .. } | Self::Check { order, .. } => *order,
+            Self::Default { order, .. }
+            | Self::Check { order, .. }
+            | Self::SetNull { order, .. } => *order,
         }
     }
 }
@@ -56,7 +68,8 @@ struct SemanticResolution {
 impl SemanticResolution {
     fn new(column_count: usize, check_count: usize, max_predicates: usize) -> Result<Self> {
         let event_capacity = column_count
-            .checked_add(check_count)
+            .checked_mul(2)
+            .and_then(|count| count.checked_add(check_count))
             .ok_or(Error::Capacity {
                 operation: "counting CREATE semantic events",
             })?;
@@ -83,6 +96,10 @@ impl SemanticResolution {
         self.events.push(SemanticEvent::Check { order, expression });
     }
 
+    fn queue_set_null(&mut self, order: usize, column: usize) {
+        self.events.push(SemanticEvent::SetNull { order, column });
+    }
+
     fn drain_before(
         &mut self,
         table: &str,
@@ -90,8 +107,18 @@ impl SemanticResolution {
         auto_increment: Option<usize>,
         before: usize,
     ) -> Result<()> {
+        self.drain_while(table, columns, auto_increment, |order| order < before)
+    }
+
+    fn drain_while(
+        &mut self,
+        table: &str,
+        columns: &[SchemaColumn],
+        auto_increment: Option<usize>,
+        should_drain: impl Fn(usize) -> bool,
+    ) -> Result<()> {
         while let Some(event) = self.events.get(self.next_event) {
-            if event.order() >= before {
+            if !should_drain(event.order()) {
                 break;
             }
             match event {
@@ -112,6 +139,9 @@ impl SemanticResolution {
                     })?;
                     self.checks.push(resolve_check(table, columns, expression)?);
                     self.check_predicates = total;
+                }
+                SemanticEvent::SetNull { column, .. } => {
+                    validate_set_null_column(table, &columns[*column])?;
                 }
             }
             self.next_event += 1;
@@ -258,12 +288,17 @@ pub(crate) fn create_schema_with_limit(
                             }
                         }
                         ColumnModifier::References(reference) => {
+                            let on_delete = resolve_delete_action(reference.on_delete);
                             if let Err(error) = declare_foreign_key(
                                 &column.name,
                                 "REFERENCES",
-                                index,
-                                reference.table,
-                                reference.column,
+                                ForeignKey {
+                                    column: index,
+                                    referenced_table: reference.table,
+                                    referenced_column: reference.column,
+                                    on_delete,
+                                    on_update: resolve_update_action(reference.on_update),
+                                },
                                 &mut saw_foreign_key,
                                 &mut foreign_keys,
                             ) {
@@ -274,6 +309,9 @@ pub(crate) fn create_schema_with_limit(
                                     order,
                                 )?;
                                 return Err(error);
+                            }
+                            if on_delete == ForeignKeyDeleteAction::SetNull {
+                                semantic_resolution.queue_set_null(order, index);
                             }
                             foreign_key_orders.push(order);
                         }
@@ -399,12 +437,17 @@ pub(crate) fn create_schema_with_limit(
                                 return Err(error);
                             }
                         };
+                        let on_delete = resolve_delete_action(reference.on_delete);
                         if let Err(error) = declare_foreign_key(
                             &column,
                             "FOREIGN KEY",
-                            index,
-                            reference.table,
-                            reference.column,
+                            ForeignKey {
+                                column: index,
+                                referenced_table: reference.table,
+                                referenced_column: reference.column,
+                                on_delete,
+                                on_update: resolve_update_action(reference.on_update),
+                            },
                             &mut saw_foreign_key,
                             &mut foreign_keys,
                         ) {
@@ -415,6 +458,9 @@ pub(crate) fn create_schema_with_limit(
                                 order,
                             )?;
                             return Err(error);
+                        }
+                        if on_delete == ForeignKeyDeleteAction::SetNull {
+                            semantic_resolution.queue_set_null(order, index);
                         }
                         foreign_key_orders.push(order);
                     }
@@ -463,6 +509,20 @@ pub(crate) fn create_schema_with_limit(
         schema,
         auto_increment,
     })
+}
+
+const fn resolve_delete_action(action: ParsedDeleteAction) -> ForeignKeyDeleteAction {
+    match action {
+        ParsedDeleteAction::Restrict => ForeignKeyDeleteAction::Restrict,
+        ParsedDeleteAction::Cascade => ForeignKeyDeleteAction::Cascade,
+        ParsedDeleteAction::SetNull => ForeignKeyDeleteAction::SetNull,
+    }
+}
+
+const fn resolve_update_action(action: ParsedUpdateAction) -> ForeignKeyUpdateAction {
+    match action {
+        ParsedUpdateAction::Restrict => ForeignKeyUpdateAction::Restrict,
+    }
 }
 
 fn validate_default(table: &str, column: &SchemaColumn, auto_increment: bool) -> Result<()> {

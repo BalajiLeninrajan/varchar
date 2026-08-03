@@ -4,7 +4,9 @@ use crate::Error;
 use crate::resolve::create::{default_validations, reset_default_validations};
 use crate::resolve::create_schema;
 use crate::sql::{self, Statement};
-use crate::storage::{Catalog, ForeignKey, StorageState};
+use crate::storage::{
+    Catalog, ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, StorageState,
+};
 
 fn create_table(sql: &str) -> crate::sql::CreateTable {
     let Statement::CreateTable(statement) = sql::parse(sql).expect("statement parses") else {
@@ -42,9 +44,107 @@ fn create_schema_normalizes_inline_and_table_key_metadata() {
                 column: 1,
                 referenced_table: String::from("parents"),
                 referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Restrict,
             }]
         );
     }
+}
+
+#[test]
+fn create_schema_preserves_foreign_key_actions_and_defaults() {
+    let resolved = create_schema(
+        &keyed_parent_catalog(),
+        create_table(
+            "CREATE TABLE children (cascade_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE, null_id INTEGER, default_id INTEGER REFERENCES parents(id), FOREIGN KEY (null_id) REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT)",
+        ),
+    )
+    .expect("foreign-key actions resolve");
+
+    assert_eq!(
+        resolved.schema.foreign_keys,
+        vec![
+            ForeignKey {
+                column: 0,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Cascade,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+            ForeignKey {
+                column: 1,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::SetNull,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+            ForeignKey {
+                column: 2,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+        ]
+    );
+}
+
+#[test]
+fn on_delete_set_null_requires_a_nullable_local_column() {
+    for sql in [
+        "CREATE TABLE children (parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE SET NULL)",
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE SET NULL NOT NULL)",
+        "CREATE TABLE children (parent_id INTEGER NOT NULL, FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE SET NULL)",
+    ] {
+        assert!(matches!(
+            create_schema(&keyed_parent_catalog(), create_table(sql)),
+            Err(Error::Schema(ref message))
+                if message
+                    == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
+        ));
+    }
+}
+
+#[test]
+fn foreign_key_action_diagnostics_follow_source_order() {
+    for sql in [
+        "CREATE TABLE children (parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE SET NULL, value INTEGER UNIQUE UNIQUE)",
+        "CREATE TABLE children (FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE SET NULL, parent_id INTEGER NOT NULL, value INTEGER NOT NULL NOT NULL)",
+    ] {
+        assert!(matches!(
+            create_schema(&keyed_parent_catalog(), create_table(sql)),
+            Err(Error::Schema(ref message))
+                if message
+                    == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
+        ));
+    }
+
+    let action_before_default = create_table(
+        "CREATE TABLE children (parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE SET NULL, value INTEGER DEFAULT 'wrong')",
+    );
+    assert!(matches!(
+        create_schema(&keyed_parent_catalog(), action_before_default),
+        Err(Error::Schema(ref message))
+            if message
+                == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
+    ));
+
+    let default_before_action = create_table(
+        "CREATE TABLE children (value INTEGER DEFAULT 'wrong', parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE SET NULL)",
+    );
+    assert!(matches!(
+        create_schema(&keyed_parent_catalog(), default_before_action),
+        Err(Error::Type(ref message)) if message == "column \"value\" expects INTEGER, got TEXT"
+    ));
+
+    let target_before_action = create_table(
+        "CREATE TABLE children (parent_id INTEGER NOT NULL REFERENCES missing(id) ON DELETE SET NULL)",
+    );
+    assert!(matches!(
+        create_schema(&Catalog::empty(), target_before_action),
+        Err(Error::Schema(ref message))
+            if message == "foreign key references unknown or later table \"missing\""
+    ));
 }
 
 #[test]
@@ -434,6 +534,8 @@ fn self_referential_foreign_keys_use_the_finished_local_primary_key() {
             column: 0,
             referenced_table: String::from("nodes"),
             referenced_column: String::from("id"),
+            on_delete: ForeignKeyDeleteAction::Restrict,
+            on_update: ForeignKeyUpdateAction::Restrict,
         }]
     );
 }

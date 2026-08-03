@@ -11,7 +11,10 @@ use super::encode::{
     encoded_auto_increment_record_len_prevalidated, measure_table_metadata,
 };
 use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
-use super::{RowLayout, StorageState, TableSchema, encode_row};
+use super::{
+    ForeignKeyDeleteAction, ForeignKeyUpdateAction, RowLayout, StorageState, TableSchema,
+    encode_row,
+};
 use crate::{Error, Resource, Result, Value};
 
 struct DeferredAutoIncrement<'a> {
@@ -65,7 +68,11 @@ impl<'a> Candidate<'a> {
     ) -> Result<()> {
         let requires_v3 = schema.columns.iter().any(|column| column.default.is_some())
             || !schema.unique_columns.is_empty()
-            || !schema.checks.is_empty();
+            || !schema.checks.is_empty()
+            || schema.foreign_keys.iter().any(|foreign_key| {
+                foreign_key.on_delete != ForeignKeyDeleteAction::Restrict
+                    || foreign_key.on_update != ForeignKeyUpdateAction::Restrict
+            });
         let auto_increment = auto_increment.map(|column| (column, 0));
         let measured = measure_table_metadata(schema, auto_increment)?;
         let upgrade_to_v3 = requires_v3 && self.format == FormatVersion::V2;
