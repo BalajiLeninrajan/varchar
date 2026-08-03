@@ -6,7 +6,8 @@ mod metadata;
 mod tests;
 
 pub(super) use metadata::{
-    encode_auto_increment_record_prevalidated, encode_table_metadata, measure_table_metadata,
+    encode_auto_increment_record_prevalidated, encode_table_metadata,
+    encoded_auto_increment_record_len_prevalidated, measure_table_metadata,
 };
 
 use std::fmt::Write as _;
@@ -41,7 +42,6 @@ const _: () =
     assert!(std::mem::size_of::<MeasuredRowEncoding<'static>>() == std::mem::size_of::<usize>());
 
 impl MeasuredRowEncoding<'_> {
-    #[cfg(test)]
     pub(crate) const fn encoded_len(&self) -> usize {
         self.encoded_len
     }

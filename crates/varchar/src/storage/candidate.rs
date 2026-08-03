@@ -1,13 +1,14 @@
 //! Bounded physical edits over an authoritative database string.
 //!
 //! Edits must arrive in storage order. The builder copies untouched source
-//! ranges and delegates record encoding back to the storage layer, so callers
-//! never splice wire-format fragments themselves.
+//! ranges and accepts replacement records produced by the storage codec before
+//! final validation of the complete candidate.
 
 use std::ops::Range;
 
 use super::encode::{
-    encode_auto_increment_record_prevalidated, encode_table_metadata, measure_table_metadata,
+    encode_auto_increment_record_prevalidated, encode_table_metadata,
+    encoded_auto_increment_record_len_prevalidated, measure_table_metadata,
 };
 use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
 use super::{RowLayout, StorageState, TableSchema, encode_row};
@@ -99,11 +100,34 @@ impl<'a> Candidate<'a> {
     /// Defer the sequence edit until a row is actually rewritten.
     ///
     /// `UPDATE` resolves assignments before it knows whether any row matches.
-    /// Keeping only this logical edit avoids allocating, size-checking, or
-    /// validating a larger metadata record for a zero-match statement.
+    /// Keeping only this logical edit avoids allocating or applying a replacement
+    /// metadata record for a zero-match statement.
     pub(crate) fn defer_auto_increment(&mut self, table: &str, last: i64) -> Result<()> {
         self.deferred_auto_increment = Some(self.auto_increment_edit(table, last)?);
         Ok(())
+    }
+
+    pub(crate) fn deferred_auto_increment_working_bytes(&self) -> usize {
+        self.deferred_auto_increment
+            .as_ref()
+            .map_or(0, |_| std::mem::size_of::<DeferredAutoIncrement<'_>>())
+    }
+
+    pub(crate) fn deferred_auto_increment_lengths(&self) -> Result<Option<(usize, usize)>> {
+        self.deferred_auto_increment
+            .as_ref()
+            .map(|edit| {
+                let schema = self
+                    .state
+                    .catalog()
+                    .table(edit.table)
+                    .expect("a deferred auto-increment edit names a catalog table");
+                Ok((
+                    edit.record_range.len(),
+                    encoded_auto_increment_record_len_prevalidated(schema, edit.column, edit.last)?,
+                ))
+            })
+            .transpose()
     }
 
     fn auto_increment_edit(&self, table: &str, last: i64) -> Result<DeferredAutoIncrement<'a>> {
@@ -150,19 +174,6 @@ impl<'a> Candidate<'a> {
         self.splice(source_len..source_len, &encoded)
     }
 
-    pub(crate) fn rewrite_row(
-        &mut self,
-        range: Range<usize>,
-        layout: RowLayout<'_>,
-        replacement: Option<&[Value]>,
-    ) -> Result<()> {
-        let encoded = replacement
-            .map(|values| encode_row(values, layout))
-            .transpose()?;
-        self.apply_deferred_auto_increment()?;
-        self.splice(range, encoded.as_deref().unwrap_or_default())
-    }
-
     pub(crate) fn rewrite_encoded_row(
         &mut self,
         range: Range<usize>,
@@ -176,7 +187,12 @@ impl<'a> Candidate<'a> {
         self.state.as_str()
     }
 
+    fn discard_deferred_auto_increment(&mut self) {
+        let _ = self.deferred_auto_increment.take();
+    }
+
     pub(crate) fn finish(mut self) -> Result<StorageState> {
+        self.discard_deferred_auto_increment();
         self.push_source(self.cursor..self.state.as_str().len())?;
         StorageState::from_candidate(
             self.output,

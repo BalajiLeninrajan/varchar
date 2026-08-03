@@ -1,20 +1,23 @@
-//! Statement-wide planning for direct `DELETE` mutations.
+//! Statement-wide planning for direct `UPDATE` and `DELETE` mutations.
 //!
 //! Root targets are frozen from one scan of the original validated blob. The
-//! planner then sorts immutable source ranges and only afterward hands physical
-//! edits to storage.
+//! planner then sorts immutable source ranges, installs direct overlays, encodes
+//! replacements, and only afterward hands physical edits to storage.
 
 mod model;
 
 use std::ops::Range;
 
-use model::{FrozenRow, RowIdentity, WorkingBudget, decoded_values_bytes};
+use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
 
 use crate::expression::Evaluator;
-use crate::limits::Limits;
+use crate::limits::{Limits, check_limit};
 use crate::query::{self, ScanPlan};
-use crate::storage::{self, Candidate, RowLayout};
-use crate::{Error, Result, Value};
+use crate::storage::{
+    self, Candidate, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
+    with_validated_row_encoder,
+};
+use crate::{Error, Resource, Result, Value};
 
 pub(super) struct MutationPlan {
     rows: Vec<FrozenRow>,
@@ -22,8 +25,61 @@ pub(super) struct MutationPlan {
 }
 
 impl MutationPlan {
+    pub(super) fn update(
+        candidate: &Candidate<'_>,
+        scan: &ScanPlan<'_>,
+        limits: &Limits,
+        assignments: &mut [(usize, Value)],
+    ) -> Result<Self> {
+        let sequence_working_bytes = candidate.deferred_auto_increment_working_bytes();
+        let blob = candidate.source();
+        let (mut rows, direct_affected, mut budget) =
+            freeze_direct_targets(blob, scan, limits, sequence_working_bytes)?;
+        sort_and_validate_ranges(&mut rows)?;
+        let sequence_edit_lengths = sequence_edit_lengths_for_targets(rows.len(), || {
+            candidate.deferred_auto_increment_lengths()
+        })?;
+        if rows.is_empty() {
+            return Ok(Self {
+                rows,
+                direct_affected,
+            });
+        }
+
+        let layout = scan.validated_row_layout();
+        let update =
+            PreparedDirectUpdate::new(assignments, layout.column_count(), rows[0].identity())?;
+        with_validated_row_encoder(layout, |encoder| -> Result<()> {
+            let (measurements, measurement_working_bytes) = measure_and_check_update_database_size(
+                blob.len(),
+                limits.max_database_bytes,
+                &mut rows,
+                &encoder,
+                &update,
+                sequence_edit_lengths,
+                &mut budget,
+            )?;
+            for row in &mut rows {
+                row.install_direct_update(&update, &mut budget)?;
+            }
+            for (row, measured) in rows.iter_mut().zip(measurements) {
+                row.encode_effective_update(&encoder, measured, &mut budget)?;
+            }
+            budget.release(measurement_working_bytes);
+            Ok(())
+        })?;
+        if let Some((_, sequence_replacement_bytes)) = sequence_edit_lengths {
+            budget.check_transient(sequence_replacement_bytes)?;
+        }
+
+        Ok(Self {
+            rows,
+            direct_affected,
+        })
+    }
+
     pub(super) fn delete(blob: &str, scan: &ScanPlan<'_>, limits: &Limits) -> Result<Self> {
-        let (mut rows, direct_affected) = freeze_direct_targets(blob, scan, limits)?;
+        let (mut rows, direct_affected, _) = freeze_direct_targets(blob, scan, limits, 0)?;
         sort_and_validate_ranges(&mut rows)?;
         for row in &mut rows {
             row.mark_direct_delete()?;
@@ -44,12 +100,25 @@ impl MutationPlan {
     }
 }
 
+fn sequence_edit_lengths_for_targets(
+    target_count: usize,
+    lengths: impl FnOnce() -> Result<Option<(usize, usize)>>,
+) -> Result<Option<(usize, usize)>> {
+    if target_count == 0 {
+        Ok(None)
+    } else {
+        lengths()
+    }
+}
+
 fn freeze_direct_targets(
     blob: &str,
     scan: &ScanPlan<'_>,
     limits: &Limits,
-) -> Result<(Vec<FrozenRow>, usize)> {
+    retained_working_bytes: usize,
+) -> Result<(Vec<FrozenRow>, usize, WorkingBudget)> {
     let mut budget = WorkingBudget::for_database_limit(limits.max_database_bytes);
+    budget.charge(retained_working_bytes)?;
     let residual = scan.local_residual();
     let evaluator_bytes = residual
         .map(Evaluator::working_bytes)
@@ -74,7 +143,55 @@ fn freeze_direct_targets(
         })?;
     drop(evaluator);
     budget.release(evaluator_bytes);
-    Ok((rows, direct_affected))
+    Ok((rows, direct_affected, budget))
+}
+
+fn measure_and_check_update_database_size<'brand>(
+    source_bytes: usize,
+    limit: usize,
+    rows: &mut [FrozenRow],
+    encoder: &ValidatedRowEncoder<'_, 'brand>,
+    update: &PreparedDirectUpdate<'_>,
+    sequence_edit_lengths: Option<(usize, usize)>,
+    budget: &mut WorkingBudget,
+) -> Result<(Vec<MeasuredRowEncoding<'brand>>, usize)> {
+    let mut measurements = Vec::new();
+    let measurement_working_bytes = budget.reserve_exact(
+        &mut measurements,
+        rows.len(),
+        "reserving measured row encodings",
+    )?;
+    let mut projected = source_bytes;
+    if let Some((original, replacement)) = sequence_edit_lengths {
+        projected = replace_projected_bytes(projected, original, replacement, limit)?;
+    }
+    for row in rows {
+        let measured = row.measure_direct_update(update, encoder)?;
+        projected = replace_projected_bytes(
+            projected,
+            row.identity().len(),
+            measured.encoded_len(),
+            limit,
+        )?;
+        measurements.push(measured);
+    }
+    check_limit(projected, limit, Resource::DatabaseBytes)?;
+    Ok((measurements, measurement_working_bytes))
+}
+
+fn replace_projected_bytes(
+    current: usize,
+    original: usize,
+    replacement: usize,
+    limit: usize,
+) -> Result<usize> {
+    current
+        .checked_sub(original)
+        .and_then(|bytes| bytes.checked_add(replacement))
+        .ok_or(Error::ResourceLimit {
+            resource: Resource::DatabaseBytes,
+            limit,
+        })
 }
 
 fn freeze_rows(

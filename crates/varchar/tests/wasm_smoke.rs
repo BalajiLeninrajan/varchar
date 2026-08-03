@@ -595,6 +595,28 @@ fn all_null_unique_columns_fit_the_exact_wasm_database_limit() {
 }
 
 #[wasm_bindgen_test]
+fn compact_measurements_allow_shrinking_multi_row_update_in_wasm() {
+    let blob = String::from(
+        "V2;~S|t|id:I:!|body:T:!;~R|t|I0|Tx;~R|t|I1|Tx;~R|t|I2|Tx;~R|t|I3|Tx;~R|t|I4|Tx;~R|t|I5|Tx;~R|t|I6|Tx;~R|t|I7|Tx;",
+    );
+    let limits = Limits {
+        max_database_bytes: 400,
+        ..Limits::default()
+    };
+    let mut database = Database::from_string_with_limits(blob, limits)
+        .expect("the source fits the configured database limit");
+
+    assert_eq!(
+        database.execute("UPDATE t SET body = ''").unwrap(),
+        Outcome::Affected { rows: 8 }
+    );
+    assert_eq!(
+        rows(database.execute("SELECT body FROM t ORDER BY id").unwrap()),
+        vec![vec![Value::Text(String::new())]; 8]
+    );
+}
+
+#[wasm_bindgen_test]
 fn check_like_work_limits_mutation_and_reload_inside_wasm() {
     // An interior literal run is retried at every candidate start, so it is the
     // shape that charges the backtracking budget. Anchored prefixes and
@@ -685,6 +707,41 @@ fn check_constraints_persist_validate_and_rollback_inside_wasm() {
                 Value::Text("running".to_owned()),
                 Value::Integer(2),
             ],
+        ]
+    );
+
+    let metadata_end = blob.find("~R|").expect("the fixture contains rows");
+    let metadata = &blob[..metadata_end];
+    assert_eq!(
+        reloaded
+            .execute("UPDATE tasks SET state = 'running', attempts = 5")
+            .unwrap(),
+        Outcome::Affected { rows: 2 }
+    );
+    assert!(reloaded.as_str().starts_with(metadata));
+
+    let before_zero_match = reloaded.as_str().to_owned();
+    assert_eq!(
+        reloaded
+            .execute("UPDATE tasks SET id = 50 WHERE id = 999")
+            .unwrap(),
+        Outcome::Affected { rows: 0 }
+    );
+    assert_eq!(reloaded.as_str(), before_zero_match);
+
+    reloaded
+        .execute("INSERT INTO tasks (attempts) VALUES (0)")
+        .unwrap();
+    assert_eq!(
+        rows(
+            reloaded
+                .execute("SELECT id FROM tasks ORDER BY id")
+                .unwrap()
+        ),
+        vec![
+            vec![Value::Integer(1)],
+            vec![Value::Integer(2)],
+            vec![Value::Integer(3)],
         ]
     );
 }

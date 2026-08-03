@@ -17,7 +17,6 @@ pub(crate) struct ValidatedRowLayout<'a> {
 }
 
 impl<'a> ValidatedRowLayout<'a> {
-    #[cfg(test)]
     pub(crate) const fn column_count(self) -> usize {
         self.layout.columns.len()
     }
@@ -86,7 +85,6 @@ impl OwnedValidatedRowLayout {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn validated_row_layout(&self) -> ValidatedRowLayout<'_> {
         ValidatedRowLayout {
             layout: self.row_layout(),
