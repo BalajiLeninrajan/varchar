@@ -620,6 +620,75 @@ fn explain_select_and_sql_explain_share_one_join_plan_without_mutating() {
 }
 
 #[test]
+fn a_join_pattern_is_never_exact_because_on_conditions_run_in_rust() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER NOT NULL, tag TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER NOT NULL, name TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO parents VALUES (1, 'keep')",
+        "INSERT INTO parents VALUES (2, 'keep')",
+        "INSERT INTO children VALUES (1, 'child')",
+        "INSERT INTO children VALUES (9, 'orphan')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    let sql = "SELECT parents.id, children.name \
+               FROM parents JOIN children ON parents.id = children.parent_id";
+    let joined = database.explain_select(sql).expect("a JOIN explains");
+    // The `ON` condition is evaluated in Rust during the nested loops, never in
+    // the pattern, so the pattern only prefilters.
+    assert!(!joined.pattern_is_exact());
+
+    // Its pattern is exactly the alternation of both unfiltered whole-table
+    // patterns: it matches all four stored rows while the join returns one.
+    let parents = database
+        .explain_select("SELECT parents.id FROM parents")
+        .expect("an unfiltered parents SELECT explains");
+    let children = database
+        .explain_select("SELECT children.name FROM children")
+        .expect("an unfiltered children SELECT explains");
+    assert!(parents.pattern_is_exact());
+    assert!(children.pattern_is_exact());
+    assert_eq!(
+        joined.pattern(),
+        format!("(?:{}|{})", parents.pattern(), children.pattern())
+    );
+    assert_eq!(rows(&mut database, sql).rows().len(), 1);
+    assert_eq!(
+        rows(&mut database, "SELECT parents.id FROM parents")
+            .rows()
+            .len(),
+        2
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT children.name FROM children")
+            .rows()
+            .len(),
+        2
+    );
+
+    // A fully pushed `WHERE` does not make a join exact either: the `ON`
+    // condition still discards rows the pattern matches.
+    let filtered = database
+        .explain_select(&format!("{sql} WHERE parents.tag = 'keep'"))
+        .expect("a filtered JOIN explains");
+    assert!(!filtered.pattern_is_exact());
+    assert_eq!(
+        rows(&mut database, &format!("{sql} WHERE parents.tag = 'keep'"))
+            .rows()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn joins_work_after_reloading_the_authoritative_string() {
     let mut database = Database::new();
     execute(

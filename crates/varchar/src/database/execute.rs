@@ -32,7 +32,7 @@ impl Database {
         }
     }
 
-    /// Parse, resolve, and explain a `SELECT`'s source-row scans.
+    /// Parse, resolve, and explain a `SELECT`'s source-row scan prefilter.
     pub fn explain_select(&self, sql: &str) -> Result<SelectExplanation> {
         self.check_request(sql)?;
         match sql::parse(sql)? {

@@ -43,7 +43,19 @@ pub(crate) fn explain(
     }
 
     let columns = materialize_result_columns(&plan, &mut output_budget)?;
-    Ok(SelectExplanation::new(plan.pattern, sources, columns))
+    // The pattern expresses the whole `WHERE` clause only when nothing was left
+    // for Rust-side row filtering. A multi-source pattern is an alternation over
+    // whole source rows and never encodes the `ON` conditions that the nested
+    // loops apply, so it can only ever prefilter.
+    let pattern_is_exact = plan.sources.len() == 1
+        && plan.local_residuals.iter().all(Option::is_none)
+        && plan.cross_source_residual.is_none();
+    Ok(SelectExplanation::new(
+        plan.pattern,
+        pattern_is_exact,
+        sources,
+        columns,
+    ))
 }
 
 fn select_single_table(blob: &str, plan: &SelectPlan<'_, '_>, limits: &Limits) -> Result<RowSet> {

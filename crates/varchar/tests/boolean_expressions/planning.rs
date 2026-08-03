@@ -1,6 +1,91 @@
 use super::*;
 
 #[test]
+fn explain_regex_exposes_the_prefilter_without_residual_factors() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE items (id INTEGER NOT NULL, note TEXT NOT NULL, active BOOLEAN NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO items VALUES (1, 'residualleft', TRUE)",
+        "INSERT INTO items VALUES (2, 'residualright', FALSE)",
+        "INSERT INTO items VALUES (3, 'other', TRUE)",
+    ] {
+        execute(&mut database, sql);
+    }
+    let sql = "SELECT id FROM items \
+               WHERE active = TRUE \
+                 AND (note = 'residualleft' OR note = 'residualright')";
+    let before = database.as_str().to_owned();
+
+    let explanation = database.explain_select(sql).expect("SELECT explains");
+    assert!(explanation.pattern().contains("B1"));
+    assert!(!explanation.pattern().contains("residualleft"));
+    assert!(!explanation.pattern().contains("residualright"));
+    // The OR factor stays residual, so the pattern only prefilters.
+    assert!(!explanation.pattern_is_exact());
+    // The pattern is exactly the pushed `active = TRUE` factor, which retains a
+    // row the full WHERE clause rejects: applying it alone over-selects.
+    let pushed_only = database
+        .explain_select("SELECT id FROM items WHERE active = TRUE")
+        .expect("the pushed factor explains");
+    assert_eq!(pushed_only.pattern(), explanation.pattern());
+    assert!(pushed_only.pattern_is_exact());
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM items WHERE active = TRUE").into_rows(),
+        vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]
+    );
+    assert_eq!(
+        execute(&mut database, &format!("EXPLAIN REGEX {sql}")),
+        Outcome::Explain(explanation)
+    );
+    assert_eq!(
+        rows(&mut database, sql).into_rows(),
+        vec![vec![Value::Integer(1)]]
+    );
+    assert_eq!(database.as_str(), before);
+}
+
+#[test]
+fn explain_reports_an_exact_pattern_only_without_residual_factors() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE items (id INTEGER NOT NULL, note TEXT NOT NULL, active BOOLEAN NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO items VALUES (1, 'kept', TRUE)",
+        "INSERT INTO items VALUES (2, 'dropped', FALSE)",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    let sql = "SELECT id FROM items WHERE active = TRUE AND note LIKE 'k%'";
+    let exact = database
+        .explain_select(sql)
+        .expect("a pushed WHERE explains");
+    assert!(exact.pattern_is_exact());
+    assert_eq!(
+        rows(&mut database, sql).into_rows(),
+        vec![vec![Value::Integer(1)]]
+    );
+
+    // A `WHERE`-less SELECT pushes nothing, yet still expresses the whole
+    // (empty) WHERE clause.
+    let unfiltered = database
+        .explain_select("SELECT id FROM items")
+        .expect("an unfiltered SELECT explains");
+    assert!(unfiltered.pattern_is_exact());
+
+    // Projection is not part of the WHERE clause and never makes it inexact.
+    let projected = database
+        .explain_select("SELECT note FROM items WHERE active = TRUE")
+        .expect("a projected SELECT explains");
+    assert!(projected.pattern_is_exact());
+}
+
+#[test]
 fn residual_evaluator_stack_obeys_the_select_working_budget() {
     let mut database = Database::new();
     execute(

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 
-use varchar::{Outcome, RowSet, Value};
+use varchar::{Outcome, RowSet, SelectExplanation, Value};
 
 pub(crate) fn print_outcome(outcome: &Outcome) -> io::Result<()> {
     let stdout = io::stdout();
@@ -17,8 +17,22 @@ pub(crate) fn print_outcome(outcome: &Outcome) -> io::Result<()> {
             if *rows == 1 { "" } else { "s" }
         ),
         Outcome::Created { table } => writeln!(output, "created table {table}"),
-        Outcome::Explain(plan) => writeln!(output, "regex: {}", plan.pattern()),
+        Outcome::Explain(plan) => print_explanation(&mut output, plan),
     }
+}
+
+fn print_explanation(output: &mut impl Write, plan: &SelectExplanation) -> io::Result<()> {
+    writeln!(output, "regex: {}", plan.pattern())?;
+    // The pattern selects exactly the retained rows, or only prefilters them.
+    writeln!(
+        output,
+        "rows: {}",
+        if plan.pattern_is_exact() {
+            "exact"
+        } else {
+            "prefilter (Rust-side filtering applies)"
+        }
+    )
 }
 
 fn print_rows(output: &mut impl Write, row_set: &RowSet) -> io::Result<()> {
