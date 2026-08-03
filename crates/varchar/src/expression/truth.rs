@@ -16,6 +16,14 @@ impl Truth {
         }
     }
 
+    pub(super) const fn or(self, right: Self) -> Self {
+        match (self, right) {
+            (Self::True, _) | (_, Self::True) => Self::True,
+            (Self::False, value) | (value, Self::False) => value,
+            (Self::Unknown, Self::Unknown) => Self::Unknown,
+        }
+    }
+
     pub(super) const fn passes_where(self) -> bool {
         matches!(self, Self::True)
     }

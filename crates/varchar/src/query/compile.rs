@@ -172,6 +172,7 @@ fn is_conjunction_of_leaves(nodes: &[ProgramNode<'_>]) -> bool {
         Some((ProgramNode::And { .. }, rest)) => rest
             .iter()
             .all(|node| matches!(node, ProgramNode::Predicate(_))),
+        Some((ProgramNode::Or { .. }, _)) => false,
     }
 }
 

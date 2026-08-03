@@ -7,7 +7,14 @@ use super::like::{self, LikeWork};
 use super::program::{Predicate, Program, ProgramNode};
 use super::truth::Truth;
 
+#[derive(Clone, Copy)]
+enum LogicalOperator {
+    And,
+    Or,
+}
+
 struct Frame {
+    operator: LogicalOperator,
     remaining: usize,
     value: Truth,
 }
@@ -97,8 +104,17 @@ impl Evaluator {
             let mut value = match node {
                 ProgramNode::And { children } => {
                     self.frames.push(Frame {
+                        operator: LogicalOperator::And,
                         remaining: *children,
                         value: Truth::True,
+                    });
+                    continue;
+                }
+                ProgramNode::Or { children } => {
+                    self.frames.push(Frame {
+                        operator: LogicalOperator::Or,
+                        remaining: *children,
+                        value: Truth::False,
                     });
                     continue;
                 }
@@ -120,8 +136,14 @@ impl Evaluator {
                 frame.remaining = frame.remaining.checked_sub(1).ok_or(Error::Capacity {
                     operation: "counting evaluated expression children",
                 })?;
-                frame.value = frame.value.and(value);
-                let short_circuits = matches!(frame.value, Truth::False);
+                frame.value = match frame.operator {
+                    LogicalOperator::And => frame.value.and(value),
+                    LogicalOperator::Or => frame.value.or(value),
+                };
+                let short_circuits = matches!(
+                    (frame.operator, frame.value),
+                    (LogicalOperator::And, Truth::False) | (LogicalOperator::Or, Truth::True)
+                );
                 let skipped = if short_circuits { frame.remaining } else { 0 };
                 if skipped > 0 {
                     frame.remaining = 0;

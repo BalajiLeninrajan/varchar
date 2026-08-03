@@ -41,13 +41,14 @@ impl<'statement> Program<'statement> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ProgramNode<'statement> {
     And { children: usize },
+    Or { children: usize },
     Predicate(Predicate<'statement>),
 }
 
 impl ProgramNode<'_> {
     pub(crate) const fn child_count(&self) -> usize {
         match self {
-            Self::And { children } => *children,
+            Self::And { children } | Self::Or { children } => *children,
             Self::Predicate(_) => 0,
         }
     }
@@ -96,7 +97,7 @@ fn valid_program(nodes: &[ProgramNode<'_>]) -> bool {
         pending = after_node;
 
         let children = node.child_count();
-        if matches!(node, ProgramNode::And { .. }) && children < 2 {
+        if matches!(node, ProgramNode::And { .. } | ProgramNode::Or { .. }) && children < 2 {
             return false;
         }
         let Some(next) = pending.checked_add(children) else {

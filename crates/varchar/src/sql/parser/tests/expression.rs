@@ -1,6 +1,6 @@
 use super::{parse, select};
 use crate::Error;
-use crate::sql::ast::{Expression, ExpressionNode};
+use crate::sql::ast::{Expression, ExpressionNode, Statement};
 
 fn expression(sql: &str) -> Expression {
     select(sql)
@@ -36,7 +36,33 @@ fn assert_unsupported(sql: &str, expected_feature: &str, marker: &str) {
 }
 
 #[test]
+fn and_binds_more_tightly_than_or() {
+    let expression = expression("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
+    assert!(matches!(
+        expression.nodes()[0],
+        ExpressionNode::Or { children: 2 }
+    ));
+    assert_eq!(predicate_name(&expression.nodes()[1]), "a");
+    assert!(matches!(
+        expression.nodes()[2],
+        ExpressionNode::And { children: 2 }
+    ));
+    assert_eq!(predicate_name(&expression.nodes()[3]), "b");
+    assert_eq!(predicate_name(&expression.nodes()[4]), "c");
+}
+
+#[test]
 fn parentheses_override_precedence_and_associative_nodes_flatten() {
+    let grouped = expression("SELECT * FROM t WHERE (a = 1 OR b = 2) AND c = 3");
+    assert!(matches!(
+        grouped.nodes()[0],
+        ExpressionNode::And { children: 2 }
+    ));
+    assert!(matches!(
+        grouped.nodes()[1],
+        ExpressionNode::Or { children: 2 }
+    ));
+
     let flattened = expression("SELECT * FROM t WHERE (a = 1 AND b = 2) AND (c = 3 AND d = 4)");
     assert!(matches!(
         flattened.nodes()[0],
@@ -61,12 +87,41 @@ fn malformed_supported_expressions_are_parse_errors() {
         "SELECT * FROM t WHERE a = 1)",
         "SELECT * FROM t WHERE ()",
         "SELECT * FROM t WHERE a = 1 AND",
+        "SELECT * FROM t WHERE a = 1 OR OR b = 2",
         "SELECT * FROM t WHERE a = AND b = 2",
     ] {
         assert!(
             matches!(parse(sql), Err(Error::Parse { .. })),
             "expected Parse for {sql:?}"
         );
+    }
+}
+
+#[test]
+fn recognized_trailing_features_remain_statement_level_unsupported_errors() {
+    for (sql, feature, marker) in [
+        (
+            "SELECT * FROM t WHERE id = 1 AND (id = 2 OR id = 3) ORDER BY id",
+            "ORDER BY",
+            "ORDER",
+        ),
+        (
+            "EXPLAIN REGEX SELECT * FROM t WHERE (id = 1 OR id = 2) GROUP BY id",
+            "GROUP BY",
+            "GROUP",
+        ),
+        (
+            "UPDATE t SET id = 1 WHERE (id = 1 OR id = 2) LIMIT 1",
+            "LIMIT",
+            "LIMIT",
+        ),
+        (
+            "DELETE FROM t WHERE id = 1 AND (id = 2 OR id = 3) AS alias",
+            "aliases",
+            "AS",
+        ),
+    ] {
+        assert_unsupported(sql, feature, marker);
     }
 }
 
@@ -102,4 +157,26 @@ fn excluded_expression_forms_have_structured_features_and_exact_spans() {
     ] {
         assert_unsupported(sql, feature, marker);
     }
+}
+
+#[test]
+fn deep_parse_format_and_destruction_use_explicit_stacks() {
+    const DEPTH: usize = 2_000;
+    let mut sql = String::from("SELECT * FROM t WHERE ");
+    sql.push_str(&"(".repeat(DEPTH));
+    sql.push_str("a = 1");
+    for index in 0..DEPTH {
+        if index % 2 == 0 {
+            sql.push_str(" AND a = 1)");
+        } else {
+            sql.push_str(" OR a = 1)");
+        }
+    }
+
+    let Statement::Select(statement) = parse(&sql).expect("deep expression parses") else {
+        panic!("expected SELECT");
+    };
+    let expression = statement.where_clause.expect("WHERE exists");
+    assert_eq!(expression.predicate_units().expect("count fits"), DEPTH + 1);
+    drop(expression);
 }

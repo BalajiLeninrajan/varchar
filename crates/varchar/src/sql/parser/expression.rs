@@ -7,11 +7,13 @@ use crate::{Error, Result, Span, Value};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogicalOperator {
     And,
+    Or,
 }
 
 impl LogicalOperator {
     const fn precedence(self) -> u8 {
         match self {
+            Self::Or => 1,
             Self::And => 2,
         }
     }
@@ -106,6 +108,7 @@ impl Parser {
 
             let incoming = match self.current_word() {
                 Some("AND") => Some(LogicalOperator::And),
+                Some("OR") => Some(LogicalOperator::Or),
                 _ => None,
             };
             if let Some(incoming) = incoming {
@@ -355,6 +358,9 @@ fn normalize(mut arena: Vec<Option<TemporaryNode>>, root: usize) -> Result<Expre
         debug_assert!(children.len() >= 2);
         nodes.push(match operator {
             LogicalOperator::And => ExpressionNode::And {
+                children: children.len(),
+            },
+            LogicalOperator::Or => ExpressionNode::Or {
                 children: children.len(),
             },
         });

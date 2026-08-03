@@ -37,13 +37,14 @@ impl Expression {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExpressionNode {
     And { children: usize },
+    Or { children: usize },
     Predicate(Predicate),
 }
 
 impl ExpressionNode {
     pub(crate) const fn child_count(&self) -> usize {
         match self {
-            Self::And { children } => *children,
+            Self::And { children } | Self::Or { children } => *children,
             Self::Predicate(_) => 0,
         }
     }
@@ -73,7 +74,7 @@ fn valid_program(nodes: &[ExpressionNode]) -> bool {
         pending = after_node;
 
         let children = node.child_count();
-        if matches!(node, ExpressionNode::And { .. }) && children < 2 {
+        if matches!(node, ExpressionNode::And { .. } | ExpressionNode::Or { .. }) && children < 2 {
             return false;
         }
         let Some(next) = pending.checked_add(children) else {

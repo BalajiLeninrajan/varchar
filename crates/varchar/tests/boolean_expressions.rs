@@ -1,6 +1,6 @@
 #![cfg(not(target_family = "wasm"))]
 
-use varchar::{Database, Error, Outcome, RowSet, Value};
+use varchar::{Database, Error, Limits, Outcome, Resource, RowSet, Value};
 
 fn execute(database: &mut Database, sql: &str) -> Outcome {
     database
@@ -17,5 +17,7 @@ fn rows(database: &mut Database, sql: &str) -> RowSet {
 
 #[path = "boolean_expressions/execution.rs"]
 mod execution;
+#[path = "boolean_expressions/planning.rs"]
+mod planning;
 #[path = "boolean_expressions/semantics.rs"]
 mod semantics;

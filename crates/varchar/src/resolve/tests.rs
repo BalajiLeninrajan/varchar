@@ -1,5 +1,6 @@
 mod column;
 mod create;
+mod expression;
 mod insert;
 mod join;
 mod predicate;

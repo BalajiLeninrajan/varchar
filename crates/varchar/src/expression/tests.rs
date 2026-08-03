@@ -23,6 +23,25 @@ fn three_valued_and_matrix_is_complete() {
     }
 }
 
+#[test]
+fn three_valued_or_matrix_is_complete() {
+    use Truth::{False, True, Unknown};
+    let cases = [
+        (False, False, False),
+        (False, True, True),
+        (False, Unknown, Unknown),
+        (True, False, True),
+        (True, True, True),
+        (True, Unknown, True),
+        (Unknown, False, Unknown),
+        (Unknown, True, True),
+        (Unknown, Unknown, Unknown),
+    ];
+    for (left, right, expected) in cases {
+        assert_eq!(left.or(right), expected, "{left:?} OR {right:?}");
+    }
+}
+
 /// Match `pattern` against `value` with a private budget of `limit`.
 fn like_matches(value: &str, pattern: &str, limit: usize) -> crate::Result<bool> {
     let atoms = compile_pattern(pattern).expect("LIKE pattern is valid");

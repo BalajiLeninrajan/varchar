@@ -64,19 +64,19 @@ fn one_evaluator_stack_is_charged_for_all_join_residuals() {
         })
     };
     let small = Program::new(vec![
-        ProgramNode::And { children: 2 },
+        ProgramNode::Or { children: 2 },
         predicate(),
         predicate(),
     ]);
     let large = Program::new(vec![
-        ProgramNode::And { children: 2 },
+        ProgramNode::Or { children: 2 },
         ProgramNode::And { children: 2 },
         predicate(),
         predicate(),
         predicate(),
     ]);
     let cross = Program::new(vec![
-        ProgramNode::And { children: 2 },
+        ProgramNode::Or { children: 2 },
         predicate(),
         predicate(),
     ]);
