@@ -6,8 +6,9 @@
 
 use std::ops::Range;
 
-use super::encode::encode_auto_increment_record;
-use super::{RowLayout, StorageState, TableSchema, encode_row, encode_schema};
+use super::encode::{encode_auto_increment_record, encode_table_metadata};
+use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
+use super::{RowLayout, StorageState, TableSchema, encode_row};
 use crate::{Error, Resource, Result, Value};
 
 struct DeferredAutoIncrement<'a> {
@@ -23,6 +24,7 @@ pub(crate) struct Candidate<'a> {
     cursor: usize,
     output: String,
     max_bytes: usize,
+    format: FormatVersion,
     deferred_auto_increment: Option<DeferredAutoIncrement<'a>>,
 }
 
@@ -39,6 +41,7 @@ impl<'a> Candidate<'a> {
             cursor: 0,
             output,
             max_bytes,
+            format: state.format(),
             deferred_auto_increment: None,
         })
     }
@@ -48,12 +51,17 @@ impl<'a> Candidate<'a> {
         schema: &TableSchema,
         auto_increment: Option<usize>,
     ) -> Result<()> {
-        let encoded = encode_schema(schema)?;
-        let encoded = if let Some(column) = auto_increment {
-            encoded + &encode_auto_increment_record(schema, column, 0)?
-        } else {
-            encoded
-        };
+        let requires_v3 = schema.columns.iter().any(|column| column.default.is_some());
+        if requires_v3 && self.format == FormatVersion::V2 {
+            self.splice(0..V2_HEADER.len(), V3_HEADER)?;
+            self.format = FormatVersion::V3;
+        }
+        if requires_v3 && !self.format.supports_extensions() {
+            return Err(Error::Schema(String::from(
+                "DEFAULT metadata requires storage format V3",
+            )));
+        }
+        let encoded = encode_table_metadata(schema, auto_increment.map(|column| (column, 0)))?;
         let row_start = self.state.catalog().row_start;
         self.splice(row_start..row_start, &encoded)
     }

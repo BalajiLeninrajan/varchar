@@ -43,6 +43,7 @@ pub(crate) fn create_schema(catalog: &Catalog, statement: CreateTable) -> Result
             name: column.name.clone(),
             data_type: column.data_type,
             nullable: true,
+            default: None,
         });
     }
     if columns.is_empty() {

@@ -148,7 +148,9 @@ The storage format is deterministic, versioned, printable, and one line long. A 
 V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~A|users|id|I1;~R|users|I1|TAda|B1;
 ```
 
-Schema and row records carry explicit tags. Key constraints are metadata records before the row records: `~P|users|id;` declares a primary key, while `~F|posts|user_id|users|id;` declares a foreign key. An auto-incrementing key has exactly one record such as `~A|users|id|I42;`, placed after that table's primary- and foreign-key metadata. Its nonnegative high-water mark must cover every stored key for the generated column. V2 is a strict format bump: V1 blobs are rejected rather than migrated implicitly.
+Schema and row records carry explicit tags. Key constraints are metadata records before the row records: `~P|users|id;` declares a primary key, while `~F|posts|user_id|users|id;` declares a foreign key. An auto-incrementing key has exactly one record such as `~A|users|id|I42;`, placed after that table's primary- and foreign-key metadata. Its nonnegative high-water mark must cover every stored key for the generated column.
+
+V2 remains the canonical format for databases that use only legacy metadata. A first nonredundant V3 feature such as DEFAULT atomically changes the header to `V3;` and inserts records such as `~D|jobs|state|Tqueued;`; explicit `DEFAULT NULL` is encoded as `N`. Per table, DEFAULT records follow optional auto-increment metadata in increasing column order. Loading accepts V2 and V3 without rewriting either one, V3 never downgrades during later mutations, and a V3-only record under a V2 header is corruption. V1 blobs remain unsupported rather than being migrated implicitly.
 
 Cell prefixes distinguish text, integers, booleans, and nulls, while structural and line-breaking characters are escaped reversibly. Loading validates the complete header, schemas, constraint metadata, key integrity, escapes, row widths, types, and canonical encoding; malformed records are never silently skipped.
 

@@ -3,7 +3,7 @@
 use super::super::TableSchema;
 use super::super::budget::{WorkingBudget, WorkingStringSet};
 use super::super::format::{
-    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
+    AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
     complete_record_body, corrupt, is_valid_identifier,
 };
 use super::decode_integer;
@@ -27,6 +27,13 @@ pub(in crate::storage) struct AutoIncrementMetadata<'a> {
     pub(in crate::storage) table: &'a str,
     pub(in crate::storage) column: &'a str,
     pub(in crate::storage) last: i64,
+}
+
+pub(in crate::storage) struct DefaultMetadata<'a> {
+    pub(in crate::storage) table: &'a str,
+    pub(in crate::storage) column: &'a str,
+    pub(in crate::storage) encoded_value: &'a str,
+    pub(in crate::storage) value_offset: usize,
 }
 
 pub(in crate::storage) fn decode_schema_record(
@@ -97,6 +104,7 @@ pub(in crate::storage) fn decode_schema_record(
             name: budget.clone_text(name, "allocating a decoded column name")?,
             data_type,
             nullable,
+            default: None,
         });
     }
     if columns.is_empty() {
@@ -172,5 +180,30 @@ pub(in crate::storage) fn decode_auto_increment_record(
         table,
         column,
         last,
+    })
+}
+
+pub(in crate::storage) fn decode_default_record(
+    record: &str,
+    offset: usize,
+) -> Result<DefaultMetadata<'_>> {
+    let body = complete_record_body(record, DEFAULT_PREFIX, offset)?;
+    let mut fields = body.split('|');
+    let table = fields.next().unwrap_or_default();
+    let column = fields.next().unwrap_or_default();
+    let encoded_value = fields.next().unwrap_or_default();
+    if fields.next().is_some()
+        || !is_valid_identifier(table)
+        || !is_valid_identifier(column)
+        || encoded_value.is_empty()
+    {
+        return Err(corrupt(offset, "malformed DEFAULT metadata"));
+    }
+    let value_offset = offset + DEFAULT_PREFIX.len() + table.len() + 1 + column.len() + 1;
+    Ok(DefaultMetadata {
+        table,
+        column,
+        encoded_value,
+        value_offset,
     })
 }

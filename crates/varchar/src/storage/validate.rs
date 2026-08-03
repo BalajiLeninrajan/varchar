@@ -4,10 +4,10 @@ mod metadata;
 
 use super::budget::WorkingBudget;
 use super::decode::{
-    decode_auto_increment_record, decode_foreign_key_record, decode_primary_key_record,
-    decode_schema_record, validate_row_record,
+    decode_auto_increment_record, decode_default_record, decode_foreign_key_record,
+    decode_primary_key_record, decode_schema_record, validate_row_record,
 };
-use super::format::{HEADER, RecordKind, corrupt, records};
+use super::format::{FormatVersion, RecordKind, corrupt, decode_header, records};
 use super::{Catalog, integrity};
 use crate::{Error, Result};
 
@@ -23,15 +23,18 @@ pub(super) enum ValidationMode {
 pub(crate) fn validate_and_catalog(
     blob: &str,
     max_storage_working_bytes: usize,
-) -> Result<Catalog> {
+) -> Result<(FormatVersion, Catalog)> {
     validate_with_mode(blob, ValidationMode::Persisted, max_storage_working_bytes)
 }
 
 /// Validate a database assembled by a SQL mutation.
 ///
-/// Structural encoding failures remain corruption errors. Invalid key
+/// Structural encoding failures remain corruption errors. Invalid constraint
 /// definitions are schema errors, while row-level violations are constraints.
-pub(crate) fn validate_candidate(blob: &str, max_storage_working_bytes: usize) -> Result<Catalog> {
+pub(crate) fn validate_candidate(
+    blob: &str,
+    max_storage_working_bytes: usize,
+) -> Result<(FormatVersion, Catalog)> {
     validate_with_mode(blob, ValidationMode::Candidate, max_storage_working_bytes)
 }
 
@@ -39,17 +42,14 @@ fn validate_with_mode(
     blob: &str,
     mode: ValidationMode,
     max_storage_working_bytes: usize,
-) -> Result<Catalog> {
-    if !blob.starts_with(HEADER) {
-        return Err(corrupt(0, "expected canonical V2; header"));
-    }
-
+) -> Result<(FormatVersion, Catalog)> {
+    let version = decode_header(blob)?;
     let mut budget = WorkingBudget::new(max_storage_working_bytes);
     let mut metadata = MetadataValidator::new();
     let mut row_start = blob.len();
     let mut saw_row = false;
 
-    for record in records(blob) {
+    for record in records(blob, version) {
         let record = record?;
         match record.kind {
             RecordKind::Schema => {
@@ -77,6 +77,12 @@ fn validate_with_mode(
                     &mut budget,
                 )?;
             }
+            RecordKind::Default => {
+                reject_extension_in_v2(version, record.range.start)?;
+                reject_after_rows(saw_row, record.range.start, "DEFAULT metadata")?;
+                let default = decode_default_record(record.text, record.range.start)?;
+                metadata.apply_default(default, record.range.start, mode, &mut budget)?;
+            }
             RecordKind::Row => {
                 if !saw_row {
                     row_start = record.range.start;
@@ -101,7 +107,15 @@ fn validate_with_mode(
             }
         });
     }
-    Ok(catalog)
+    Ok((version, catalog))
+}
+
+fn reject_extension_in_v2(version: FormatVersion, offset: usize) -> Result<()> {
+    if version.supports_extensions() {
+        Ok(())
+    } else {
+        Err(corrupt(offset, "V3 metadata is invalid under a V2 header"))
+    }
 }
 
 fn reject_after_rows(saw_row: bool, offset: usize, record: &str) -> Result<()> {

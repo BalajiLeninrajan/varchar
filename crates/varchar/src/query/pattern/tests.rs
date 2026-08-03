@@ -22,6 +22,7 @@ fn integer_column(name: &str) -> SchemaColumn {
         name: name.to_owned(),
         data_type: DataType::Integer,
         nullable: false,
+        default: None,
     }
 }
 
@@ -41,6 +42,7 @@ fn resolved_like_atoms_match_canonical_encoded_text() {
         name: String::from("body"),
         data_type: DataType::Text,
         nullable: true,
+        default: None,
     }];
     let predicates = [ResolvedPredicate::Like {
         column: location(0),
@@ -66,6 +68,7 @@ fn null_and_typed_value_predicates_use_complete_cell_boundaries() {
             name: String::from("note"),
             data_type: DataType::Text,
             nullable: true,
+            default: None,
         },
     ];
     let id = Value::Integer(7);

@@ -22,11 +22,13 @@ fn row_view_exposes_the_complete_envelope_and_absolute_range() {
             name: String::from("id"),
             data_type: DataType::Integer,
             nullable: false,
+            default: None,
         },
         SchemaColumn {
             name: String::from("body"),
             data_type: DataType::Text,
             nullable: false,
+            default: None,
         },
     ];
     assert_eq!(

@@ -31,6 +31,8 @@ pub(crate) struct SchemaColumn {
     pub(crate) name: String,
     pub(crate) data_type: DataType,
     pub(crate) nullable: bool,
+    /// `None` means no DEFAULT; `Some(Value::Null)` preserves explicit NULL.
+    pub(crate) default: Option<Value>,
 }
 
 /// A typed database value.
