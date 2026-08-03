@@ -1,6 +1,6 @@
 //! `DELETE` planning, row removal, and atomic storage commit.
 
-use super::Database;
+use super::{Database, mutation_plan::MutationPlan};
 use crate::query;
 use crate::resolve;
 use crate::sql::Delete;
@@ -15,8 +15,8 @@ impl Database {
             self.limits.max_predicates,
             self.limits.regex_backtrack_limit,
         )?;
-        let affected =
-            query::rewrite_matching_rows(&mut candidate, &plan, &self.limits, |_| Ok(None))?;
+        let mutation = MutationPlan::delete(candidate.source(), &plan, &self.limits)?;
+        let affected = mutation.apply(&mut candidate)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Affected { rows: affected })
     }

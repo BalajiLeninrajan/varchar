@@ -3,6 +3,7 @@
 mod create;
 mod delete;
 mod insert;
+mod mutation_plan;
 mod update;
 
 use super::Database;

@@ -1,4 +1,4 @@
-//! Execution of compiled scans through selection or mutation rewriting.
+//! Execution of compiled scans through selection and shared regex diagnostics.
 
 mod rewrite;
 mod select;
@@ -12,7 +12,7 @@ pub(crate) use rewrite::rewrite_matching_rows;
 pub(super) use select::explain;
 pub(crate) use select::select as execute_select;
 
-fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
+pub(crate) fn map_regex_runtime(error: FancyError, limits: &Limits) -> Error {
     match error {
         FancyError::RuntimeError(RuntimeError::BacktrackLimitExceeded) => Error::ResourceLimit {
             resource: Resource::RegexBacktracking,

@@ -1,10 +1,10 @@
 //! Authoritative storage blobs paired with their derived catalogs.
 
-use super::budget::working_limit;
 use super::format::{FormatVersion, V2_HEADER};
 use super::validate::{validate_and_catalog_with_limits, validate_candidate};
 use super::{Candidate, Catalog};
 use crate::Result;
+use crate::limits::storage_working_limit;
 
 /// The canonical empty database remains byte-for-byte V2.
 pub(crate) const EMPTY_BLOB: &str = V2_HEADER;
@@ -39,7 +39,7 @@ impl StorageState {
     ) -> Result<Self> {
         let (format, catalog) = validate_and_catalog_with_limits(
             &blob,
-            working_limit(max_database_bytes),
+            storage_working_limit(max_database_bytes),
             max_predicates,
             check_like_work_limit,
         )?;
@@ -58,7 +58,7 @@ impl StorageState {
     ) -> Result<Self> {
         let (format, catalog) = validate_candidate(
             &blob,
-            working_limit(max_database_bytes),
+            storage_working_limit(max_database_bytes),
             max_predicates,
             check_like_work_limit,
         )?;

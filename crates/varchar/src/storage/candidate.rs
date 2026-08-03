@@ -163,6 +163,15 @@ impl<'a> Candidate<'a> {
         self.splice(range, encoded.as_deref().unwrap_or_default())
     }
 
+    pub(crate) fn rewrite_encoded_row(
+        &mut self,
+        range: Range<usize>,
+        replacement: Option<&str>,
+    ) -> Result<()> {
+        self.apply_deferred_auto_increment()?;
+        self.splice(range, replacement.unwrap_or_default())
+    }
+
     pub(crate) fn source(&self) -> &'a str {
         self.state.as_str()
     }

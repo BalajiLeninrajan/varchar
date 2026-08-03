@@ -1,4 +1,4 @@
-use super::{Limits, Resource, check_limit};
+use super::{Limits, Resource, check_limit, storage_working_limit};
 use crate::Error;
 
 #[test]
@@ -20,6 +20,12 @@ fn defaults_cover_every_resource_bound() {
 }
 
 #[test]
+fn storage_working_limit_is_private_multiple_with_saturation() {
+    assert_eq!(storage_working_limit(7), 28);
+    assert_eq!(storage_working_limit(usize::MAX), usize::MAX);
+}
+
+#[test]
 fn check_limit_preserves_structured_resource_metadata() {
     assert!(check_limit(4, 4, Resource::JoinSteps).is_ok());
 
@@ -36,6 +42,7 @@ fn check_limit_preserves_structured_resource_metadata() {
 fn resources_have_human_readable_names() {
     let cases = [
         (Resource::DatabaseBytes, "database bytes"),
+        (Resource::StorageWorkingBytes, "storage working bytes"),
         (Resource::SqlBytes, "SQL bytes"),
         (Resource::WherePredicates, "WHERE predicates"),
         (Resource::CheckPredicates, "CHECK predicates"),
@@ -45,7 +52,6 @@ fn resources_have_human_readable_names() {
         (Resource::QueryOutputBytes, "query output bytes"),
         (Resource::JoinSteps, "JOIN execution steps"),
         (Resource::RegexBacktracking, "regex backtracking steps"),
-        (Resource::StorageWorkingBytes, "storage working bytes"),
     ];
 
     for (resource, human_display) in cases {

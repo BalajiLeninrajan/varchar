@@ -18,6 +18,10 @@ pub(crate) struct ScanPlan<'statement> {
 }
 
 impl ScanPlan<'_> {
+    pub(crate) const fn regex(&self) -> &Regex {
+        &self.regex
+    }
+
     pub(crate) fn row_layout(&self) -> RowLayout<'_> {
         self.layout.row_layout()
     }
@@ -25,6 +29,10 @@ impl ScanPlan<'_> {
     #[cfg(test)]
     pub(crate) fn validated_row_layout(&self) -> ValidatedRowLayout<'_> {
         self.layout.validated_row_layout()
+    }
+
+    pub(crate) const fn local_residual(&self) -> Option<&Program<'_>> {
+        self.local_residual.as_ref()
     }
 }
 
