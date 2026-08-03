@@ -10,7 +10,10 @@ pub(crate) fn print_outcome(outcome: &Outcome) -> io::Result<()> {
     let mut output = stdout.lock();
 
     match outcome {
-        Outcome::Rows(rows) => print_rows(&mut output, rows),
+        Outcome::Rows(rows) => match show_create_statement(rows) {
+            Some(statement) => writeln!(output, "{statement}"),
+            None => print_rows(&mut output, rows),
+        },
         Outcome::Affected { rows } => writeln!(
             output,
             "affected {rows} row{}",
@@ -33,6 +36,28 @@ fn print_explanation(output: &mut impl Write, plan: &SelectExplanation) -> io::R
             "prefilter (Rust-side filtering applies)"
         }
     )
+}
+
+fn show_create_statement(row_set: &RowSet) -> Option<&str> {
+    let [table_name_column, statement_column] = row_set.columns() else {
+        return None;
+    };
+    if table_name_column.label() != "table_name"
+        || table_name_column.origin().table() != "information_schema.tables"
+        || table_name_column.origin().column() != "table_name"
+        || statement_column.label() != "create_statement"
+        || statement_column.origin().table() != "information_schema.tables"
+        || statement_column.origin().column() != "create_statement"
+    {
+        return None;
+    }
+    let [row] = row_set.rows() else {
+        return None;
+    };
+    let [Value::Text(_), Value::Text(statement)] = row.as_slice() else {
+        return None;
+    };
+    Some(statement)
 }
 
 fn print_rows(output: &mut impl Write, row_set: &RowSet) -> io::Result<()> {

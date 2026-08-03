@@ -136,6 +136,10 @@ fn schema_metadata_commands_render_without_replacing_the_database() {
             .and(predicate::str::contains("'seed'"))
             .and(predicate::str::contains("2 rows")),
     );
+    exec(&path, "SHOW CREATE TABLE accounts").success().stdout(
+        "CREATE TABLE accounts (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \
+             name TEXT DEFAULT 'seed')\n",
+    );
 
     assert_eq!(
         fs::read(&path).expect("database should remain readable"),
@@ -150,6 +154,20 @@ fn schema_metadata_commands_render_without_replacing_the_database() {
         inode_before_read,
         "metadata reads must not replace the database file"
     );
+}
+
+#[test]
+fn show_create_table_cli_output_is_verbatim_sql() {
+    let (_directory, path) = initialized_database();
+    exec(
+        &path,
+        "CREATE TABLE escaped (value TEXT DEFAULT 'a\\b\nline\tend')",
+    )
+    .success();
+
+    exec(&path, "SHOW CREATE TABLE escaped")
+        .success()
+        .stdout("CREATE TABLE escaped (value TEXT DEFAULT 'a\\b\nline\tend')\n");
 }
 
 #[test]

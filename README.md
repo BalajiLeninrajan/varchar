@@ -93,7 +93,7 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | `table_name` | `TEXT` | no | Normalized table name. |
 | `create_statement` | `TEXT` | no | Canonical `CREATE TABLE` statement without a trailing semicolon. |
 
-The generated statement preserves the catalog's schema semantics rather than the original spelling or inline-versus-table-level placement. It emits columns and CHECK declarations in catalog order, quotes reserved identifiers and literal defaults, writes foreign-key actions explicitly, and reconstructs CHECK precedence and LIKE escapes. `AUTOINCREMENT` is included, but its mutable high-water value is runtime state and is not part of `CREATE TABLE`. Referenced tables must already exist when replaying foreign-key DDL.
+The generated statement preserves the catalog's schema semantics rather than the original spelling or inline-versus-table-level placement. It emits columns and CHECK declarations in catalog order, quotes reserved identifiers and literal defaults, writes foreign-key actions explicitly, and reconstructs CHECK precedence and LIKE escapes. `AUTOINCREMENT` is included, but its mutable high-water value is runtime state and is not part of `CREATE TABLE`. Referenced tables must already exist when replaying foreign-key DDL. The CLI prints the generated statement verbatim instead of applying its usual tabular TEXT escaping, so backslashes and control characters retain their SQL meaning.
 
 ```sql
 SHOW TABLES;
