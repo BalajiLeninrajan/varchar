@@ -73,14 +73,19 @@ pub struct Limits {
     ///
     /// An unordered single-table query retains one decoded row at a time, so its
     /// decoded-row charge is a peak-per-row budget rather than a cumulative scan
-    /// budget. An ordered query additionally accumulates every qualifying
-    /// projection, one owned value per sort key (including text payload),
-    /// pending-row descriptors, and a tie-breaking ordinal. Joined queries also
-    /// charge each decoded row transiently, then cumulatively charge rows retained
-    /// after source-local residuals, the chosen-row pointer stack, and one reusable
-    /// residual-evaluation stack. This does not govern `UPDATE` or `DELETE`;
-    /// returned rows have a separate limit. Charges include target-layout sizes,
-    /// so an exact boundary can differ between 32-bit and 64-bit builds.
+    /// budget. An ordered query additionally retains a projection, one owned value
+    /// per sort key (including text payload), pending-row descriptors, and a
+    /// tie-breaking ordinal per pending row. With a `LIMIT` it retains at most
+    /// `OFFSET + LIMIT` of those rows and refunds the charge for every row it
+    /// evicts, so the charge tracks the pagination window rather than the number
+    /// of qualifying rows; without one it retains every qualifying row, and
+    /// `LIMIT 0` instead skips execution working state entirely. Joined queries
+    /// also charge each decoded row transiently, then cumulatively charge rows
+    /// retained after source-local residuals, the chosen-row pointer stack, and
+    /// one reusable residual-evaluation stack. This does not govern `UPDATE` or
+    /// `DELETE`; returned rows have a separate limit. Charges include
+    /// target-layout sizes, so an exact boundary can differ between 32-bit and
+    /// 64-bit builds.
     pub max_query_working_bytes: usize,
     /// Maximum conservatively accounted bytes for one materialized `SELECT`
     /// result after pagination or one `SELECT` explanation.

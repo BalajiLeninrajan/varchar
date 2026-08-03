@@ -395,6 +395,16 @@ impl ByteBudget {
         Ok(())
     }
 
+    /// Returns bytes to the budget when a charged allocation is dropped again.
+    ///
+    /// Bounded ordered collection evicts pending rows it has already charged
+    /// for, so the budget has to track live bytes rather than a running total.
+    /// Every release mirrors a charge this budget accepted; the saturating
+    /// subtraction only keeps an accounting slip from panicking.
+    fn release(&mut self, amount: usize) {
+        self.used = self.used.saturating_sub(amount);
+    }
+
     fn check_transient(&self, amount: usize) -> Result<()> {
         let peak = self
             .used

@@ -323,6 +323,73 @@ fn output_budget_charges_only_the_final_paginated_rows() {
     }
 }
 
+#[test]
+fn ordered_pagination_retains_only_its_own_window_of_qualifying_rows() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE ordered (id INTEGER NOT NULL, key_ TEXT NOT NULL)",
+    );
+    for id in 0..8 {
+        execute(
+            &mut database,
+            &format!("INSERT INTO ordered VALUES ({id}, 'payload-{id}')"),
+        );
+    }
+    let blob = database.into_string();
+    let unbounded = minimum_working_limit(&blob, "SELECT id FROM ordered ORDER BY key_");
+
+    // Ordered working bytes scale with `OFFSET + LIMIT`, not with the number of
+    // qualifying rows, and two windows of the same width cost the same.
+    let one = minimum_working_limit(&blob, "SELECT id FROM ordered ORDER BY key_ LIMIT 1");
+    let four = minimum_working_limit(&blob, "SELECT id FROM ordered ORDER BY key_ LIMIT 4");
+    let offset_three = minimum_working_limit(
+        &blob,
+        "SELECT id FROM ordered ORDER BY key_ LIMIT 1 OFFSET 3",
+    );
+    assert!(
+        one < four,
+        "a one-row window costs less than a four-row one"
+    );
+    assert_eq!(
+        four, offset_three,
+        "LIMIT 1 OFFSET 3 retains the same four rows as LIMIT 4"
+    );
+    assert!(
+        four < unbounded,
+        "a four-row window costs less than all eight qualifying rows"
+    );
+
+    // A window at least as wide as the result cannot save anything, and an
+    // open-ended window still has to retain every qualifying row.
+    assert_eq!(
+        minimum_working_limit(&blob, "SELECT id FROM ordered ORDER BY key_ LIMIT 8"),
+        unbounded
+    );
+    assert_eq!(
+        minimum_working_limit(
+            &blob,
+            "SELECT id FROM ordered ORDER BY key_ OFFSET 18446744073709551615",
+        ),
+        unbounded
+    );
+
+    // Evicted rows refund their working charge, so the window's own bound is
+    // enough to produce the window itself.
+    let limits = Limits {
+        max_query_working_bytes: offset_three,
+        ..Limits::default()
+    };
+    let mut bounded = Database::from_string_with_limits(blob, limits).expect("fixture reloads");
+    assert_eq!(
+        ids(
+            &mut bounded,
+            "SELECT id FROM ordered ORDER BY key_ LIMIT 1 OFFSET 3",
+        ),
+        [3]
+    );
+}
+
 fn minimum_output_limit(blob: &str, sql: &str) -> usize {
     let mut lower = 0_usize;
     let mut upper = 64 * 1024_usize;
@@ -344,5 +411,29 @@ fn minimum_output_limit(blob: &str, sql: &str) -> usize {
         }
     }
     assert!(lower > 0, "result has a nonzero output charge");
+    lower
+}
+
+fn minimum_working_limit(blob: &str, sql: &str) -> usize {
+    let mut lower = 0_usize;
+    let mut upper = 64 * 1024_usize;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let limits = Limits {
+            max_query_working_bytes: middle,
+            ..Limits::default()
+        };
+        let mut database =
+            Database::from_string_with_limits(blob.to_owned(), limits).expect("fixture reloads");
+        match database.execute(sql) {
+            Ok(_) => upper = middle,
+            Err(Error::ResourceLimit {
+                resource: Resource::QueryWorkingBytes,
+                ..
+            }) => lower = middle + 1,
+            Err(error) => panic!("unexpected error while finding working boundary: {error}"),
+        }
+    }
+    assert!(lower > 0, "ordered collection has a nonzero working charge");
     lower
 }

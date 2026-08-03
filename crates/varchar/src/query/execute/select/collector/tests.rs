@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
 use super::{
-    CollectionStatus, PendingRow, collect_streaming, compare_pending, compare_values,
-    ordered_row_charge, ordered_window, row_structure_charge,
+    CollectionStatus, PendingRow, collect_ordered, collect_streaming, compare_pending,
+    compare_values, ordered_retention, ordered_row_charge, ordered_window, row_structure_charge,
 };
 use crate::query::execute::select::ByteBudget;
 use crate::resolve::{ColumnLocation, ResolvedOrderTerm};
@@ -154,6 +154,109 @@ fn streaming_pagination_skips_before_output_charge_and_stops_at_limit() {
     );
     assert_eq!(output_budget.used, charged);
     assert_eq!(rows.len(), 1);
+}
+
+#[test]
+fn retention_bounds_the_window_and_falls_back_to_unbounded_collection() {
+    assert_eq!(ordered_retention(0, None), None);
+    assert_eq!(ordered_retention(u64::MAX, None), None);
+    assert_eq!(ordered_retention(0, Some(10)), Some(10));
+    assert_eq!(ordered_retention(3, Some(1)), Some(4));
+    // An empty window is empty at every offset.
+    assert_eq!(ordered_retention(0, Some(0)), Some(0));
+    assert_eq!(ordered_retention(u64::MAX, Some(0)), Some(0));
+    // A bound no `Vec` could ever reach is treated as unbounded rather than
+    // silently truncating the window.
+    assert_eq!(ordered_retention(u64::MAX, Some(1)), None);
+}
+
+#[test]
+fn bounded_ordered_collection_keeps_its_window_and_refunds_evictions() {
+    let key = ColumnLocation {
+        source: 0,
+        column: 0,
+    };
+    let terms = [ResolvedOrderTerm {
+        column: key,
+        descending: false,
+    }];
+    let projection = [key];
+    let mut rows = Vec::new();
+    let mut next_ordinal = 0;
+    let mut budget = ByteBudget::new(usize::MAX, Resource::QueryWorkingBytes);
+    let mut peak = 0;
+
+    // Ties on the sort key must keep the earlier ordinal, exactly as the final
+    // stable sort would, so the two `1`s here are not interchangeable.
+    for scanned in [5_i64, 1, 4, 1, 3, 2] {
+        let source = [Value::Integer(scanned)];
+        let sources = [source.as_slice()];
+        assert_eq!(
+            collect_ordered(
+                &mut rows,
+                &mut next_ordinal,
+                &projection,
+                &terms,
+                Some(2),
+                &sources,
+                &mut budget,
+                0,
+            )
+            .expect("a bounded window always has room"),
+            CollectionStatus::Continue
+        );
+        assert!(rows.len() <= 2, "retention never exceeds OFFSET + LIMIT");
+        peak = peak.max(budget.used);
+    }
+    assert_eq!(next_ordinal, 6, "every scanned row consumes an ordinal");
+
+    rows.sort_unstable_by(|left, right| compare_pending(left, right, &terms));
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.projected.clone(), row.ordinal))
+            .collect::<Vec<_>>(),
+        vec![(vec![Value::Integer(1)], 1), (vec![Value::Integer(1)], 3)]
+    );
+
+    let live = ordered_row_charge(1, 1, 0, 0, &budget).expect("target-layout charge fits");
+    assert_eq!(
+        (budget.used, peak),
+        (2 * live, 2 * live),
+        "only the retained window is ever charged"
+    );
+}
+
+#[test]
+fn an_empty_ordered_window_completes_without_retaining_anything() {
+    let key = ColumnLocation {
+        source: 0,
+        column: 0,
+    };
+    let terms = [ResolvedOrderTerm {
+        column: key,
+        descending: false,
+    }];
+    let source = [Value::Integer(1)];
+    let mut rows = Vec::new();
+    let mut next_ordinal = 0;
+    let mut zero_budget = ByteBudget::new(0, Resource::QueryWorkingBytes);
+
+    assert_eq!(
+        collect_ordered(
+            &mut rows,
+            &mut next_ordinal,
+            &[key],
+            &terms,
+            Some(0),
+            &[source.as_slice()],
+            &mut zero_budget,
+            0,
+        )
+        .expect("an empty window charges nothing"),
+        CollectionStatus::Complete
+    );
+    assert!(rows.is_empty());
+    assert_eq!((next_ordinal, zero_budget.used), (0, 0));
 }
 
 #[test]
