@@ -56,18 +56,10 @@ impl Parser {
             ));
         }
         if !self.at_end() {
-            let feature = match self.current_word() {
-                Some("OR") => "OR predicates",
-                Some("JOIN") => "joins",
-                Some("LEFT" | "RIGHT" | "FULL" | "OUTER") => "outer joins",
-                Some("CROSS") => "cross joins",
-                Some("NATURAL") => "natural joins",
-                Some("ORDER") => "ORDER BY",
-                Some("GROUP") => "GROUP BY",
-                Some("LIMIT") => "LIMIT",
-                Some("AS") => "aliases",
-                _ => "trailing SQL syntax",
-            };
+            let feature = self
+                .current_word()
+                .and_then(trailing_feature)
+                .unwrap_or("trailing SQL syntax");
             return Err(Error::unsupported(feature, self.current().span));
         }
         Ok(statement)
@@ -200,6 +192,21 @@ impl Parser {
 
     fn at_end(&self) -> bool {
         matches!(self.current().kind, TokenKind::End)
+    }
+}
+
+fn trailing_feature(word: &str) -> Option<&'static str> {
+    match word {
+        "OR" => Some("OR predicates"),
+        "JOIN" => Some("joins"),
+        "LEFT" | "RIGHT" | "FULL" | "OUTER" => Some("outer joins"),
+        "CROSS" => Some("cross joins"),
+        "NATURAL" => Some("natural joins"),
+        "ORDER" => Some("ORDER BY"),
+        "GROUP" => Some("GROUP BY"),
+        "LIMIT" => Some("LIMIT"),
+        "AS" => Some("aliases"),
+        _ => None,
     }
 }
 

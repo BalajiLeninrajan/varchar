@@ -1,4 +1,5 @@
 mod create;
+mod expression;
 
 use super::parse;
 use crate::sql::ast::{
