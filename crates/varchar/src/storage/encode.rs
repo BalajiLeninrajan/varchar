@@ -6,7 +6,9 @@ pub(super) use metadata::{
     encode_auto_increment_record, encode_table_metadata, measure_table_metadata,
 };
 
-use super::format::encode_text_into;
+use std::fmt::Write as _;
+
+use super::format::{allocation_error, encode_text_into, encoded_text_len};
 use super::{RowLayout, validate_row_layout};
 use crate::value::validate_value;
 use crate::{DataType, Error, Result, SchemaColumn, Value};
@@ -35,24 +37,64 @@ pub(crate) fn encode_row(values: &[Value], layout: RowLayout<'_>) -> Result<Stri
 
 /// Encode one typed cell in its canonical storage representation.
 pub(crate) fn encode_cell(value: &Value, column: &SchemaColumn) -> Result<String> {
-    validate_value(value, column)?;
-    encode_typed_value(value, column.data_type)
+    let encoded_len = encoded_cell_len(value, column)?;
+    let mut encoded = String::new();
+    encoded
+        .try_reserve_exact(encoded_len)
+        .map_err(|_| allocation_error("reserving an encoded cell"))?;
+    encode_cell_into(value, column, &mut encoded)?;
+    debug_assert_eq!(encoded.len(), encoded_len);
+    Ok(encoded)
 }
 
-pub(super) fn encode_typed_value(value: &Value, data_type: DataType) -> Result<String> {
-    match (value, data_type) {
-        (Value::Null, _) => Ok(String::from("N")),
+fn encoded_cell_len(value: &Value, column: &SchemaColumn) -> Result<usize> {
+    validate_value(value, column)?;
+    match (value, column.data_type) {
+        (Value::Null, _) => Ok(1),
         (Value::Text(value), DataType::Text) => {
-            let mut encoded = String::from("T");
-            encode_text_into(value, &mut encoded);
-            Ok(encoded)
+            encoded_text_len(value)?
+                .checked_add(1)
+                .ok_or(Error::Capacity {
+                    operation: "sizing an encoded TEXT cell",
+                })
         }
-        (Value::Integer(value), DataType::Integer) => Ok(format!("I{value}")),
-        (Value::Boolean(value), DataType::Boolean) => {
-            Ok(String::from(if *value { "B1" } else { "B0" }))
-        }
-        _ => Err(Error::Schema(String::from(
-            "CHECK operand type does not match its resolved column",
-        ))),
+        (Value::Integer(value), DataType::Integer) => signed_decimal_len(*value)
+            .checked_add(1)
+            .ok_or(Error::Capacity {
+                operation: "sizing an encoded INTEGER cell",
+            }),
+        (Value::Boolean(_), DataType::Boolean) => Ok(2),
+        _ => unreachable!("value validation guarantees the encoded type"),
     }
+}
+
+fn encode_cell_into(value: &Value, column: &SchemaColumn, encoded: &mut String) -> Result<()> {
+    validate_value(value, column)?;
+    match (value, column.data_type) {
+        (Value::Null, _) => encoded.push('N'),
+        (Value::Text(value), DataType::Text) => {
+            encoded.push('T');
+            encode_text_into(value, encoded);
+        }
+        (Value::Integer(value), DataType::Integer) => {
+            encoded.push('I');
+            // Writing to a String is infallible.
+            let _ = write!(encoded, "{value}");
+        }
+        (Value::Boolean(value), DataType::Boolean) => {
+            encoded.push_str(if *value { "B1" } else { "B0" });
+        }
+        _ => unreachable!("value validation guarantees the encoded type"),
+    }
+    Ok(())
+}
+
+fn signed_decimal_len(value: i64) -> usize {
+    let magnitude = value.unsigned_abs();
+    let digits = if magnitude == 0 {
+        1
+    } else {
+        magnitude.ilog10() as usize + 1
+    };
+    digits + usize::from(value.is_negative())
 }
