@@ -126,24 +126,57 @@ fn format_predicate(formatter: &mut fmt::Formatter<'_>, predicate: &Predicate) -
     }
 }
 
-fn format_value(formatter: &mut fmt::Formatter<'_>, value: &Value) -> fmt::Result {
+/// Writes `value` as the SQL literal that parses back to it.
+///
+/// This is the crate's only literal renderer: `Display for Expression` uses it
+/// against a [`fmt::Formatter`], and result construction uses it against a
+/// pre-sized [`String`], so it is generic over the sink rather than tied to
+/// either one.
+pub(crate) fn format_value<W: fmt::Write + ?Sized>(writer: &mut W, value: &Value) -> fmt::Result {
     match value {
-        Value::Text(value) => format_text(formatter, value),
-        Value::Integer(value) => write!(formatter, "{value}"),
-        Value::Boolean(true) => formatter.write_str("TRUE"),
-        Value::Boolean(false) => formatter.write_str("FALSE"),
-        Value::Null => formatter.write_str("NULL"),
+        Value::Text(value) => format_text(writer, value),
+        Value::Integer(value) => write!(writer, "{value}"),
+        Value::Boolean(true) => writer.write_str("TRUE"),
+        Value::Boolean(false) => writer.write_str("FALSE"),
+        Value::Null => writer.write_str("NULL"),
     }
 }
 
-fn format_text(formatter: &mut fmt::Formatter<'_>, value: &str) -> fmt::Result {
-    formatter.write_char('\'')?;
+/// Writes `value` as a quoted SQL text literal, doubling embedded apostrophes.
+pub(crate) fn format_text<W: fmt::Write + ?Sized>(writer: &mut W, value: &str) -> fmt::Result {
+    writer.write_char('\'')?;
     for character in value.chars() {
         if character == '\'' {
-            formatter.write_str("''")?;
+            writer.write_str("''")?;
         } else {
-            formatter.write_char(character)?;
+            writer.write_char(character)?;
         }
     }
-    formatter.write_char('\'')
+    writer.write_char('\'')
+}
+
+/// Byte length of what [`format_value`] writes for `value`.
+///
+/// Callers reserve exactly this much before rendering, so it counts the same
+/// bytes the writer emits by running the writer against a sink that only
+/// measures. Quoting and apostrophe doubling therefore cannot drift out of
+/// step with the renderer.
+pub(crate) fn format_value_len(value: &Value) -> usize {
+    let mut counter = LengthCounter { bytes: 0 };
+    format_value(&mut counter, value).expect("measuring a literal never fails");
+    counter.bytes
+}
+
+/// A [`fmt::Write`] sink that keeps only the byte length written to it.
+struct LengthCounter {
+    bytes: usize,
+}
+
+impl fmt::Write for LengthCounter {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        // A literal's length is bounded by the values already held in memory,
+        // so the saturation is unreachable rather than a silent truncation.
+        self.bytes = self.bytes.saturating_add(text.len());
+        Ok(())
+    }
 }

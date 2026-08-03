@@ -1,12 +1,18 @@
 use super::super::parse;
 use crate::Error;
-use crate::sql::ast::Statement;
+use crate::sql::ast::{DescribeTable, Statement};
 
 #[test]
 fn parses_show_tables_and_normalizes_describe_identifiers() {
     assert_eq!(
         parse("sHoW TaBlEs;").expect("SHOW TABLES parses"),
         Statement::ShowTables
+    );
+    assert_eq!(
+        parse("DeScRiBe Accounts").expect("DESCRIBE parses"),
+        Statement::DescribeTable(DescribeTable {
+            table: String::from("accounts"),
+        })
     );
 }
 
@@ -20,13 +26,23 @@ fn metadata_statements_report_exact_missing_argument_spans() {
             span_end: 11,
         }) if message == "expected keyword TABLES"
     ));
+    assert!(matches!(
+        parse("DESCRIBE"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 8,
+            span_end: 8,
+        }) if message == "expected an unquoted identifier"
+    ));
 }
 
 #[test]
 fn metadata_statement_words_are_reserved_and_cannot_be_used_as_identifiers() {
     for (sql, keyword, marker) in [
         ("CREATE TABLE show (id INTEGER)", "SHOW", "show"),
+        ("CREATE TABLE t (describe INTEGER)", "DESCRIBE", "describe"),
         ("CREATE TABLE t (tables TEXT)", "TABLES", "tables"),
+        ("SELECT describe FROM t", "DESCRIBE", "describe"),
         ("SELECT id FROM tables", "TABLES", "tables"),
         ("DELETE FROM show", "SHOW", "show"),
     ] {
@@ -57,5 +73,11 @@ fn metadata_statement_words_are_reserved_and_cannot_be_used_as_identifiers() {
     assert_eq!(
         parse("SHOW TABLES").expect("SHOW TABLES parses"),
         Statement::ShowTables
+    );
+    assert_eq!(
+        parse("DESCRIBE accounts").expect("DESCRIBE parses"),
+        Statement::DescribeTable(DescribeTable {
+            table: String::from("accounts"),
+        })
     );
 }

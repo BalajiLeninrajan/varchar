@@ -1,4 +1,5 @@
 use super::{ColumnOrigin, ResultColumn, RowSet};
+use crate::expression::{format_value, format_value_len};
 use crate::limits::ByteBudget;
 use crate::{DataType, Error, Resource, Result, Value};
 
@@ -12,6 +13,11 @@ pub(crate) struct ResultColumnSpec<'a> {
 
 pub(crate) enum ResultCell<'a> {
     Text(&'a str),
+    Boolean(bool),
+    Null,
+    /// Renders a value as the SQL literal that parses back to it, so a TEXT
+    /// value spelled `NULL` stays distinguishable from an actual `NULL`.
+    DisplayValue(&'a Value),
 }
 
 pub(crate) struct RowSetBuilder {
@@ -105,12 +111,17 @@ impl ResultCell<'_> {
     fn payload_bytes(&self) -> usize {
         match self {
             Self::Text(value) => value.len(),
+            Self::Boolean(_) | Self::Null => 0,
+            Self::DisplayValue(value) => format_value_len(value),
         }
     }
 
     fn materialize(&self) -> Result<Value> {
         match self {
             Self::Text(value) => clone_text_value(value),
+            Self::Boolean(value) => Ok(Value::Boolean(*value)),
+            Self::Null => Ok(Value::Null),
+            Self::DisplayValue(value) => display_value(value).map(Value::Text),
         }
     }
 }
@@ -131,6 +142,25 @@ fn clone_string(value: &str, operation: &'static str) -> Result<String> {
         .map_err(|_| allocation_error(operation))?;
     cloned.push_str(value);
     Ok(cloned)
+}
+
+/// Renders a value as the SQL literal a client can feed straight back in.
+///
+/// The literal spelling is what keeps `DEFAULT NULL`, `DEFAULT 'NULL'` and a
+/// column with no default apart in metadata results: the first two arrive here
+/// as `Value::Null` and `Value::Text("NULL")` and render as `NULL` and
+/// `'NULL'`, while the third never reaches this cell at all.
+fn display_value(value: &Value) -> Result<String> {
+    let length = format_value_len(value);
+    let mut output = String::new();
+    output
+        .try_reserve_exact(length)
+        .map_err(|_| allocation_error("formatting result text"))?;
+    format_value(&mut output, value).map_err(|_| Error::Capacity {
+        operation: "formatting a result value as a SQL literal",
+    })?;
+    debug_assert_eq!(output.len(), length);
+    Ok(output)
 }
 
 const fn allocation_error(operation: &'static str) -> Error {

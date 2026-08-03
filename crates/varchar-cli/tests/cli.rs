@@ -111,6 +111,48 @@ fn exec_supports_arguments_stdin_queries_and_validated_dumping() {
 }
 
 #[test]
+fn schema_metadata_commands_render_without_replacing_the_database() {
+    let (_directory, path) = initialized_database();
+    exec(
+        &path,
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT 'seed')",
+    )
+    .success();
+    let blob_before_read = fs::read(&path).expect("database should be readable");
+    #[cfg(unix)]
+    let inode_before_read = fs::metadata(&path)
+        .expect("database metadata should be readable")
+        .ino();
+
+    exec(&path, "SHOW TABLES").success().stdout(
+        predicate::str::contains("table_name")
+            .and(predicate::str::contains("accounts"))
+            .and(predicate::str::contains("1 row")),
+    );
+    exec(&path, "DESCRIBE accounts").success().stdout(
+        predicate::str::contains("column_name")
+            .and(predicate::str::contains("primary_key"))
+            .and(predicate::str::contains("auto_increment"))
+            .and(predicate::str::contains("'seed'"))
+            .and(predicate::str::contains("2 rows")),
+    );
+
+    assert_eq!(
+        fs::read(&path).expect("database should remain readable"),
+        blob_before_read,
+        "metadata reads must not rewrite the database"
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(&path)
+            .expect("database metadata should remain readable")
+            .ino(),
+        inode_before_read,
+        "metadata reads must not replace the database file"
+    );
+}
+
+#[test]
 fn failed_execution_preserves_the_previous_database() {
     let (_directory, path) = initialized_database();
     exec(&path, "CREATE TABLE items (id INTEGER NOT NULL)")

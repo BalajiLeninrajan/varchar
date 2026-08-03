@@ -967,7 +967,43 @@ fn schema_metadata_results_are_bounded_and_reload_inside_wasm() {
         rows(reloaded.execute("SHOW TABLES").unwrap()),
         vec![vec![Value::Text(String::from("accounts"))]]
     );
+    let description = rows(reloaded.execute("DESCRIBE accounts").unwrap());
+    assert_eq!(description.len(), 2);
+    assert_eq!(description[0][0], Value::Text(String::from("id")));
+    assert_eq!(description[0][3], Value::Boolean(true));
+    assert_eq!(description[0][6], Value::Boolean(true));
+    assert_eq!(description[1][5], Value::Text(String::from("'seed'")));
     assert_eq!(reloaded.as_str(), source);
+
+    // `default_value` must round-trip as the SQL literal that reproduces the
+    // default, so a TEXT default holding `NULL` stays distinguishable from an
+    // explicit `DEFAULT NULL` and from a column with no default at all.
+    reloaded
+        .execute(
+            "CREATE TABLE defaults (\
+                quoted_null TEXT DEFAULT 'NULL', \
+                absent TEXT, \
+                literal_null TEXT DEFAULT NULL, \
+                literal_true BOOLEAN DEFAULT TRUE, \
+                literal_digits INTEGER DEFAULT 5, \
+                apostrophes TEXT DEFAULT 'it''s'\
+            )",
+        )
+        .unwrap();
+    assert_eq!(
+        rows(reloaded.execute("DESCRIBE defaults").unwrap())
+            .into_iter()
+            .map(|row| row[5].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Value::Text(String::from("'NULL'")),
+            Value::Null,
+            Value::Text(String::from("NULL")),
+            Value::Text(String::from("TRUE")),
+            Value::Text(String::from("5")),
+            Value::Text(String::from("'it''s'")),
+        ]
+    );
 
     let limit = std::mem::size_of::<RowSet>() - 1;
     let mut limited = Database::from_string_with_limits(
