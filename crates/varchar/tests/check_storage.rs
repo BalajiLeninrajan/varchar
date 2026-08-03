@@ -210,6 +210,48 @@ fn malformed_counts_are_corruption_before_storage_working_limits() {
 }
 
 #[test]
+fn incomplete_trailing_and_noncanonical_trees_are_rejected() {
+    let incomplete = "V3;~S|t|value:I:?;~C|t|AND|2|EQ|0|I1;";
+    let (offset, message) = corruption(incomplete);
+    assert_eq!(
+        offset,
+        incomplete.find(';').unwrap_or(0).max(incomplete.len() - 1)
+    );
+    assert_eq!(
+        message,
+        "CHECK program ends before all children are encoded"
+    );
+
+    let trailing = "V3;~S|t|value:I:?;~C|t|EQ|0|I1|EQ|0|I2;";
+    assert_eq!(
+        corruption(trailing),
+        (
+            trailing.rfind("EQ|").expect("second root exists"),
+            "CHECK program contains trailing nodes or fields".to_owned(),
+        )
+    );
+
+    let nested = "V3;~S|t|value:I:?;~C|t|AND|2|AND|2|EQ|0|I1|EQ|0|I2|EQ|0|I3;";
+    assert_eq!(
+        corruption(nested),
+        (
+            nested.rfind("AND|2").expect("nested AND exists"),
+            "CHECK program contains a noncanonical nested associative node".to_owned(),
+        )
+    );
+
+    for blob in [
+        "V3;~S|t|value:I:?;~C|t;",
+        "V3;~S|t|value:I:?;~C|t|;",
+        "V3;~S|t|value:I:?;~C|t|OR|0;",
+        "V3;~S|t|value:I:?;~C|t|OR|2;",
+        "V3;~S|t|value:I:?;~C|t|EQ|0;",
+    ] {
+        assert_corrupt(blob);
+    }
+}
+
+#[test]
 fn many_check_records_load_with_linear_metadata_growth() {
     const CHECK_COUNT: usize = 4_096;
 
