@@ -217,14 +217,27 @@ impl ByteBudget {
         Ok(())
     }
 
+    pub(crate) fn charge_with_transient(&mut self, amount: usize, transient: usize) -> Result<()> {
+        let next = self
+            .used
+            .checked_add(amount)
+            .ok_or_else(|| self.limit_error())?;
+        let peak = next
+            .checked_add(transient)
+            .ok_or_else(|| self.limit_error())?;
+        check_limit(peak, self.limit, self.resource)?;
+        self.used = next;
+        Ok(())
+    }
+
     /// Returns bytes to the budget when a charged allocation is dropped again.
     ///
-    /// Reservations refund themselves when the allocation fails, and decoded
-    /// values are released once validation has read them, so the budget has to
-    /// track live bytes rather than a running total. Every release mirrors a
-    /// charge this budget accepted, which the debug assertion pins down; the
-    /// saturating subtraction then keeps an accounting slip from either
-    /// panicking or wrapping in release builds.
+    /// Bounded ordered collection evicts pending rows it has already charged
+    /// for, and reservations refund themselves when the allocation fails, so
+    /// the budget has to track live bytes rather than a running total. Every
+    /// release mirrors a charge this budget accepted, which the debug
+    /// assertion pins down; the saturating subtraction then keeps an
+    /// accounting slip from either panicking or wrapping in release builds.
     pub(crate) fn release(&mut self, amount: usize) {
         debug_assert!(
             amount <= self.used,

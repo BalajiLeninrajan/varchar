@@ -4,7 +4,7 @@ mod collector;
 
 use super::map_regex_runtime;
 use crate::expression::{Evaluator, Program};
-use crate::limits::{Limits, check_limit};
+use crate::limits::{ByteBudget, Limits, check_limit};
 use crate::output::{RowSet, SelectExplanation};
 use crate::resolve::ResolvedJoinCondition;
 use crate::storage::{self, RowRecordRef};
@@ -355,70 +355,6 @@ fn clone_explanation_string(value: &str) -> Result<String> {
         .map_err(|_| allocation_error("cloning query output text"))?;
     cloned.push_str(value);
     Ok(cloned)
-}
-
-struct ByteBudget {
-    used: usize,
-    limit: usize,
-    resource: Resource,
-}
-
-impl ByteBudget {
-    const fn new(limit: usize, resource: Resource) -> Self {
-        Self {
-            used: 0,
-            limit,
-            resource,
-        }
-    }
-
-    fn charge(&mut self, amount: usize) -> Result<()> {
-        let next = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| self.limit_error())?;
-        check_limit(next, self.limit, self.resource)?;
-        self.used = next;
-        Ok(())
-    }
-
-    fn charge_with_transient(&mut self, amount: usize, transient: usize) -> Result<()> {
-        let next = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| self.limit_error())?;
-        let peak = next
-            .checked_add(transient)
-            .ok_or_else(|| self.limit_error())?;
-        check_limit(peak, self.limit, self.resource)?;
-        self.used = next;
-        Ok(())
-    }
-
-    /// Returns bytes to the budget when a charged allocation is dropped again.
-    ///
-    /// Bounded ordered collection evicts pending rows it has already charged
-    /// for, so the budget has to track live bytes rather than a running total.
-    /// Every release mirrors a charge this budget accepted; the saturating
-    /// subtraction only keeps an accounting slip from panicking.
-    fn release(&mut self, amount: usize) {
-        self.used = self.used.saturating_sub(amount);
-    }
-
-    fn check_transient(&self, amount: usize) -> Result<()> {
-        let peak = self
-            .used
-            .checked_add(amount)
-            .ok_or_else(|| self.limit_error())?;
-        check_limit(peak, self.limit, self.resource)
-    }
-
-    const fn limit_error(&self) -> Error {
-        Error::ResourceLimit {
-            resource: self.resource,
-            limit: self.limit,
-        }
-    }
 }
 
 const fn allocation_error(operation: &'static str) -> Error {
