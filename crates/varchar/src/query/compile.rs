@@ -35,7 +35,7 @@ pub(crate) fn compile_select<'catalog>(
         })?;
     predicates_by_source.resize_with(sources.len(), Vec::new);
     for resolved in predicates {
-        predicates_by_source[resolved.source].push(resolved.predicate);
+        predicates_by_source[resolved.column().source].push(resolved);
     }
 
     let pattern = if sources.len() == 1 {

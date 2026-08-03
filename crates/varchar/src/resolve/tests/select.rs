@@ -25,22 +25,17 @@ fn joined_select_resolution_tracks_sources_locations_and_predicates() {
     assert_eq!(resolved.joins[0].source, 1);
     assert_eq!(resolved.joins[0].conditions[0].left.source, 0);
     assert_eq!(resolved.joins[0].conditions[0].right.source, 1);
-    let first = &resolved.predicates[0];
-    assert_eq!(first.source, 1);
     assert!(matches!(
-        &first.predicate,
-        ResolvedPredicate::Like {
-            column: 1,
-            atoms
-        } if atoms == &[LikeAtom::Literal('N'), LikeAtom::AnySequence]
+        &resolved.predicates[0],
+        ResolvedPredicate::Like { column, atoms }
+            if (column.source, column.column) == (1, 1)
+                && atoms == &[LikeAtom::Literal('N'), LikeAtom::AnySequence]
     ));
-    let second = &resolved.predicates[1];
-    assert_eq!(second.source, 0);
     assert!(matches!(
-        &second.predicate,
+        &resolved.predicates[1],
         ResolvedPredicate::Equal {
-            column: 1,
-            value: Value::Text(value)
-        } if value == "Ada"
+            column,
+            value: Value::Text(value),
+        } if (column.source, column.column) == (0, 1) && value == "Ada"
     ));
 }

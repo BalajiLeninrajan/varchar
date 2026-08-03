@@ -2,7 +2,7 @@
 
 use super::column::ColumnLocation;
 use super::join::{ResolvedJoin, resolve_joins};
-use super::predicate::{ResolvedSourcePredicate, resolve_select_predicate};
+use super::predicate::{ResolvedPredicate, resolve_select_predicate};
 use super::projection::{expanded_len, resolve_projection};
 use super::source::resolve_sources;
 use crate::limits::check_limit;
@@ -14,7 +14,7 @@ pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) sources: Vec<&'catalog TableSchema>,
     pub(crate) projection: Vec<ColumnLocation>,
     pub(crate) joins: Vec<ResolvedJoin>,
-    pub(crate) predicates: Vec<ResolvedSourcePredicate<'statement>>,
+    pub(crate) predicates: Vec<ResolvedPredicate<'statement>>,
 }
 
 pub(crate) fn select<'catalog, 'statement>(
