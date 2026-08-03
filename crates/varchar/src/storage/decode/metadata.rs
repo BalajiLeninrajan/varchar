@@ -1,14 +1,15 @@
 //! Decoding of schema and constraint metadata records.
 
-use std::collections::BTreeSet;
-
 use super::super::TableSchema;
+use super::super::budget::{WorkingBudget, WorkingStringSet};
 use super::super::format::{
-    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX, allocation_error,
+    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
     complete_record_body, corrupt, is_valid_identifier,
 };
 use super::decode_integer;
 use crate::{DataType, Result, SchemaColumn};
+
+const LINEAR_COLUMN_NAME_LIMIT: usize = 4;
 
 pub(in crate::storage) struct PrimaryKeyMetadata<'a> {
     pub(in crate::storage) table: &'a str,
@@ -28,7 +29,11 @@ pub(in crate::storage) struct AutoIncrementMetadata<'a> {
     pub(in crate::storage) last: i64,
 }
 
-pub(in crate::storage) fn decode_schema_record(record: &str, offset: usize) -> Result<TableSchema> {
+pub(in crate::storage) fn decode_schema_record(
+    record: &str,
+    offset: usize,
+    budget: &mut WorkingBudget,
+) -> Result<TableSchema> {
     let body = complete_record_body(record, SCHEMA_PREFIX, offset)?;
     let mut fields = body.split('|');
     let table = fields
@@ -41,12 +46,23 @@ pub(in crate::storage) fn decode_schema_record(record: &str, offset: usize) -> R
         ));
     }
 
-    let mut columns = Vec::new();
     let column_count = body.bytes().filter(|byte| *byte == b'|').count();
-    columns
-        .try_reserve_exact(column_count)
-        .map_err(|_| allocation_error("reserving decoded schema columns"))?;
-    let mut names = BTreeSet::new();
+    let mut columns: Vec<SchemaColumn> = Vec::new();
+    budget.reserve_exact(
+        &mut columns,
+        column_count,
+        "reserving decoded schema columns",
+    )?;
+    let table_name = budget.clone_text(table, "allocating a decoded table name")?;
+    let mut column_names = if column_count > LINEAR_COLUMN_NAME_LIMIT {
+        Some(WorkingStringSet::new(
+            column_count,
+            budget,
+            "reserving a decoded column-name index",
+        )?)
+    } else {
+        None
+    };
     for field in fields {
         let mut parts = field.split(':');
         let name = parts.next().unwrap_or_default();
@@ -58,7 +74,12 @@ pub(in crate::storage) fn decode_schema_record(record: &str, offset: usize) -> R
         if !is_valid_identifier(name) {
             return Err(corrupt(offset, "invalid or noncanonical column name"));
         }
-        if !names.insert(name) {
+        let duplicate = if let Some(column_names) = &mut column_names {
+            !column_names.insert(name)
+        } else {
+            columns.iter().any(|column| column.name == name)
+        };
+        if duplicate {
             return Err(corrupt(offset, "duplicate column name"));
         }
         let data_type = match data_type.unwrap() {
@@ -73,7 +94,7 @@ pub(in crate::storage) fn decode_schema_record(record: &str, offset: usize) -> R
             _ => return Err(corrupt(offset, "invalid column nullability tag")),
         };
         columns.push(SchemaColumn {
-            name: name.to_owned(),
+            name: budget.clone_text(name, "allocating a decoded column name")?,
             data_type,
             nullable,
         });
@@ -83,7 +104,7 @@ pub(in crate::storage) fn decode_schema_record(record: &str, offset: usize) -> R
     }
 
     Ok(TableSchema {
-        name: table.to_owned(),
+        name: table_name,
         columns,
         primary_key: None,
         foreign_keys: Vec::new(),

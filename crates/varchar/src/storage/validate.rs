@@ -54,7 +54,7 @@ fn validate_with_mode(
         match record.kind {
             RecordKind::Schema => {
                 reject_after_rows(saw_row, record.range.start, "schema record")?;
-                let schema = decode_schema_record(record.text, record.range.start)?;
+                let schema = decode_schema_record(record.text, record.range.start, &mut budget)?;
                 metadata.insert_schema(schema, record.range.start, &mut budget)?;
             }
             RecordKind::PrimaryKey => {
