@@ -59,7 +59,7 @@ Columns are `TEXT`, signed 64-bit `INTEGER`, or `BOOLEAN`, with `NOT NULL`, lite
 
 The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, subqueries, unary `NOT`, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
 
-See the [SQL reference](docs/sql-reference.md) for the exact semantics of every clause.
+See the [SQL reference](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/sql-reference.md) for the exact semantics of every clause.
 
 ## Library use
 
@@ -80,7 +80,7 @@ let persisted: String = db.into_string();
 # Ok::<(), varchar::Error>(())
 ```
 
-See the [library API guide](docs/library-api.md) for errors, limits, and `EXPLAIN REGEX` output.
+See the [library API guide](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) for errors, limits, and `EXPLAIN REGEX` output.
 
 ## Caveats
 
@@ -88,10 +88,10 @@ Varchar is meant to be understandable, inspectable, and funny—not fast. Every 
 
 ## Documentation
 
-- [SQL reference](docs/sql-reference.md) — the complete dialect, clause by clause
-- [Library API](docs/library-api.md) — embedding the core crate, errors, and limits
-- [Architecture](docs/architecture.md) — how the workspace, regex planner, and mutation planner fit together
-- [Storage format](docs/storage-format.md) — the one string, record by record
-- [Performance and limits](docs/performance.md) — complexity, resource budgets, and what is bounded
-- [WebAssembly](docs/wasm.md) — `wasm32-unknown-unknown` and `wasm32-wasip1` support
-- [Development](docs/development.md) — build, lint, and test gates
+- [SQL reference](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/sql-reference.md) — the complete dialect, clause by clause
+- [Library API](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) — embedding the core crate, errors, and limits
+- [Architecture](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/architecture.md) — how the workspace, regex planner, and mutation planner fit together
+- [Storage format](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/storage-format.md) — the one string, record by record
+- [Performance and limits](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/performance.md) — complexity, resource budgets, and what is bounded
+- [WebAssembly](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/wasm.md) — `wasm32-unknown-unknown` and `wasm32-wasip1` support
+- [Development](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/development.md) — build, lint, and test gates

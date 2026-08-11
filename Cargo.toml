@@ -6,6 +6,10 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.97"
 version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/BalajiLeninrajan/varchar"
+homepage = "https://github.com/BalajiLeninrajan/varchar"
+authors = ["Balaji Leninrajan <bleninrajan@gmail.com>"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

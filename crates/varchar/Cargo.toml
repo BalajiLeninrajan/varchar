@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "A database stored in one string and queried with regex"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["database", "regex", "sql", "embedded"]
+categories = ["database-implementations", "text-processing"]
 
 [dependencies]
 fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }

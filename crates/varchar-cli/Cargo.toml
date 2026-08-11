@@ -4,7 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Native CLI for the varchar one-string database"
-publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["database", "regex", "sql", "cli"]
+categories = ["command-line-utilities", "database-implementations"]
 
 [[bin]]
 name = "varchar"
@@ -14,7 +20,7 @@ doc = false
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
-varchar = { path = "../varchar" }
+varchar = { path = "../varchar", version = "0.1.0" }
 
 [dev-dependencies]
 assert_cmd = "2"
