@@ -20,6 +20,8 @@ impl Parser {
                 CreateElement::Constraint(self.parse_table_primary_key()?)
             } else if self.current_word() == Some("FOREIGN") && self.peek_word() == Some("KEY") {
                 CreateElement::Constraint(self.parse_table_foreign_key()?)
+            } else if self.current_word() == Some("UNIQUE") && self.peek_is(&TokenKind::LeftParen) {
+                CreateElement::Constraint(self.parse_table_unique()?)
             } else {
                 CreateElement::Column(self.parse_column_definition()?)
             };
@@ -67,6 +69,10 @@ impl Parser {
                     self.advance();
                     modifiers.push(ColumnModifier::PrimaryKey);
                 }
+                Some("UNIQUE") => {
+                    self.advance();
+                    modifiers.push(ColumnModifier::Unique);
+                }
                 Some("REFERENCES") => {
                     modifiers.push(ColumnModifier::References(self.parse_reference()?));
                 }
@@ -100,6 +106,15 @@ impl Parser {
             "expected `)` after PRIMARY KEY column",
         )?;
         Ok(TableConstraint::PrimaryKey(column))
+    }
+
+    fn parse_table_unique(&mut self) -> Result<TableConstraint> {
+        self.expect_keyword("UNIQUE")?;
+        self.expect(TokenKind::LeftParen, "expected `(` after UNIQUE")?;
+        let column = self.expect_identifier()?;
+        self.reject_composite_constraint("UNIQUE")?;
+        self.expect(TokenKind::RightParen, "expected `)` after UNIQUE column")?;
+        Ok(TableConstraint::Unique(column))
     }
 
     fn parse_table_foreign_key(&mut self) -> Result<TableConstraint> {

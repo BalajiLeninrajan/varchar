@@ -5,9 +5,9 @@ mod metadata;
 use std::ops::Range;
 
 pub(super) use metadata::{
-    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata,
+    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, UniqueMetadata,
     decode_auto_increment_record, decode_default_record, decode_foreign_key_record,
-    decode_primary_key_record, decode_schema_record,
+    decode_primary_key_record, decode_schema_record, decode_unique_record,
 };
 
 use super::format::{

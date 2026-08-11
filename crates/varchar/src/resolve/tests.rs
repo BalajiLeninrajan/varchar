@@ -38,6 +38,7 @@ fn people_schema() -> TableSchema {
             },
         ],
         primary_key: None,
+        unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
     }
 }

@@ -5,7 +5,8 @@ use std::ops::Range;
 use super::super::budget::WorkingBudget;
 use super::super::catalog::{AutoIncrementState, CatalogMap};
 use super::super::decode::{
-    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, decode_cell_at,
+    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, UniqueMetadata,
+    decode_cell_at,
 };
 use super::super::{Catalog, ForeignKey, TableSchema};
 use super::ValidationMode;
@@ -17,6 +18,7 @@ enum MetadataPhase {
     Keys,
     AutoIncrement,
     Defaults,
+    Unique,
 }
 
 struct MetadataState {
@@ -26,6 +28,7 @@ struct MetadataState {
     saw_foreign_key: bool,
     next_foreign_key_column: usize,
     next_default_column: usize,
+    next_unique_column: usize,
 }
 
 impl MetadataState {
@@ -37,6 +40,7 @@ impl MetadataState {
             saw_foreign_key: false,
             next_foreign_key_column: 0,
             next_default_column: 0,
+            next_unique_column: 0,
         }
     }
 
@@ -48,6 +52,7 @@ impl MetadataState {
             saw_foreign_key: false,
             next_foreign_key_column: 0,
             next_default_column: 0,
+            next_unique_column: 0,
         }
     }
 }
@@ -136,6 +141,17 @@ impl MetadataValidator {
         budget: &mut WorkingBudget,
     ) -> Result<()> {
         let result = self.apply_default_inner(metadata, offset, budget);
+        result.map_err(|violation| violation.into_error(mode))
+    }
+
+    pub(super) fn apply_unique(
+        &mut self,
+        metadata: UniqueMetadata<'_>,
+        offset: usize,
+        mode: ValidationMode,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        let result = self.apply_unique_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
     }
 
@@ -435,6 +451,89 @@ impl MetadataValidator {
         self.state.next_default_column = column + 1;
         Ok(())
     }
+
+    fn apply_unique_inner(
+        &mut self,
+        metadata: UniqueMetadata<'_>,
+        offset: usize,
+        budget: &mut WorkingBudget,
+    ) -> std::result::Result<(), Violation> {
+        if !matches!(
+            self.state.phase,
+            MetadataPhase::Keys
+                | MetadataPhase::AutoIncrement
+                | MetadataPhase::Defaults
+                | MetadataPhase::Unique
+        ) || metadata.table != self.state.table
+        {
+            return Err(Violation::new(
+                offset,
+                "UNIQUE metadata is outside its table's UNIQUE phase",
+            ));
+        }
+
+        let schema = self
+            .tables
+            .get(&self.state.table)
+            .expect("metadata state always names the most recent schema");
+        let remaining_columns = &schema.columns[self.state.next_unique_column..];
+        let Some(relative_column) = remaining_columns
+            .iter()
+            .position(|column| column.name == metadata.column)
+        else {
+            let message = if schema.columns[..self.state.next_unique_column]
+                .iter()
+                .any(|column| column.name == metadata.column)
+            {
+                String::from("UNIQUE metadata is duplicated or not in increasing column order")
+            } else {
+                format!(
+                    "UNIQUE for table {:?} references unknown column {:?}",
+                    metadata.table, metadata.column
+                )
+            };
+            return Err(Violation::new(offset, message));
+        };
+        let column = self.state.next_unique_column + relative_column;
+        if schema.primary_key == Some(column) {
+            return Err(Violation::new(
+                offset,
+                "UNIQUE metadata must not duplicate a primary key",
+            ));
+        }
+
+        let unique_columns = &mut self
+            .tables
+            .get_mut(&self.state.table)
+            .expect("metadata state always names the most recent schema")
+            .unique_columns;
+        reserve_unique_column(unique_columns, budget).map_err(Violation::storage)?;
+        unique_columns.push(column);
+        self.state.phase = MetadataPhase::Unique;
+        self.state.next_unique_column = column + 1;
+        Ok(())
+    }
+}
+
+fn reserve_unique_column(columns: &mut Vec<usize>, budget: &mut WorkingBudget) -> Result<()> {
+    const OPERATION: &str = "reserving decoded UNIQUE metadata";
+
+    budget.charge_items::<usize>(1)?;
+    if columns.len() == columns.capacity() {
+        let additional = columns.capacity().max(1);
+        columns
+            .capacity()
+            .checked_add(additional)
+            .ok_or(Error::Capacity {
+                operation: OPERATION,
+            })?;
+        columns
+            .try_reserve_exact(additional)
+            .map_err(|_| Error::Allocation {
+                operation: OPERATION,
+            })?;
+    }
+    Ok(())
 }
 
 pub(super) struct Violation {

@@ -2,7 +2,7 @@
 
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
-    type_tag,
+    UNIQUE_PREFIX, type_tag,
 };
 use super::super::{TableSchema, validate_schema_for_write};
 use super::encode_cell;
@@ -62,6 +62,9 @@ pub(in crate::storage) fn encode_table_metadata(
             encoded.push_str(&encode_default_record(schema, column)?);
         }
     }
+    for &column in &schema.unique_columns {
+        encoded.push_str(&encode_unique_record(schema, column)?);
+    }
     Ok(encoded)
 }
 
@@ -112,6 +115,19 @@ fn encode_default_record(schema: &TableSchema, column: usize) -> Result<String> 
     let cell = encode_cell(value, definition)?;
     Ok(format!(
         "{DEFAULT_PREFIX}{}|{}|{cell};",
+        schema.name, definition.name
+    ))
+}
+
+fn encode_unique_record(schema: &TableSchema, column: usize) -> Result<String> {
+    let definition = schema.columns.get(column).ok_or_else(|| {
+        Error::Schema(format!(
+            "UNIQUE index {column} is outside table {:?}",
+            schema.name
+        ))
+    })?;
+    Ok(format!(
+        "{UNIQUE_PREFIX}{}|{};",
         schema.name, definition.name
     ))
 }

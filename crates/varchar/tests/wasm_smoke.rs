@@ -538,3 +538,58 @@ fn v2_load_and_atomic_default_upgrade_work_inside_wasm() {
         vec![vec![Value::Boolean(true), Value::Null]]
     );
 }
+
+#[wasm_bindgen_test]
+fn unique_constraints_persist_and_validate_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE accounts (email TEXT UNIQUE)")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES ('one@example.com')")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES (NULL)")
+        .unwrap();
+    database
+        .execute("INSERT INTO accounts VALUES (NULL)")
+        .unwrap();
+    assert!(matches!(
+        database.execute("INSERT INTO accounts VALUES ('one@example.com')"),
+        Err(varchar::Error::Constraint(_))
+    ));
+
+    let blob = database.into_string();
+    let reloaded = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(reloaded.as_str(), blob);
+    assert!(reloaded.as_str().contains("~U|accounts|email;"));
+}
+
+#[wasm_bindgen_test]
+fn all_null_unique_columns_fit_the_exact_wasm_database_limit() {
+    const COLUMN_COUNT: usize = 100;
+    const ROW_COUNT: usize = 100;
+
+    let mut blob = String::from("V3;~S|t");
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("|c{column}:I:?"));
+    }
+    blob.push(';');
+    for column in 0..COLUMN_COUNT {
+        blob.push_str(&format!("~U|t|c{column};"));
+    }
+    for _ in 0..ROW_COUNT {
+        blob.push_str("~R|t");
+        for _ in 0..COLUMN_COUNT {
+            blob.push_str("|N");
+        }
+        blob.push(';');
+    }
+
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits).unwrap();
+    assert_eq!(database.as_str(), blob);
+}

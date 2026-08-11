@@ -18,6 +18,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
             default: None,
         }],
         primary_key: Some(0),
+        unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
     };
     let mut candidate = state.candidate(1024).expect("empty state fits");
@@ -78,6 +79,72 @@ fn primary_key_index_preserves_exact_limit_loading() {
         .expect("a larger primary-key index fits its exact derived limit");
 }
 
+/// The UNIQUE analogue of `primary_key_index_preserves_exact_limit_loading`.
+///
+/// UNIQUE validation grows its values from the same fill pass that reads them, so what it
+/// charges has to stay inside the limit the database size derives. The single-column fixtures
+/// pin the growth — the last one is well past the reservation steps — and the column-heavy ones
+/// pin that declaring a UNIQUE column costs nothing on its own: every one of them stopped
+/// loading when a vector per column charged its header for each declared column.
+///
+/// The growth factor's own ceiling is pinned by
+/// `geometric_growth_stays_inside_the_derived_working_limit` rather than here. A UNIQUE value
+/// costs four bytes against the twelve its cell contributes to the derived limit, so no UNIQUE
+/// fixture can be made tight enough to fail if the factor were loosened, whereas a primary key
+/// costs sixteen against a row's thirty-two.
+#[test]
+fn unique_index_preserves_exact_limit_loading() {
+    let compact = "V3;~S|t|c0:T:?;~U|t|c0;~R|t|T0;~R|t|T1;~R|t|T2;";
+    validate_and_catalog(compact, working_limit(compact.len()))
+        .expect("a compact UNIQUE index fits its exact derived limit");
+
+    let mut larger = String::from("V3;~S|t|value:T:?;~U|t|value;");
+    for value in 0..=20 {
+        larger.push_str(&format!("~R|t|Tv{value};"));
+    }
+    validate_and_catalog(&larger, working_limit(larger.len()))
+        .expect("a larger UNIQUE index fits its exact derived limit");
+
+    let mut grown = String::from("V3;~S|t|value:T:?;~U|t|value;");
+    for value in 0..64 {
+        grown.push_str(&format!("~R|t|Tvalue{value};"));
+    }
+    validate_and_catalog(&grown, working_limit(grown.len()))
+        .expect("a grown UNIQUE index fits its exact derived limit");
+
+    for (columns, rows) in [
+        (2, 3),
+        (3, 3),
+        (4, 3),
+        (2, 6),
+        (3, 6),
+        (4, 6),
+        (8, 6),
+        (16, 6),
+    ] {
+        let mut blob = String::from("V3;~S|t");
+        for column in 0..columns {
+            blob.push_str(&format!("|c{column}:T:?"));
+        }
+        blob.push(';');
+        for column in 0..columns {
+            blob.push_str(&format!("~U|t|c{column};"));
+        }
+        for row in 0..rows {
+            blob.push_str("~R|t");
+            for column in 0..columns {
+                blob.push_str(&format!("|Tv{}", row * columns + column));
+            }
+            blob.push(';');
+        }
+        validate_and_catalog(&blob, working_limit(blob.len())).unwrap_or_else(|error| {
+            panic!(
+                "{columns} UNIQUE columns over {rows} rows exceeded their derived limit: {error}"
+            )
+        });
+    }
+}
+
 #[test]
 fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
     const ROW_COUNT: usize = 64;
@@ -113,6 +180,19 @@ fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
         blob_row_scans(),
         2,
         "a referenced load adds only the foreign-key pass"
+    );
+
+    let mut keyed_unique = String::from("V3;~S|items|value:T:?;~U|items|value;");
+    for key in 0..ROW_COUNT {
+        keyed_unique.push_str(&format!("~R|items|Tk{key};"));
+    }
+
+    reset_blob_row_scans();
+    validate_and_catalog(&keyed_unique, usize::MAX).expect("a UNIQUE fixture validates");
+    assert_eq!(
+        blob_row_scans(),
+        2,
+        "a UNIQUE load fills its validation offsets in the pass that reads them"
     );
 }
 

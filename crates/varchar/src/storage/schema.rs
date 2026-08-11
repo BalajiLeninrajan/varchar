@@ -18,6 +18,8 @@ pub(crate) struct TableSchema {
     pub(crate) name: String,
     pub(crate) columns: Vec<SchemaColumn>,
     pub(crate) primary_key: Option<usize>,
+    /// Non-primary single-column UNIQUE constraints in column order.
+    pub(crate) unique_columns: Vec<usize>,
     /// Increasing by local column; each local column appears at most once.
     pub(crate) foreign_keys: Vec<ForeignKey>,
 }
@@ -56,6 +58,29 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
                 schema.name, column.name
             )));
         }
+    }
+
+    let mut previous_unique = None;
+    for &unique in &schema.unique_columns {
+        let Some(column) = schema.columns.get(unique) else {
+            return Err(Error::Schema(format!(
+                "UNIQUE index {unique} is outside table {:?}",
+                schema.name
+            )));
+        };
+        if schema.primary_key == Some(unique) {
+            return Err(Error::Schema(format!(
+                "primary-key column {:?}.{:?} must not retain redundant UNIQUE metadata",
+                schema.name, column.name
+            )));
+        }
+        if previous_unique.is_some_and(|previous| previous >= unique) {
+            return Err(Error::Schema(format!(
+                "UNIQUE columns for table {:?} must be strictly increasing",
+                schema.name
+            )));
+        }
+        previous_unique = Some(unique);
     }
 
     for column in &schema.columns {

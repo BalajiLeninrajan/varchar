@@ -39,6 +39,7 @@ pub(crate) struct ColumnDef {
 pub(crate) enum ColumnModifier {
     NotNull,
     PrimaryKey,
+    Unique,
     References(ForeignKeyReference),
     AutoIncrement,
     Default(Value),
@@ -53,6 +54,7 @@ pub(crate) struct ForeignKeyReference {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TableConstraint {
     PrimaryKey(String),
+    Unique(String),
     ForeignKey {
         column: String,
         reference: ForeignKeyReference,
