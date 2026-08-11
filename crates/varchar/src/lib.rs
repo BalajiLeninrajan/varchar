@@ -1,5 +1,13 @@
 #![doc = include_str!("../../../README.md")]
 
+/// Long-form documentation lives in `docs/`. Compiling those pages as doctests
+/// keeps their examples honest without pulling them into the crate docs.
+#[cfg(doctest)]
+mod docs {
+    #[doc = include_str!("../../../docs/library-api.md")]
+    mod library_api {}
+}
+
 mod database;
 mod error;
 mod expression;
