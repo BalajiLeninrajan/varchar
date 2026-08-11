@@ -10,15 +10,14 @@ mod referential;
 use std::ops::Range;
 
 use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
-use referential::{ReferentialIndex, enforce_update_restrict};
+use referential::{ReferentialAction, ReferentialIndex};
 
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
 use crate::query::{self, ScanPlan};
-use crate::storage::{
-    self, Candidate, Catalog, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
-    with_validated_row_encoder,
-};
+use crate::storage::{self, Candidate, Catalog, RowLayout, with_validated_row_encoder};
+#[cfg(test)]
+use crate::storage::{MeasuredRowEncoding, ValidatedRowEncoder};
 use crate::{Error, Resource, Result, Value};
 
 pub(super) struct MutationPlan {
@@ -28,61 +27,87 @@ pub(super) struct MutationPlan {
 
 impl MutationPlan {
     pub(super) fn update(
-        candidate: &Candidate<'_>,
+        candidate: &mut Candidate<'_>,
         scan: &ScanPlan<'_>,
         limits: &Limits,
         assignments: &mut [(usize, Value)],
+        direct_auto_increment: Option<i64>,
     ) -> Result<Self> {
-        let sequence_working_bytes = candidate.deferred_auto_increment_working_bytes();
+        let initial_sequence_working_bytes = candidate.deferred_auto_increment_working_bytes();
         let blob = candidate.source();
         let (mut rows, direct_affected, mut budget) =
-            freeze_direct_targets(blob, scan, limits, sequence_working_bytes)?;
+            freeze_direct_targets(blob, scan, limits, initial_sequence_working_bytes)?;
         sort_and_validate_ranges(&mut rows)?;
-        let sequence_edit_lengths = sequence_edit_lengths_for_targets(rows.len(), || {
-            candidate.deferred_auto_increment_lengths()
-        })?;
         if rows.is_empty() {
             return Ok(Self {
                 rows,
                 direct_affected,
             });
         }
+        if let Some(last) = direct_auto_increment {
+            defer_auto_increment(candidate, scan.row_layout().table, last, &mut budget)?;
+        }
 
         let layout = scan.validated_row_layout();
         let update =
             PreparedDirectUpdate::new(assignments, layout.column_count(), rows[0].identity())?;
+        for row in &mut rows {
+            row.install_direct_update(&update, &mut budget)?;
+        }
+
         let parent_schema = candidate
             .catalog()
             .table(scan.row_layout().table)
             .expect("a compiled mutation scan names a catalog table");
-        enforce_update_restrict(
-            blob,
+        if let Some(primary_key) = parent_schema.primary_key {
+            let mut update_queue = Vec::new();
+            let mut queue_working_bytes = 0;
+            for (index, row) in rows.iter_mut().enumerate() {
+                if row.mark_update_queued(primary_key) {
+                    push_update_queue(
+                        &mut update_queue,
+                        index,
+                        &mut queue_working_bytes,
+                        &mut budget,
+                    )?;
+                }
+            }
+            if !update_queue.is_empty() {
+                let referential = ReferentialIndex::build(
+                    blob,
+                    candidate.catalog(),
+                    scan.row_layout().table,
+                    &rows,
+                    ReferentialAction::Update,
+                    &mut budget,
+                )?;
+                referential.initialize_direct_rows(&rows)?;
+                referential.expand_update_actions(
+                    &mut rows,
+                    &mut update_queue,
+                    &mut queue_working_bytes,
+                    &mut budget,
+                )?;
+                referential.release(&mut budget);
+            }
+            drop(update_queue);
+            budget.release(queue_working_bytes);
+        }
+
+        sort_and_validate_ranges(&mut rows)?;
+        defer_induced_auto_increments(candidate, blob, &rows, &mut budget)?;
+        let sequence_edit_lengths = candidate.deferred_auto_increment_lengths()?;
+        encode_and_check_updates(
             candidate.catalog(),
-            parent_schema,
-            &rows,
-            &update,
+            blob,
+            limits,
+            &mut rows,
+            sequence_edit_lengths,
             &mut budget,
         )?;
-        with_validated_row_encoder(layout, |encoder| -> Result<()> {
-            let (measurements, measurement_working_bytes) = measure_and_check_update_database_size(
-                blob.len(),
-                limits.max_database_bytes,
-                &mut rows,
-                &encoder,
-                &update,
-                sequence_edit_lengths,
-                &mut budget,
-            )?;
-            for row in &mut rows {
-                row.install_direct_update(&update, &mut budget)?;
-            }
-            for (row, measured) in rows.iter_mut().zip(measurements) {
-                row.encode_effective_update(&encoder, measured, &mut budget)?;
-            }
-            budget.release(measurement_working_bytes);
-            Ok(())
-        })?;
-        if let Some((_, sequence_replacement_bytes)) = sequence_edit_lengths {
+        if let Some(sequence_replacement_bytes) =
+            candidate.deferred_auto_increment_max_replacement_bytes()?
+        {
             budget.check_transient(sequence_replacement_bytes)?;
         }
 
@@ -112,7 +137,7 @@ impl MutationPlan {
             catalog,
             scan.row_layout().table,
             &rows,
-            true,
+            ReferentialAction::Delete,
             &mut budget,
         )?;
         referential.initialize_direct_rows(&rows)?;
@@ -191,6 +216,21 @@ impl MutationPlan {
     }
 }
 
+fn push_update_queue(
+    queue: &mut Vec<usize>,
+    frozen_index: usize,
+    queue_working_bytes: &mut usize,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let charged =
+        budget.reserve_for_push_charged(queue, "reserving the referential update queue")?;
+    *queue_working_bytes = queue_working_bytes
+        .checked_add(charged)
+        .ok_or_else(|| budget.limit_error())?;
+    queue.push(frozen_index);
+    Ok(())
+}
+
 fn push_delete_queue(
     queue: &mut Vec<RowIdentity>,
     identity: RowIdentity,
@@ -220,6 +260,7 @@ fn row_record_for_identity<'a>(
     Ok(row_record)
 }
 
+#[cfg(test)]
 fn sequence_edit_lengths_for_targets(
     target_count: usize,
     lengths: impl FnOnce() -> Result<Option<(usize, usize)>>,
@@ -266,6 +307,7 @@ fn freeze_direct_targets(
     Ok((rows, direct_affected, budget))
 }
 
+#[cfg(test)]
 fn measure_and_check_update_database_size<'brand>(
     source_bytes: usize,
     limit: usize,
@@ -297,6 +339,101 @@ fn measure_and_check_update_database_size<'brand>(
     }
     check_limit(projected, limit, Resource::DatabaseBytes)?;
     Ok((measurements, measurement_working_bytes))
+}
+
+fn defer_auto_increment(
+    candidate: &mut Candidate<'_>,
+    table: &str,
+    last: i64,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let reservation_bytes = candidate.deferred_auto_increment_reservation_bytes()?;
+    budget.charge(reservation_bytes)?;
+    if let Err(error) = candidate.defer_auto_increment(table, last) {
+        budget.release(reservation_bytes);
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn defer_induced_auto_increments(
+    candidate: &mut Candidate<'_>,
+    blob: &str,
+    rows: &[FrozenRow],
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    for row in rows {
+        if !row.needs_update() {
+            continue;
+        }
+        let record = row_record_for_identity(blob, row.identity())?;
+        let Some(auto_increment) = candidate.catalog().auto_increment(record.table()) else {
+            continue;
+        };
+        let Some(Value::Integer(value)) = row.effective_value(auto_increment.column) else {
+            continue;
+        };
+        if *value > auto_increment.last {
+            defer_auto_increment(candidate, record.table(), *value, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn encode_and_check_updates(
+    catalog: &Catalog,
+    blob: &str,
+    limits: &Limits,
+    rows: &mut [FrozenRow],
+    sequence_edit_lengths: Option<(usize, usize)>,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let mut projected = blob.len();
+    if let Some((original, replacement)) = sequence_edit_lengths {
+        projected =
+            replace_projected_bytes(projected, original, replacement, limits.max_database_bytes)?;
+    }
+    for row in rows.iter() {
+        let record = row_record_for_identity(blob, row.identity())?;
+        let table =
+            catalog
+                .validated_table(record.table())
+                .ok_or_else(|| Error::CorruptStorage {
+                    offset: row.identity().start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                })?;
+        let encoded_len = with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+            row.measure_effective_update(&encoder)
+                .map(|measured| measured.encoded_len())
+        })?;
+        projected = replace_projected_bytes(
+            projected,
+            row.identity().len(),
+            encoded_len,
+            limits.max_database_bytes,
+        )?;
+    }
+    check_limit(
+        projected,
+        limits.max_database_bytes,
+        Resource::DatabaseBytes,
+    )?;
+
+    for row in rows {
+        let record = row_record_for_identity(blob, row.identity())?;
+        let table =
+            catalog
+                .validated_table(record.table())
+                .ok_or_else(|| Error::CorruptStorage {
+                    offset: row.identity().start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                })?;
+        with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+            let measured = row.measure_effective_update(&encoder)?;
+            row.encode_effective_update(&encoder, measured, budget)
+        })?;
+    }
+    Ok(())
 }
 
 fn replace_projected_bytes(

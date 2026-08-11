@@ -72,6 +72,37 @@ fn default_and_explicit_restrict_block_parent_mutations_atomically() {
 }
 
 #[test]
+fn unchanged_parent_keys_skip_update_restrict_checks() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY, note TEXT NOT NULL)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON UPDATE RESTRICT)",
+    );
+    execute(&mut database, "INSERT INTO parents VALUES (1, 'old')");
+    execute(&mut database, "INSERT INTO children VALUES (1)");
+
+    assert_eq!(
+        execute(
+            &mut database,
+            "UPDATE parents SET id = 1, note = 'new' WHERE id = 1",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id, note FROM parents"),
+        vec![vec![Value::Integer(1), Value::Text(String::from("new")),]]
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT parent_id FROM children"),
+        vec![vec![Value::Integer(1)]]
+    );
+}
+
+#[test]
 fn restrict_admits_coordinated_self_referential_mutations() {
     let mut database = Database::new();
     execute(
@@ -374,20 +405,386 @@ fn a_late_restrict_failure_rolls_back_an_already_discovered_cascade_graph() {
 }
 
 #[test]
-fn unsupported_on_update_cascade_is_typed_and_atomic() {
+fn update_cascade_is_multi_level_reports_direct_rows_and_survives_reload() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE roots (id INTEGER PRIMARY KEY)");
+    execute(
+        &mut database,
+        "CREATE TABLE branches (id INTEGER PRIMARY KEY REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE leaves (id INTEGER PRIMARY KEY, branch_id INTEGER REFERENCES branches(id) ON UPDATE CASCADE)",
+    );
+    for sql in [
+        "INSERT INTO roots VALUES (1)",
+        "INSERT INTO roots VALUES (2)",
+        "INSERT INTO branches VALUES (1)",
+        "INSERT INTO branches VALUES (2)",
+        "INSERT INTO leaves VALUES (100, 1)",
+        "INSERT INTO leaves VALUES (200, 2)",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    let blob = database.into_string();
+    assert!(blob.starts_with("V3;"));
+    assert!(blob.contains("~F|branches|id|roots|id|R|C;"));
+    assert!(blob.contains("~F|leaves|branch_id|branches|id|R|C;"));
+    let mut database = Database::from_string(blob).expect("update actions reload");
+
+    assert_eq!(
+        execute(&mut database, "UPDATE roots SET id = 10 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM roots ORDER BY id"),
+        vec![vec![Value::Integer(2)], vec![Value::Integer(10)]]
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM branches ORDER BY id"),
+        vec![vec![Value::Integer(2)], vec![Value::Integer(10)]]
+    );
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT id, branch_id FROM leaves ORDER BY id",
+        ),
+        vec![
+            vec![Value::Integer(100), Value::Integer(10)],
+            vec![Value::Integer(200), Value::Integer(2)],
+        ]
+    );
+
+    let mut reloaded =
+        Database::from_string(database.into_string()).expect("cascaded updates reload");
+    assert_eq!(
+        rows(&mut reloaded, "SELECT branch_id FROM leaves ORDER BY id"),
+        vec![vec![Value::Integer(10)], vec![Value::Integer(2)]]
+    );
+}
+
+#[test]
+fn self_referential_update_cascade_merges_direct_and_induced_changes() {
     let mut database = Database::new();
     execute(
         &mut database,
-        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES nodes(id) ON UPDATE CASCADE)",
+    );
+    for sql in [
+        "INSERT INTO nodes VALUES (1, NULL)",
+        "INSERT INTO nodes VALUES (2, 1)",
+        "INSERT INTO nodes VALUES (3, 2)",
+        "INSERT INTO nodes VALUES (4, 4)",
+        "INSERT INTO nodes VALUES (10, NULL)",
+        "INSERT INTO nodes VALUES (11, 10)",
+        "UPDATE nodes SET parent_id = 11 WHERE id = 10",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        execute(&mut database, "UPDATE nodes SET id = 20 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT parent_id FROM nodes WHERE id = 2"),
+        vec![vec![Value::Integer(20)]]
+    );
+    assert_eq!(
+        execute(&mut database, "UPDATE nodes SET id = 40 WHERE id = 4"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT id, parent_id FROM nodes WHERE id = 40",
+        ),
+        vec![vec![Value::Integer(40), Value::Integer(40)]]
+    );
+    assert_eq!(
+        execute(&mut database, "UPDATE nodes SET id = 100 WHERE id = 10"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(
+            &mut database,
+            "SELECT id, parent_id FROM nodes WHERE id = 11 OR id = 100 ORDER BY id",
+        ),
+        vec![
+            vec![Value::Integer(11), Value::Integer(100)],
+            vec![Value::Integer(100), Value::Integer(11)],
+        ]
+    );
+}
+
+#[test]
+fn text_update_cascade_accounts_payloads_at_exact_working_boundaries() {
+    const CHILDREN: usize = 1_024;
+    let mut source = String::from(
+        "V3;~S|p|id:T:!;~P|p|id;\
+         ~S|c|parent_id:T:!;~F|c|parent_id|p|id|R|C;\
+         ~R|p|Ta;",
+    );
+    for _ in 0..CHILDREN {
+        source.push_str("~R|c|Ta;");
+    }
+    let sql = "UPDATE p SET id = 'bb' WHERE id = 'a'";
+    let mut probe = Database::from_string(source.clone()).expect("TEXT cascade fixture loads");
+    execute(&mut probe, sql);
+    let required_database_bytes = probe.as_str().len();
+
+    let mut lower = required_database_bytes;
+    let mut upper = required_database_bytes.saturating_mul(8);
+    loop {
+        let mut candidate = Database::from_string_with_limits(
+            source.clone(),
+            Limits {
+                max_database_bytes: upper,
+                ..Limits::default()
+            },
+        )
+        .expect("the source fits the searched upper bound");
+        if candidate.execute(sql).is_ok() {
+            break;
+        }
+        upper = upper
+            .checked_mul(2)
+            .expect("the TEXT cascade working boundary fits usize");
+    }
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let mut candidate = Database::from_string_with_limits(
+            source.clone(),
+            Limits {
+                max_database_bytes: middle,
+                ..Limits::default()
+            },
+        )
+        .expect("the source fits the searched limit");
+        if candidate.execute(sql).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    let exact = lower;
+    assert!(
+        exact > required_database_bytes,
+        "TEXT cascade working state exceeds its candidate-size boundary"
     );
 
+    let mut exact_database = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: exact,
+            ..Limits::default()
+        },
+    )
+    .expect("the source fits the exact working boundary");
+    assert_eq!(
+        execute(&mut exact_database, sql),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut exact_database, "SELECT parent_id FROM c").len(),
+        CHILDREN
+    );
+
+    let one_under = exact - 1;
+    let mut limited = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: one_under,
+            ..Limits::default()
+        },
+    )
+    .expect("the source fits the one-under working boundary");
+    assert!(matches!(
+        atomic_error(&mut limited, sql),
+        Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            ..
+        }
+    ));
+    assert_eq!(limited.as_str(), source);
+}
+
+#[test]
+fn overlapping_update_cascade_paths_merge_each_row_once() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE roots (id INTEGER PRIMARY KEY)");
+    execute(
+        &mut database,
+        "CREATE TABLE left_branches (id INTEGER PRIMARY KEY REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE right_branches (id INTEGER PRIMARY KEY REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE leaves (id INTEGER PRIMARY KEY, left_id INTEGER REFERENCES left_branches(id) ON UPDATE CASCADE, right_id INTEGER REFERENCES right_branches(id) ON UPDATE CASCADE, note TEXT NOT NULL)",
+    );
+    for sql in [
+        "INSERT INTO roots VALUES (1)",
+        "INSERT INTO left_branches VALUES (1)",
+        "INSERT INTO right_branches VALUES (1)",
+        "INSERT INTO leaves VALUES (100, 1, 1, 'kept')",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        execute(&mut database, "UPDATE roots SET id = 9 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT left_id, right_id, note FROM leaves"),
+        vec![vec![
+            Value::Integer(9),
+            Value::Integer(9),
+            Value::Text(String::from("kept")),
+        ]]
+    );
+}
+
+#[test]
+fn update_cascade_conflicts_and_late_restrict_failures_are_atomic() {
+    let mut database = Database::new();
+    execute(&mut database, "CREATE TABLE roots (id INTEGER PRIMARY KEY)");
+    execute(
+        &mut database,
+        "CREATE TABLE branches (id INTEGER PRIMARY KEY REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE leaves (branch_id INTEGER REFERENCES branches(id) ON UPDATE RESTRICT)",
+    );
+    for sql in [
+        "INSERT INTO roots VALUES (1)",
+        "INSERT INTO branches VALUES (1)",
+        "INSERT INTO leaves VALUES (1)",
+    ] {
+        execute(&mut database, sql);
+    }
+    assert!(matches!(
+        atomic_error(&mut database, "UPDATE roots SET id = 10 WHERE id = 1"),
+        Error::Constraint(_)
+    ));
+
+    let mut self_reference = Database::new();
+    execute(
+        &mut self_reference,
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES nodes(id) ON UPDATE CASCADE)",
+    );
+    execute(&mut self_reference, "INSERT INTO nodes VALUES (1, 1)");
+    execute(&mut self_reference, "INSERT INTO nodes VALUES (3, NULL)");
+    assert!(matches!(
+        atomic_error(
+            &mut self_reference,
+            "UPDATE nodes SET id = 2, parent_id = 3 WHERE id = 1",
+        ),
+        Error::Constraint(_)
+    ));
+    assert_eq!(
+        execute(
+            &mut self_reference,
+            "UPDATE nodes SET id = 2, parent_id = 2 WHERE id = 1",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+}
+
+#[test]
+fn restricted_references_stay_coordinated_while_cascades_expand() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE nodes (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES nodes(id) ON UPDATE RESTRICT)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE tags (node_id INTEGER REFERENCES nodes(id) ON UPDATE CASCADE)",
+    );
+    execute(&mut database, "INSERT INTO nodes VALUES (3, 3)");
+    execute(&mut database, "INSERT INTO tags VALUES (3)");
+
+    // The restricted self-reference is rewritten by the statement that re-keys
+    // it, so it releases the restriction even while the same key expansion
+    // cascades into another table.
+    assert_eq!(
+        execute(
+            &mut database,
+            "UPDATE nodes SET id = 4, parent_id = 4 WHERE id = 3",
+        ),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id, parent_id FROM nodes"),
+        vec![vec![Value::Integer(4), Value::Integer(4)]]
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT node_id FROM tags"),
+        vec![vec![Value::Integer(4)]]
+    );
+
+    // A restricted row the statement never names keeps holding the old key, so
+    // the cascade cannot excuse it.
+    execute(&mut database, "INSERT INTO nodes VALUES (5, 4)");
     assert!(matches!(
         atomic_error(
             &mut database,
-            "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
+            "UPDATE nodes SET id = 6, parent_id = 6 WHERE id = 4",
         ),
-        Error::Unsupported { ref feature, .. } if feature == "ON UPDATE CASCADE"
+        Error::Constraint(_)
     ));
+}
+
+#[test]
+fn update_cascade_advances_every_auto_increment_sequence_in_the_chain() {
+    let mut database = Database::new();
+    execute(
+        &mut database,
+        "CREATE TABLE roots (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE branches (id INTEGER PRIMARY KEY AUTOINCREMENT REFERENCES roots(id) ON UPDATE CASCADE)",
+    );
+    execute(
+        &mut database,
+        "CREATE TABLE leaves (id INTEGER PRIMARY KEY AUTOINCREMENT REFERENCES branches(id) ON UPDATE CASCADE)",
+    );
+    for sql in [
+        "INSERT INTO roots VALUES (1)",
+        "INSERT INTO branches VALUES (1)",
+        "INSERT INTO leaves VALUES (1)",
+    ] {
+        execute(&mut database, sql);
+    }
+
+    assert_eq!(
+        execute(&mut database, "UPDATE roots SET id = 10 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    for table in ["roots", "branches", "leaves"] {
+        assert!(
+            database.as_str().contains(&format!("~A|{table}|id|I10;")),
+            "{table} sequence did not advance"
+        );
+    }
+    for sql in [
+        "INSERT INTO roots VALUES (NULL)",
+        "INSERT INTO branches VALUES (NULL)",
+        "INSERT INTO leaves VALUES (NULL)",
+    ] {
+        execute(&mut database, sql);
+    }
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM leaves ORDER BY id"),
+        vec![vec![Value::Integer(10)], vec![Value::Integer(11)]]
+    );
 }
 
 #[test]
@@ -533,6 +930,146 @@ fn deletes_index_only_children_of_the_direct_parent_keys() {
     assert_eq!(
         rows(&mut database, "SELECT id FROM p"),
         vec![vec![Value::Integer(0)]]
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT parent_id FROM c").len(),
+        CHILDREN
+    );
+}
+
+#[test]
+fn update_cascade_obeys_database_and_storage_working_limits_atomically() {
+    let mut reference = Database::new();
+    execute(&mut reference, "CREATE TABLE p (id INTEGER PRIMARY KEY)");
+    execute(
+        &mut reference,
+        "CREATE TABLE c (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES p(id) ON UPDATE CASCADE)",
+    );
+    execute(&mut reference, "CREATE TABLE padding (value TEXT NOT NULL)");
+    execute(
+        &mut reference,
+        &format!("INSERT INTO padding VALUES ('{}')", "x".repeat(1_024)),
+    );
+    execute(&mut reference, "INSERT INTO p VALUES (1)");
+    for id in 0..1 {
+        execute(&mut reference, &format!("INSERT INTO c VALUES ({id}, 1)"));
+    }
+    let source = reference.into_string();
+    let mut probe = Database::from_string(source.clone()).expect("probe source reloads");
+    execute(&mut probe, "UPDATE p SET id = 100000 WHERE id = 1");
+    let required = probe.as_str().len();
+
+    let mut exact = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: required,
+            ..Limits::default()
+        },
+    )
+    .expect("source fits exact result limit");
+    execute(&mut exact, "UPDATE p SET id = 100000 WHERE id = 1");
+    assert_eq!(exact.as_str().len(), required);
+
+    let limit = required - 1;
+    let mut limited = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: limit,
+            ..Limits::default()
+        },
+    )
+    .expect("source fits one-under result limit");
+    assert!(matches!(
+        atomic_error(&mut limited, "UPDATE p SET id = 100000 WHERE id = 1"),
+        Error::ResourceLimit {
+            resource: Resource::DatabaseBytes,
+            limit: actual,
+        } if actual == limit
+    ));
+    assert_eq!(limited.as_str(), source);
+
+    const CHILDREN: usize = 1_024;
+    let mut dense =
+        String::from("V3;~S|p|id:I:!;~P|p|id;~S|c|parent_id:I:!;~F|c|parent_id|p|id|R|C;~R|p|I0;");
+    for _ in 0..CHILDREN {
+        dense.push_str("~R|c|I0;");
+    }
+    let mut dense_database = Database::from_string_with_limits(
+        dense.clone(),
+        Limits {
+            max_database_bytes: dense.len(),
+            ..Limits::default()
+        },
+    )
+    .expect("dense update-cascade fixture loads");
+    assert!(matches!(
+        atomic_error(&mut dense_database, "UPDATE p SET id = 1 WHERE id = 0"),
+        Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            ..
+        }
+    ));
+    assert_eq!(dense_database.as_str(), dense);
+}
+
+#[test]
+fn non_primary_key_cascades_do_not_index_unreachable_descendants() {
+    const GRANDCHILDREN: usize = 1_024;
+    let mut blob = String::from(
+        "V3;~S|p|id:I:!;~P|p|id;\
+         ~S|c|id:I:!|parent_id:I:!;~P|c|id;~F|c|parent_id|p|id|R|C;\
+         ~S|g|c_id:I:!;~F|g|c_id|c|id|R|C;\
+         ~R|p|I0;~R|c|I1|I0;",
+    );
+    for _ in 0..GRANDCHILDREN {
+        blob.push_str("~R|g|I1;");
+    }
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let mut database = Database::from_string_with_limits(blob, limits)
+        .expect("the exact-size non-propagating cascade fixture loads");
+
+    assert_eq!(
+        execute(&mut database, "UPDATE p SET id = 2 WHERE id = 0"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id, parent_id FROM c"),
+        vec![vec![Value::Integer(1), Value::Integer(2)]]
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT c_id FROM g").len(),
+        GRANDCHILDREN
+    );
+}
+
+#[test]
+fn updates_index_only_children_of_the_direct_parent_keys() {
+    const CHILDREN: usize = 1_024;
+    let mut blob = String::from(
+        "V3;~S|p|id:I:!;~P|p|id;\
+         ~S|c|parent_id:I:!;~F|c|parent_id|p|id|R|C;\
+         ~R|p|I0;~R|p|I1;",
+    );
+    for _ in 0..CHILDREN {
+        blob.push_str("~R|c|I0;");
+    }
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let mut database = Database::from_string_with_limits(blob, limits)
+        .expect("the exact-size nonmatching update fixture loads");
+
+    assert_eq!(
+        execute(&mut database, "UPDATE p SET id = 2 WHERE id = 1"),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(&mut database, "SELECT id FROM p ORDER BY id"),
+        vec![vec![Value::Integer(0)], vec![Value::Integer(2)]]
     );
     assert_eq!(
         rows(&mut database, "SELECT parent_id FROM c").len(),

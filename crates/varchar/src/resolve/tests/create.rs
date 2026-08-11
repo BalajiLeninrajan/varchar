@@ -56,7 +56,7 @@ fn create_schema_preserves_foreign_key_actions_and_defaults() {
     let resolved = create_schema(
         &keyed_parent_catalog(),
         create_table(
-            "CREATE TABLE children (cascade_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE, null_id INTEGER, default_id INTEGER REFERENCES parents(id), FOREIGN KEY (null_id) REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT)",
+            "CREATE TABLE children (cascade_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE CASCADE ON UPDATE CASCADE, null_id INTEGER, default_id INTEGER REFERENCES parents(id), FOREIGN KEY (null_id) REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT)",
         ),
     )
     .expect("foreign-key actions resolve");
@@ -69,7 +69,7 @@ fn create_schema_preserves_foreign_key_actions_and_defaults() {
                 referenced_table: String::from("parents"),
                 referenced_column: String::from("id"),
                 on_delete: ForeignKeyDeleteAction::Cascade,
-                on_update: ForeignKeyUpdateAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Cascade,
             },
             ForeignKey {
                 column: 1,

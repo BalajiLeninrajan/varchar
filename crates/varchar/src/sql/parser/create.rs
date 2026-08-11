@@ -210,9 +210,12 @@ impl Parser {
                 self.advance();
                 Ok(ForeignKeyUpdateAction::Restrict)
             }
-            Some("CASCADE") => Err(Error::unsupported("ON UPDATE CASCADE", self.current().span)),
+            Some("CASCADE") => {
+                self.advance();
+                Ok(ForeignKeyUpdateAction::Cascade)
+            }
             _ => Err(Error::parse(
-                "expected RESTRICT after ON UPDATE",
+                "expected RESTRICT or CASCADE after ON UPDATE",
                 self.current().span,
             )),
         }

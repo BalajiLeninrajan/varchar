@@ -3,11 +3,11 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 
-use super::model::{
-    FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
-};
+use super::model::{FrozenRow, RowIdentity, WorkingBudget, decoded_values_bytes};
 use super::{invalid_range, push_delete_queue, row_record_for_identity};
-use crate::storage::{self, Catalog, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
+use crate::storage::{
+    self, Catalog, ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema,
+};
 use crate::{Error, Result, Value};
 
 const UNFROZEN: usize = usize::MAX;
@@ -71,36 +71,10 @@ pub(super) struct ReferentialIndex<'catalog, 'blob> {
     working_bytes: usize,
 }
 
-pub(super) fn enforce_update_restrict(
-    blob: &str,
-    catalog: &Catalog,
-    parent_schema: &TableSchema,
-    rows: &[FrozenRow],
-    update: &PreparedDirectUpdate<'_>,
-    budget: &mut WorkingBudget,
-) -> Result<()> {
-    let Some(primary_key) = parent_schema.primary_key else {
-        return Ok(());
-    };
-    let Some((_, replacement)) = update
-        .assignments()
-        .iter()
-        .find(|(column, _)| *column == primary_key)
-    else {
-        return Ok(());
-    };
-    if rows
-        .iter()
-        .all(|row| row.original_value(primary_key) == Some(replacement))
-    {
-        return Ok(());
-    }
-
-    let index = ReferentialIndex::build(blob, catalog, &parent_schema.name, rows, false, budget)?;
-    index.initialize_direct_rows(rows)?;
-    index.enforce_update_restrict(parent_schema, rows, update)?;
-    index.release(budget);
-    Ok(())
+#[derive(Clone, Copy)]
+pub(super) enum ReferentialAction {
+    Delete,
+    Update,
 }
 
 impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
@@ -109,10 +83,10 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         catalog: &'catalog Catalog,
         root_table: &str,
         root_rows: &[FrozenRow],
-        follow_delete_cascades: bool,
+        action: ReferentialAction,
         budget: &mut WorkingBudget,
     ) -> Result<Self> {
-        let relevance = referential_relevance(catalog, root_table, follow_delete_cascades, budget)?;
+        let relevance = referential_relevance(catalog, root_table, action, budget)?;
         let mut index = Self {
             blob,
             catalog,
@@ -320,44 +294,79 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         Ok(())
     }
 
-    pub(super) fn enforce_update_restrict(
+    pub(super) fn expand_update_actions(
         &self,
-        parent_schema: &TableSchema,
-        rows: &[FrozenRow],
-        update: &PreparedDirectUpdate<'_>,
+        rows: &mut Vec<FrozenRow>,
+        update_queue: &mut Vec<usize>,
+        queue_working_bytes: &mut usize,
+        budget: &mut WorkingBudget,
     ) -> Result<()> {
-        let Some(primary_key) = parent_schema.primary_key else {
-            return Ok(());
-        };
-        let Some((_, replacement)) = update
-            .assignments()
-            .iter()
-            .find(|(column, _)| *column == primary_key)
-        else {
-            return Ok(());
-        };
-
-        for row in rows {
-            let old_key = row.original_value(primary_key);
-            if old_key == Some(replacement) {
-                continue;
-            }
-            let record = row_record_for_identity(self.blob, row.identity())?;
-            let parent_key = record
-                .cell(primary_key)
+        let mut cursor = 0;
+        while let Some(parent_index) = update_queue.get(cursor).copied() {
+            cursor = cursor.checked_add(1).ok_or(Error::Capacity {
+                operation: "advancing the referential update queue",
+            })?;
+            let parent_identity = rows
+                .get(parent_index)
+                .ok_or(Error::Capacity {
+                    operation: "reading a queued referential update",
+                })?
+                .identity();
+            let parent_record = row_record_for_identity(self.blob, parent_identity)?;
+            let parent_schema =
+                self.catalog
+                    .table(parent_record.table())
+                    .ok_or_else(|| Error::CorruptStorage {
+                        offset: parent_identity.start(),
+                        message: String::from("updated row references an unknown table"),
+                    })?;
+            let primary_key = parent_schema
+                .primary_key
                 .ok_or_else(|| Error::CorruptStorage {
-                    offset: row.identity().start(),
-                    message: String::from("updated row is missing its primary-key cell"),
+                    offset: parent_identity.start(),
+                    message: String::from("referenced row table has no primary key"),
                 })?;
-            if let Some(edge) = self
-                .matching_edges(&parent_schema.name, parent_key)
-                .find(|edge| {
-                    edge.on_update == ForeignKeyUpdateAction::Restrict
-                        && self.still_references(edge, rows, update, old_key)
-                })
-            {
-                return Err(self.restrict_error(edge));
-            }
+            let parent_key =
+                parent_record
+                    .cell(primary_key)
+                    .ok_or_else(|| Error::CorruptStorage {
+                        offset: parent_identity.start(),
+                        message: String::from("updated row is missing its primary-key cell"),
+                    })?;
+            let (replacement, replacement_working_bytes) =
+                rows[parent_index].clone_effective_value(primary_key, budget)?;
+
+            let result = (|| {
+                for edge in self.matching_edges(&parent_schema.name, parent_key) {
+                    match edge.on_update {
+                        ForeignKeyUpdateAction::Restrict => {
+                            let old_key = rows[parent_index].original_value(primary_key);
+                            if self.still_references(edge, rows, old_key) {
+                                return Err(self.restrict_error(edge));
+                            }
+                        }
+                        ForeignKeyUpdateAction::Cascade => {
+                            let index = self.freeze_child(edge.child, rows, budget)?;
+                            if !rows[index].request_update(edge.column, &replacement, budget)? {
+                                continue;
+                            }
+                            if self.children[edge.child].schema.primary_key == Some(edge.column)
+                                && rows[index].mark_update_queued(edge.column)
+                            {
+                                push_update_queue(
+                                    update_queue,
+                                    index,
+                                    queue_working_bytes,
+                                    budget,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            budget.release(replacement_working_bytes);
+            result?;
         }
         Ok(())
     }
@@ -365,37 +374,42 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
     /// Reports whether `edge` still names `old_key` once the statement lands.
     ///
     /// A child row that this same statement rewrites moves with the parent, so
-    /// its pre-statement reference is not evidence of a dangling one. Whether
-    /// the rewritten reference resolves at all is settled by the candidate-side
-    /// foreign-key check, which sees the complete post-statement database.
+    /// its pre-statement reference is not evidence of a dangling one. Both
+    /// kinds of rewrite are covered: direct assignments are installed before
+    /// expansion begins, and a cascade installs its overlay when it freezes the
+    /// child, so an overlay on a restricted column can only have come from the
+    /// statement itself. The overlay is also final, because the column a
+    /// `RESTRICT` edge guards is never the column an update cascade rewrites.
+    /// Whether the rewritten reference resolves at all is settled by the
+    /// candidate-side foreign-key check, which sees the complete post-statement
+    /// database.
     fn still_references(
         &self,
         edge: &ReferentialEdge<'_, '_>,
         rows: &[FrozenRow],
-        update: &PreparedDirectUpdate<'_>,
         old_key: Option<&Value>,
     ) -> bool {
-        let Some(frozen_index) = self.direct_target(edge.child, rows.len()) else {
-            return true;
-        };
-        let child = &rows[frozen_index];
-        update
-            .assignments()
-            .iter()
-            .find(|(column, _)| *column == edge.column)
-            .map_or_else(
-                || child.original_value(edge.column),
-                |(_, value)| Some(value),
-            )
+        self.frozen_target(edge.child)
+            .and_then(|frozen_index| rows.get(frozen_index))
+            .and_then(|child| child.effective_value(edge.column))
             .is_none_or(|effective| Some(effective) == old_key)
+    }
+
+    /// Maps a referential child back to the frozen row that carries its planned
+    /// rewrite, whether the statement named that row directly or a cascade
+    /// reached it.
+    fn frozen_target(&self, child: usize) -> Option<usize> {
+        let frozen_index = self.children[child].frozen_index.get();
+        (frozen_index != UNFROZEN).then_some(frozen_index)
     }
 
     /// Maps a referential child back to the direct target that froze it, if the
     /// statement itself named that row.
     ///
     /// Rows induced by referential actions are appended after the direct
-    /// prefix, so they are deliberately excluded: their fate depends on the
-    /// order the referential queues are drained in.
+    /// prefix, so they are deliberately excluded: unlike an update overlay, a
+    /// queued delete is not yet a settled fact when the queue is still being
+    /// drained.
     fn direct_target(&self, child: usize, direct_rows: usize) -> Option<usize> {
         let frozen_index = self.children[child].frozen_index.get();
         (frozen_index != UNFROZEN && frozen_index < direct_rows).then_some(frozen_index)
@@ -478,10 +492,25 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
     }
 }
 
+fn push_update_queue(
+    queue: &mut Vec<usize>,
+    frozen_index: usize,
+    queue_working_bytes: &mut usize,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let charged =
+        budget.reserve_for_push_charged(queue, "reserving the referential update queue")?;
+    *queue_working_bytes = queue_working_bytes
+        .checked_add(charged)
+        .ok_or_else(|| budget.limit_error())?;
+    queue.push(frozen_index);
+    Ok(())
+}
+
 fn referential_relevance(
     catalog: &Catalog,
     root_table: &str,
-    follow_delete_cascades: bool,
+    action: ReferentialAction,
     budget: &mut WorkingBudget,
 ) -> Result<ReferentialRelevance> {
     let table_count = catalog.table_count();
@@ -505,7 +534,7 @@ fn referential_relevance(
                 continue;
             }
             has_inbound = true;
-            has_cascade |= foreign_key.on_delete == ForeignKeyDeleteAction::Cascade;
+            has_cascade |= propagates_to_child_primary_key(schema, foreign_key, action);
         }
     }
     if !has_inbound {
@@ -518,8 +547,8 @@ fn referential_relevance(
     }
 
     let mut root_reentered = false;
-    if follow_delete_cascades && has_cascade {
-        root_reentered = expand_cascade_tables(catalog, root, &mut tables, budget)?;
+    if has_cascade {
+        root_reentered = expand_cascade_tables(catalog, root, &mut tables, action, budget)?;
     }
     for (child, (_, schema)) in catalog.tables().enumerate() {
         if schema.foreign_keys.iter().any(|foreign_key| {
@@ -535,7 +564,7 @@ fn referential_relevance(
     Ok(ReferentialRelevance {
         tables,
         root,
-        filter_root_keys: !follow_delete_cascades || !root_reentered,
+        filter_root_keys: !root_reentered,
         working_bytes,
     })
 }
@@ -544,13 +573,14 @@ fn expand_cascade_tables(
     catalog: &Catalog,
     root: usize,
     relevant: &mut [u8],
+    action: ReferentialAction,
     budget: &mut WorkingBudget,
 ) -> Result<bool> {
     let mut cascade_edges = Vec::new();
     let mut cascade_edge_bytes = 0_usize;
     for (child, (_, schema)) in catalog.tables().enumerate() {
         for foreign_key in &schema.foreign_keys {
-            if foreign_key.on_delete != ForeignKeyDeleteAction::Cascade {
+            if !propagates_to_child_primary_key(schema, foreign_key, action) {
                 continue;
             }
             let (parent, _) = catalog
@@ -602,6 +632,27 @@ fn expand_cascade_tables(
     drop(cascade_edges);
     budget.release(cascade_edge_bytes);
     Ok(root_reentered)
+}
+
+const fn is_cascade_action(foreign_key: &ForeignKey, action: ReferentialAction) -> bool {
+    match action {
+        ReferentialAction::Delete => {
+            matches!(foreign_key.on_delete, ForeignKeyDeleteAction::Cascade)
+        }
+        ReferentialAction::Update => {
+            matches!(foreign_key.on_update, ForeignKeyUpdateAction::Cascade)
+        }
+    }
+}
+
+fn propagates_to_child_primary_key(
+    child: &TableSchema,
+    foreign_key: &ForeignKey,
+    action: ReferentialAction,
+) -> bool {
+    is_cascade_action(foreign_key, action)
+        && (matches!(action, ReferentialAction::Delete)
+            || child.primary_key == Some(foreign_key.column))
 }
 
 fn direct_parent_keys<'blob>(

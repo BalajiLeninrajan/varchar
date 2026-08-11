@@ -57,7 +57,7 @@ fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
 fn parses_foreign_key_actions_inline_and_at_table_level() {
     let statement = create_table(
         "CREATE TABLE children (\
-            cascade_id INTEGER REFERENCES parents(id) ON UPDATE RESTRICT ON DELETE CASCADE, \
+            cascade_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE ON DELETE CASCADE, \
             null_id INTEGER, \
             FOREIGN KEY (null_id) REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT, \
             default_id INTEGER REFERENCES parents(id)\
@@ -71,7 +71,7 @@ fn parses_foreign_key_actions_inline_and_at_table_level() {
         panic!("expected REFERENCES");
     };
     assert_eq!(cascade.on_delete, ForeignKeyDeleteAction::Cascade);
-    assert_eq!(cascade.on_update, ForeignKeyUpdateAction::Restrict);
+    assert_eq!(cascade.on_update, ForeignKeyUpdateAction::Cascade);
 
     let CreateElement::Constraint(TableConstraint::ForeignKey { reference, .. }) =
         &statement.elements[2]
@@ -92,19 +92,29 @@ fn parses_foreign_key_actions_inline_and_at_table_level() {
 }
 
 #[test]
-fn recognizes_on_update_cascade_as_unsupported() {
-    let sql = "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)";
-    let start = sql.find("CASCADE").expect("CASCADE exists");
-    assert!(matches!(
-        parse(sql),
-        Err(Error::Unsupported {
-            ref feature,
-            span_start,
-            span_end,
-        }) if feature == "ON UPDATE CASCADE"
-            && span_start == start
-            && span_end == start + "CASCADE".len()
-    ));
+fn parses_on_update_cascade_inline_and_at_table_level() {
+    let statement = create_table(
+        "CREATE TABLE children (\
+            inline_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE, \
+            table_id INTEGER, \
+            FOREIGN KEY (table_id) REFERENCES parents(id) ON DELETE RESTRICT ON UPDATE CASCADE\
+        )",
+    );
+
+    let CreateElement::Column(inline) = &statement.elements[0] else {
+        panic!("expected an inline foreign key");
+    };
+    let ColumnModifier::References(inline) = &inline.modifiers[0] else {
+        panic!("expected REFERENCES");
+    };
+    assert_eq!(inline.on_update, ForeignKeyUpdateAction::Cascade);
+
+    let CreateElement::Constraint(TableConstraint::ForeignKey { reference, .. }) =
+        &statement.elements[2]
+    else {
+        panic!("expected a table-level foreign key");
+    };
+    assert_eq!(reference.on_update, ForeignKeyUpdateAction::Cascade);
 }
 
 #[test]

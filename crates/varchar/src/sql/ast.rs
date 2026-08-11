@@ -58,6 +58,7 @@ pub(crate) enum ForeignKeyDeleteAction {
 pub(crate) enum ForeignKeyUpdateAction {
     #[default]
     Restrict,
+    Cascade,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

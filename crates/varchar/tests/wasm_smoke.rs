@@ -779,6 +779,76 @@ fn escaped_check_create_honors_exact_and_one_under_database_limits_in_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn update_cascade_has_exact_wasm_working_boundaries_and_atomic_rollback() {
+    const CHILDREN: usize = 32;
+    let mut source = String::from(
+        "V3;~S|p|id:I:!;~P|p|id;\
+         ~S|c|parent_id:I:!;~F|c|parent_id|p|id|R|C;\
+         ~R|p|I0;",
+    );
+    for _ in 0..CHILDREN {
+        source.push_str("~R|c|I0;");
+    }
+    let sql = "UPDATE p SET id = 1 WHERE id = 0";
+
+    let mut lower = source.len();
+    let mut upper = source.len().saturating_mul(16);
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let limits = Limits {
+            max_database_bytes: middle,
+            ..Limits::default()
+        };
+        let mut candidate = Database::from_string_with_limits(source.clone(), limits).unwrap();
+        if candidate.execute(sql).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    let exact = lower;
+    assert!(
+        exact > source.len(),
+        "cascade working state exceeds the exact source-derived budget"
+    );
+
+    let mut exact_database = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: exact,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        exact_database.execute(sql).unwrap(),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(exact_database.execute("SELECT parent_id FROM c").unwrap()),
+        vec![vec![Value::Integer(1)]; CHILDREN]
+    );
+
+    let one_under = exact - 1;
+    let mut limited = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_database_bytes: one_under,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        limited.execute(sql),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            ..
+        })
+    ));
+    assert_eq!(limited.as_str(), source);
+}
+
+#[wasm_bindgen_test]
 fn referential_actions_execute_rollback_and_reload_inside_wasm() {
     let mut database = Database::new();
     database
@@ -799,13 +869,20 @@ fn referential_actions_execute_rollback_and_reload_inside_wasm() {
             "CREATE TABLE restricted_children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON DELETE RESTRICT ON UPDATE RESTRICT)",
         )
         .unwrap();
+    database
+        .execute(
+            "CREATE TABLE update_children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
+        )
+        .unwrap();
     for sql in [
         "INSERT INTO parents VALUES (1)",
         "INSERT INTO parents VALUES (2)",
         "INSERT INTO parents VALUES (3)",
+        "INSERT INTO parents VALUES (4)",
         "INSERT INTO cascade_children VALUES (10, 1)",
         "INSERT INTO nullable_children VALUES (20, 2)",
         "INSERT INTO restricted_children VALUES (30, 3)",
+        "INSERT INTO update_children VALUES (40, 4)",
     ] {
         database.execute(sql).unwrap();
     }
@@ -841,17 +918,36 @@ fn referential_actions_execute_rollback_and_reload_inside_wasm() {
         Err(Error::Constraint(_))
     ));
     assert_eq!(database.as_str(), before_restrict);
-    assert!(matches!(
-        database.execute(
-            "CREATE TABLE unsupported (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
+    assert_eq!(
+        database
+            .execute("UPDATE parents SET id = 44 WHERE id = 4")
+            .unwrap(),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT parent_id FROM update_children")
+                .unwrap()
         ),
-        Err(Error::Unsupported { ref feature, .. }) if feature == "ON UPDATE CASCADE"
-    ));
-    assert_eq!(database.as_str(), before_restrict);
+        vec![vec![Value::Integer(44)]]
+    );
 
     let mut reloaded = Database::from_string(database.into_string()).unwrap();
     assert_eq!(
-        rows(reloaded.execute("SELECT id FROM parents").unwrap()),
-        vec![vec![Value::Integer(3)]]
+        rows(
+            reloaded
+                .execute("SELECT id FROM parents ORDER BY id")
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(3)], vec![Value::Integer(44)]]
+    );
+    assert_eq!(
+        rows(
+            reloaded
+                .execute("SELECT parent_id FROM update_children")
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(44)]]
     );
 }

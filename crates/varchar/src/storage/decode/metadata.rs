@@ -183,6 +183,7 @@ pub(in crate::storage) fn decode_foreign_key_record(
             };
             let on_update = match update_tag {
                 "R" => ForeignKeyUpdateAction::Restrict,
+                "C" => ForeignKeyUpdateAction::Cascade,
                 _ => return Err(corrupt(offset, "malformed foreign-key action metadata")),
             };
             if on_delete == ForeignKeyDeleteAction::Restrict

@@ -4,10 +4,10 @@ use super::model::{
     FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
     set_value_clone_failure_after,
 };
-use super::referential::enforce_update_restrict;
+use super::referential::{ReferentialAction, ReferentialIndex};
 use super::{
-    freeze_rows, measure_and_check_update_database_size, sequence_edit_lengths_for_targets,
-    sort_and_validate_ranges,
+    defer_auto_increment, freeze_rows, measure_and_check_update_database_size, push_update_queue,
+    sequence_edit_lengths_for_targets, sort_and_validate_ranges,
 };
 use crate::storage::{RowLayout, StorageState, validate_row_layout, with_validated_row_encoder};
 use crate::{DataType, Error, Resource, SchemaColumn, Value};
@@ -679,6 +679,33 @@ fn deferred_sequence_peak_excludes_consumed_measurements_and_overlays() {
 }
 
 #[test]
+fn deferred_sequence_reservation_is_charged_before_candidate_allocation() {
+    let blob = String::from("V2;~S|t|id:I:!;~P|t|id;~A|t|id|I1;~R|t|I1;");
+    let state = StorageState::load(blob, usize::MAX).expect("sequence fixture loads");
+    let mut candidate = state.candidate(state.as_str().len()).expect("source fits");
+    let reservation = candidate
+        .deferred_auto_increment_reservation_bytes()
+        .expect("the deferred index can be measured");
+    let mut budget = WorkingBudget::with_limit(reservation - 1);
+
+    assert!(matches!(
+        defer_auto_increment(&mut candidate, "t", 10, &mut budget),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit,
+        }) if limit == reservation - 1
+    ));
+    assert_eq!(budget.used(), 0);
+    assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_lengths()
+            .expect("the failed reservation leaves no edit"),
+        None
+    );
+}
+
+#[test]
 fn governed_reservations_report_allocation_failures() {
     let mut budget = WorkingBudget::with_limit(usize::MAX);
     budget.charge(7).expect("baseline fits");
@@ -726,13 +753,14 @@ fn update_restrict_releases_only_edges_the_same_statement_retargets() {
         .table("nodes")
         .expect("the fixture declares nodes");
 
+    let primary_key = schema.primary_key.expect("nodes declares a primary key");
     let enforce = |assignments: &mut [(usize, Value)]| -> crate::Result<()> {
         let layout = RowLayout {
             table: "nodes",
             columns: &columns,
         };
         let mut budget = WorkingBudget::with_limit(usize::MAX);
-        let (rows, _) = freeze_rows(
+        let (mut rows, _) = freeze_rows(
             state.as_str(),
             [Ok(start..start + record.len())],
             layout,
@@ -741,12 +769,38 @@ fn update_restrict_releases_only_edges_the_same_statement_retargets() {
         )
         .expect("the validated record freezes");
         let update = PreparedDirectUpdate::new(assignments, columns.len(), rows[0].identity())?;
-        enforce_update_restrict(
+        for row in &mut rows {
+            row.install_direct_update(&update, &mut budget)?;
+        }
+
+        let mut update_queue = Vec::new();
+        let mut queue_working_bytes = 0;
+        for (index, row) in rows.iter_mut().enumerate() {
+            if row.mark_update_queued(primary_key) {
+                push_update_queue(
+                    &mut update_queue,
+                    index,
+                    &mut queue_working_bytes,
+                    &mut budget,
+                )?;
+            }
+        }
+        if update_queue.is_empty() {
+            return Ok(());
+        }
+        let referential = ReferentialIndex::build(
             state.as_str(),
             state.catalog(),
-            schema,
+            "nodes",
             &rows,
-            &update,
+            ReferentialAction::Update,
+            &mut budget,
+        )?;
+        referential.initialize_direct_rows(&rows)?;
+        referential.expand_update_actions(
+            &mut rows,
+            &mut update_queue,
+            &mut queue_working_bytes,
             &mut budget,
         )
     };
