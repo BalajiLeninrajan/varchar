@@ -32,20 +32,13 @@ pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
         encoded.push(';');
     }
 
-    // Foreign-key order is not semantically meaningful. Encoding by local
-    // column keeps the authoritative string deterministic.
-    for column in 0..schema.columns.len() {
-        let Some(foreign_key) = schema
-            .foreign_keys
-            .iter()
-            .find(|foreign_key| foreign_key.column == column)
-        else {
-            continue;
-        };
+    // Resolved schemas and decoded metadata retain foreign keys in increasing
+    // local-column order, so direct iteration preserves canonical encoding.
+    for foreign_key in &schema.foreign_keys {
         encoded.push_str(FOREIGN_KEY_PREFIX);
         encoded.push_str(&schema.name);
         encoded.push('|');
-        encoded.push_str(&schema.columns[column].name);
+        encoded.push_str(&schema.columns[foreign_key.column].name);
         encoded.push('|');
         encoded.push_str(&foreign_key.referenced_table);
         encoded.push('|');
