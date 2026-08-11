@@ -1,9 +1,10 @@
 mod state;
 
-use super::budget::{reset_working_string_comparisons, working_limit, working_string_comparisons};
+use super::budget::{reset_working_string_comparisons, working_string_comparisons};
 use super::decode::{blob_row_scans, reset_blob_row_scans};
 use super::validate::validate_and_catalog;
 use super::{StorageState, TableSchema};
+use crate::limits::storage_working_limit;
 use crate::{DataType, Database, Error, Limits, Resource, SchemaColumn, Value};
 
 #[test]
@@ -69,14 +70,14 @@ fn primary_key_validation_uses_indexed_duplicate_checks() {
 #[test]
 fn primary_key_index_preserves_exact_limit_loading() {
     let compact = "V2;~S|t|c0:I:!;~P|t|c0;~R|t|I0;~R|t|I1;~R|t|I2;";
-    validate_and_catalog(compact, working_limit(compact.len()))
+    validate_and_catalog(compact, storage_working_limit(compact.len()))
         .expect("a compact primary-key index fits its exact derived limit");
 
     let mut larger = String::from("V2;~S|t|id:T:!;~P|t|id;");
     for key in 0..=20 {
         larger.push_str(&format!("~R|t|Tk{key};"));
     }
-    validate_and_catalog(&larger, working_limit(larger.len()))
+    validate_and_catalog(&larger, storage_working_limit(larger.len()))
         .expect("a larger primary-key index fits its exact derived limit");
 }
 
@@ -96,21 +97,21 @@ fn primary_key_index_preserves_exact_limit_loading() {
 #[test]
 fn unique_index_preserves_exact_limit_loading() {
     let compact = "V3;~S|t|c0:T:?;~U|t|c0;~R|t|T0;~R|t|T1;~R|t|T2;";
-    validate_and_catalog(compact, working_limit(compact.len()))
+    validate_and_catalog(compact, storage_working_limit(compact.len()))
         .expect("a compact UNIQUE index fits its exact derived limit");
 
     let mut larger = String::from("V3;~S|t|value:T:?;~U|t|value;");
     for value in 0..=20 {
         larger.push_str(&format!("~R|t|Tv{value};"));
     }
-    validate_and_catalog(&larger, working_limit(larger.len()))
+    validate_and_catalog(&larger, storage_working_limit(larger.len()))
         .expect("a larger UNIQUE index fits its exact derived limit");
 
     let mut grown = String::from("V3;~S|t|value:T:?;~U|t|value;");
     for value in 0..64 {
         grown.push_str(&format!("~R|t|Tvalue{value};"));
     }
-    validate_and_catalog(&grown, working_limit(grown.len()))
+    validate_and_catalog(&grown, storage_working_limit(grown.len()))
         .expect("a grown UNIQUE index fits its exact derived limit");
 
     for (columns, rows) in [
@@ -138,7 +139,7 @@ fn unique_index_preserves_exact_limit_loading() {
             }
             blob.push(';');
         }
-        validate_and_catalog(&blob, working_limit(blob.len())).unwrap_or_else(|error| {
+        validate_and_catalog(&blob, storage_working_limit(blob.len())).unwrap_or_else(|error| {
             panic!(
                 "{columns} UNIQUE columns over {rows} rows exceeded their derived limit: {error}"
             )
@@ -242,7 +243,7 @@ fn geometric_growth_stays_inside_the_derived_working_limit() {
     }
     assert_eq!(blob.len(), PREFIX.len() + KEYS.len() * 8);
 
-    validate_and_catalog(&blob, working_limit(blob.len()))
+    validate_and_catalog(&blob, storage_working_limit(blob.len()))
         .expect("the worst geometric overshoot still fits the exact derived working limit");
 
     assert!(matches!(

@@ -73,7 +73,6 @@ pub(crate) fn encoded_auto_increment_record_len(
     Ok(measure_validated_auto_increment_record(schema, column, last)?.encoded_len)
 }
 
-#[cfg(test)]
 pub(crate) fn encoded_auto_increment_record_len_prevalidated(
     schema: &TableSchema,
     column: usize,

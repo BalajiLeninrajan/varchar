@@ -12,6 +12,8 @@ const MIB: usize = 1024 * 1024;
 pub enum Resource {
     /// The authoritative database string.
     DatabaseBytes,
+    /// Live auxiliary state used for storage reconstruction, validation, and mutation planning.
+    StorageWorkingBytes,
     /// One SQL statement.
     SqlBytes,
     /// Predicate units in one `WHERE` expression.
@@ -31,14 +33,13 @@ pub enum Resource {
     /// Backtracking performed by one regex search, and wildcard backtracking
     /// performed by the `LIKE` matcher across one statement.
     RegexBacktracking,
-    /// Auxiliary memory used while rebuilding or validating storage state.
-    StorageWorkingBytes,
 }
 
 impl fmt::Display for Resource {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::DatabaseBytes => "database bytes",
+            Self::StorageWorkingBytes => "storage working bytes",
             Self::SqlBytes => "SQL bytes",
             Self::WherePredicates => "WHERE predicates",
             Self::CheckPredicates => "CHECK predicates",
@@ -48,7 +49,6 @@ impl fmt::Display for Resource {
             Self::QueryOutputBytes => "query output bytes",
             Self::JoinSteps => "JOIN execution steps",
             Self::RegexBacktracking => "regex backtracking steps",
-            Self::StorageWorkingBytes => "storage working bytes",
         })
     }
 }
@@ -130,6 +130,10 @@ impl Default for Limits {
             regex_backtrack_limit: 1_000_000,
         }
     }
+}
+
+pub(crate) const fn storage_working_limit(max_database_bytes: usize) -> usize {
+    max_database_bytes.saturating_mul(4)
 }
 
 pub(crate) fn check_limit(actual: usize, limit: usize, resource: Resource) -> Result<()> {

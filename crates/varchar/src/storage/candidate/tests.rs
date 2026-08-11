@@ -1,4 +1,4 @@
-use super::StorageState;
+use super::{DeferredAutoIncrement, StorageState};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::storage::TableSchema;
 use crate::storage::encode::measure_table_metadata;
@@ -21,6 +21,47 @@ fn failed_splice_leaves_the_candidate_reusable() {
             .expect("unchanged candidate fits")
             .as_str(),
         source
+    );
+}
+
+#[test]
+fn deferred_sequence_edit_reports_working_and_replacement_bytes() {
+    let state = StorageState::load(
+        String::from("V2;~S|t|id:I:!;~P|t|id;~A|t|id|I1;~R|t|I1;"),
+        usize::MAX,
+    )
+    .expect("source is valid");
+    let mut candidate = state.candidate(state.as_str().len()).expect("source fits");
+
+    assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_lengths()
+            .expect("an absent edit has no lengths"),
+        None
+    );
+
+    candidate
+        .defer_auto_increment("t", 10)
+        .expect("the sequence can advance");
+    assert_eq!(
+        candidate.deferred_auto_increment_working_bytes(),
+        std::mem::size_of::<DeferredAutoIncrement<'_>>()
+    );
+    assert_eq!(
+        candidate
+            .deferred_auto_increment_lengths()
+            .expect("the deferred edit has exact lengths"),
+        Some(("~A|t|id|I1;".len(), "~A|t|id|I10;".len()))
+    );
+    candidate.discard_deferred_auto_increment();
+    assert_eq!(candidate.deferred_auto_increment_working_bytes(), 0);
+    assert_eq!(
+        candidate
+            .finish()
+            .expect("the untouched candidate validates")
+            .as_str(),
+        state.as_str()
     );
 }
 

@@ -6,9 +6,7 @@ use crate::Result;
 use crate::expression::Program;
 use crate::output::SelectExplanation;
 use crate::resolve::{ColumnLocation, ResolvedJoin, ResolvedOrderTerm};
-#[cfg(test)]
-use crate::storage::ValidatedRowLayout;
-use crate::storage::{OwnedValidatedRowLayout, RowLayout, TableSchema};
+use crate::storage::{OwnedValidatedRowLayout, RowLayout, TableSchema, ValidatedRowLayout};
 
 /// An owned mutation scan that remains valid while a candidate is assembled.
 pub(crate) struct ScanPlan<'statement> {
@@ -18,13 +16,20 @@ pub(crate) struct ScanPlan<'statement> {
 }
 
 impl ScanPlan<'_> {
+    pub(crate) const fn regex(&self) -> &Regex {
+        &self.regex
+    }
+
     pub(crate) fn row_layout(&self) -> RowLayout<'_> {
         self.layout.row_layout()
     }
 
-    #[cfg(test)]
     pub(crate) fn validated_row_layout(&self) -> ValidatedRowLayout<'_> {
         self.layout.validated_row_layout()
+    }
+
+    pub(crate) const fn local_residual(&self) -> Option<&Program<'_>> {
+        self.local_residual.as_ref()
     }
 }
 

@@ -37,11 +37,6 @@ fn charged_growth_items(len: usize) -> usize {
     reserved
 }
 
-/// The storage-working limit is intentionally derived rather than public API.
-pub(super) const fn working_limit(max_database_bytes: usize) -> usize {
-    max_database_bytes.saturating_mul(4)
-}
-
 #[derive(Debug)]
 pub(super) struct WorkingBudget {
     limit: usize,
