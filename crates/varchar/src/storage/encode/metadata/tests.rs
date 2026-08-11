@@ -4,7 +4,7 @@ use super::{
     measure_table_metadata,
 };
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
-use crate::storage::{ForeignKey, TableSchema};
+use crate::storage::{ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
 use crate::{DataType, SchemaColumn, Value};
 
 fn column(name: &str, data_type: DataType, nullable: bool, default: Option<Value>) -> SchemaColumn {
@@ -47,6 +47,8 @@ fn exact_measurement_preserves_every_metadata_phase_and_check_value_shape() {
             column: 1,
             referenced_table: String::from("parent"),
             referenced_column: String::from("id"),
+            on_delete: ForeignKeyDeleteAction::Restrict,
+            on_update: ForeignKeyUpdateAction::Restrict,
         }],
         checks: vec![
             CheckProgram::new(vec![
@@ -143,6 +145,82 @@ fn exact_measurement_preserves_every_metadata_phase_and_check_value_shape() {
         encode_table_metadata(&schema, Some((0, 0)), measured).expect("metadata encodes"),
         expected
     );
+}
+
+#[test]
+fn foreign_key_actions_use_canonical_legacy_and_extended_records() {
+    let schema = TableSchema {
+        name: String::from("children"),
+        columns: vec![
+            column("restricted", DataType::Integer, false, None),
+            column("cascading", DataType::Integer, false, None),
+            column("nulling", DataType::Integer, true, None),
+        ],
+        primary_key: None,
+        unique_columns: Vec::new(),
+        foreign_keys: vec![
+            ForeignKey {
+                column: 0,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+            ForeignKey {
+                column: 1,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::Cascade,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+            ForeignKey {
+                column: 2,
+                referenced_table: String::from("parents"),
+                referenced_column: String::from("id"),
+                on_delete: ForeignKeyDeleteAction::SetNull,
+                on_update: ForeignKeyUpdateAction::Restrict,
+            },
+        ],
+        checks: Vec::new(),
+    };
+    let expected = concat!(
+        "~S|children|restricted:I:!|cascading:I:!|nulling:I:?;",
+        "~F|children|restricted|parents|id;",
+        "~F|children|cascading|parents|id|C|R;",
+        "~F|children|nulling|parents|id|N|R;",
+    );
+
+    let measured = measure_table_metadata(&schema, None).expect("metadata measures");
+    assert_eq!(measured.encoded_len(), expected.len());
+    assert_eq!(
+        encode_table_metadata(&schema, None, measured).expect("metadata encodes"),
+        expected
+    );
+}
+
+#[test]
+fn metadata_encoding_rejects_set_null_on_nonnullable_columns() {
+    let schema = TableSchema {
+        name: String::from("children"),
+        columns: vec![column("parent_id", DataType::Integer, false, None)],
+        primary_key: None,
+        unique_columns: Vec::new(),
+        foreign_keys: vec![ForeignKey {
+            column: 0,
+            referenced_table: String::from("parents"),
+            referenced_column: String::from("id"),
+            on_delete: ForeignKeyDeleteAction::SetNull,
+            on_update: ForeignKeyUpdateAction::Restrict,
+        }],
+        checks: Vec::new(),
+    };
+
+    assert!(matches!(
+        measure_table_metadata(&schema, None),
+        Err(crate::Error::Schema(ref message))
+            if message
+                == "ON DELETE SET NULL requires nullable foreign-key column \"children\".\"parent_id\""
+    ));
 }
 
 #[test]

@@ -1,29 +1,34 @@
 //! Foreign-key declaration and referenced-schema validation.
 
 use crate::storage::{Catalog, ForeignKey, TableSchema};
-use crate::{Error, Result};
+use crate::{Error, Result, SchemaColumn};
 
 pub(super) fn declare_foreign_key(
     column: &str,
     syntax: &str,
-    index: usize,
-    referenced_table: String,
-    referenced_column: String,
+    foreign_key: ForeignKey,
     saw_foreign_key: &mut [bool],
     foreign_keys: &mut Vec<ForeignKey>,
 ) -> Result<()> {
-    if saw_foreign_key[index] {
+    if saw_foreign_key[foreign_key.column] {
         return Err(Error::Schema(format!(
             "duplicate {syntax} declaration for column {column:?}"
         )));
     }
-    saw_foreign_key[index] = true;
-    foreign_keys.push(ForeignKey {
-        column: index,
-        referenced_table,
-        referenced_column,
-    });
+    saw_foreign_key[foreign_key.column] = true;
+    foreign_keys.push(foreign_key);
     Ok(())
+}
+
+pub(super) fn validate_set_null_column(table: &str, column: &SchemaColumn) -> Result<()> {
+    if column.nullable {
+        Ok(())
+    } else {
+        Err(Error::Schema(format!(
+            "ON DELETE SET NULL requires nullable foreign-key column {table:?}.{:?}",
+            column.name
+        )))
+    }
 }
 
 pub(super) fn validate_foreign_key(

@@ -7,11 +7,11 @@ mod tests;
 
 use std::fmt::Write as _;
 
-use super::super::TableSchema;
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
     SCHEMA_PREFIX, UNIQUE_PREFIX, encode_text_into, encoded_text_len, type_tag,
 };
+use super::super::{ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::{DataType, Error, Result, Value};
 
@@ -259,6 +259,14 @@ fn stream_table_metadata(
         encoded.push_str(&foreign_key.referenced_table)?;
         encoded.push_char('|')?;
         encoded.push_str(&foreign_key.referenced_column)?;
+        if foreign_key.on_delete != ForeignKeyDeleteAction::Restrict
+            || foreign_key.on_update != ForeignKeyUpdateAction::Restrict
+        {
+            encoded.push_char('|')?;
+            encoded.push_char(foreign_key.on_delete.storage_tag())?;
+            encoded.push_char('|')?;
+            encoded.push_char(foreign_key.on_update.storage_tag())?;
+        }
         encoded.push_char(';')?;
     }
 

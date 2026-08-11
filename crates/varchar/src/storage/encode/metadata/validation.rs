@@ -1,6 +1,6 @@
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode};
-use crate::storage::TableSchema;
 use crate::storage::format::is_valid_identifier;
+use crate::storage::{ForeignKeyDeleteAction, TableSchema};
 use crate::{DataType, Error, Result, Value};
 
 pub(super) fn validate_table_metadata(
@@ -128,6 +128,14 @@ fn validate_schema_for_metadata(schema: &TableSchema) -> Result<()> {
             }
         }
         previous_foreign_key_column = Some(foreign_key.column);
+        if foreign_key.on_delete == ForeignKeyDeleteAction::SetNull
+            && !schema.columns[foreign_key.column].nullable
+        {
+            return Err(Error::Schema(format!(
+                "ON DELETE SET NULL requires nullable foreign-key column {:?}.{:?}",
+                schema.name, schema.columns[foreign_key.column].name
+            )));
+        }
         if !is_valid_identifier(&foreign_key.referenced_table)
             || !is_valid_identifier(&foreign_key.referenced_column)
         {

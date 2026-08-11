@@ -10,7 +10,7 @@ use super::super::decode::{
     AutoIncrementMetadata, CheckMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata,
     UniqueMetadata, decode_cell_at, validate_cell_at,
 };
-use super::super::{Catalog, ForeignKey, TableSchema};
+use super::super::{Catalog, ForeignKey, ForeignKeyDeleteAction, TableSchema};
 use super::ValidationMode;
 use crate::expression::CheckProgram;
 use crate::{DataType, Error, Result};
@@ -241,7 +241,7 @@ impl MetadataValidator {
             ));
         }
 
-        let (column, data_type) = {
+        let (column, data_type, nullable) = {
             let schema = self
                 .tables
                 .get(&self.state.table)
@@ -265,8 +265,22 @@ impl MetadataValidator {
                 return Err(Violation::new(offset, message));
             };
             let column = self.state.next_foreign_key_column + relative_column;
-            (column, schema.columns[column].data_type)
+            (
+                column,
+                schema.columns[column].data_type,
+                schema.columns[column].nullable,
+            )
         };
+
+        if metadata.on_delete == ForeignKeyDeleteAction::SetNull && !nullable {
+            return Err(Violation::new(
+                offset,
+                format!(
+                    "ON DELETE SET NULL requires nullable foreign-key column {:?}.{:?}",
+                    metadata.table, metadata.column
+                ),
+            ));
+        }
 
         let Some(referenced_schema) = self.tables.get(metadata.referenced_table) else {
             return Err(Violation::new(
@@ -332,6 +346,8 @@ impl MetadataValidator {
             column,
             referenced_table,
             referenced_column,
+            on_delete: metadata.on_delete,
+            on_update: metadata.on_update,
         });
         self.state.saw_foreign_key = true;
         self.state.next_foreign_key_column = column + 1;

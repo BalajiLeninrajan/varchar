@@ -2,7 +2,8 @@
 
 use super::{Parser, TokenKind};
 use crate::sql::ast::{
-    ColumnDef, ColumnModifier, CreateElement, CreateTable, ForeignKeyReference, TableConstraint,
+    ColumnDef, ColumnModifier, CreateElement, CreateTable, ForeignKeyDeleteAction,
+    ForeignKeyReference, ForeignKeyUpdateAction, TableConstraint,
 };
 use crate::{DataType, Error, Result};
 
@@ -146,7 +147,75 @@ impl Parser {
             TokenKind::RightParen,
             "expected `)` after referenced column",
         )?;
-        Ok(ForeignKeyReference { table, column })
+
+        let mut on_delete = None;
+        let mut on_update = None;
+        while self.current_word() == Some("ON")
+            && matches!(self.peek_word(), Some("DELETE" | "UPDATE"))
+        {
+            let clause_span = self.current().span;
+            self.advance();
+            match self.current_word() {
+                Some("DELETE") => {
+                    self.advance();
+                    if on_delete.is_some() {
+                        return Err(Error::parse("duplicate ON DELETE clause", clause_span));
+                    }
+                    on_delete = Some(self.parse_on_delete_action()?);
+                }
+                Some("UPDATE") => {
+                    self.advance();
+                    if on_update.is_some() {
+                        return Err(Error::parse("duplicate ON UPDATE clause", clause_span));
+                    }
+                    on_update = Some(self.parse_on_update_action()?);
+                }
+                _ => unreachable!("the loop guard recognizes the action clause"),
+            }
+        }
+
+        Ok(ForeignKeyReference {
+            table,
+            column,
+            on_delete: on_delete.unwrap_or_default(),
+            on_update: on_update.unwrap_or_default(),
+        })
+    }
+
+    fn parse_on_delete_action(&mut self) -> Result<ForeignKeyDeleteAction> {
+        match self.current_word() {
+            Some("RESTRICT") => {
+                self.advance();
+                Ok(ForeignKeyDeleteAction::Restrict)
+            }
+            Some("CASCADE") => {
+                self.advance();
+                Ok(ForeignKeyDeleteAction::Cascade)
+            }
+            Some("SET") => {
+                self.advance();
+                self.expect_keyword("NULL")?;
+                Ok(ForeignKeyDeleteAction::SetNull)
+            }
+            _ => Err(Error::parse(
+                "expected RESTRICT, CASCADE, or SET NULL after ON DELETE",
+                self.current().span,
+            )),
+        }
+    }
+
+    fn parse_on_update_action(&mut self) -> Result<ForeignKeyUpdateAction> {
+        match self.current_word() {
+            Some("RESTRICT") => {
+                self.advance();
+                Ok(ForeignKeyUpdateAction::Restrict)
+            }
+            Some("CASCADE") => Err(Error::unsupported("ON UPDATE CASCADE", self.current().span)),
+            _ => Err(Error::parse(
+                "expected RESTRICT after ON UPDATE",
+                self.current().span,
+            )),
+        }
     }
 
     fn reject_composite_constraint(&self, constraint: &str) -> Result<()> {

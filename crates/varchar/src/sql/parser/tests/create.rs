@@ -1,6 +1,7 @@
 use super::{create_table, parse};
 use crate::sql::ast::{
-    ColumnDef, ColumnModifier, CreateElement, ForeignKeyReference, TableConstraint,
+    ColumnDef, ColumnModifier, CreateElement, ForeignKeyDeleteAction, ForeignKeyReference,
+    ForeignKeyUpdateAction, TableConstraint,
 };
 use crate::{DataType, Error, Value};
 
@@ -24,6 +25,8 @@ fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
                     ColumnModifier::References(ForeignKeyReference {
                         table: "parents".to_owned(),
                         column: "id".to_owned(),
+                        on_delete: ForeignKeyDeleteAction::Restrict,
+                        on_update: ForeignKeyUpdateAction::Restrict,
                     }),
                     ColumnModifier::PrimaryKey,
                 ],
@@ -36,6 +39,8 @@ fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
                     ColumnModifier::References(ForeignKeyReference {
                         table: "owners".to_owned(),
                         column: "id".to_owned(),
+                        on_delete: ForeignKeyDeleteAction::Restrict,
+                        on_update: ForeignKeyUpdateAction::Restrict,
                     }),
                 ],
             }),
@@ -45,6 +50,116 @@ fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
                 modifiers: Vec::new(),
             }),
         ]
+    );
+}
+
+#[test]
+fn parses_foreign_key_actions_inline_and_at_table_level() {
+    let statement = create_table(
+        "CREATE TABLE children (\
+            cascade_id INTEGER REFERENCES parents(id) ON UPDATE RESTRICT ON DELETE CASCADE, \
+            null_id INTEGER, \
+            FOREIGN KEY (null_id) REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT, \
+            default_id INTEGER REFERENCES parents(id)\
+        )",
+    );
+
+    let CreateElement::Column(cascade) = &statement.elements[0] else {
+        panic!("expected an inline foreign key");
+    };
+    let ColumnModifier::References(cascade) = &cascade.modifiers[0] else {
+        panic!("expected REFERENCES");
+    };
+    assert_eq!(cascade.on_delete, ForeignKeyDeleteAction::Cascade);
+    assert_eq!(cascade.on_update, ForeignKeyUpdateAction::Restrict);
+
+    let CreateElement::Constraint(TableConstraint::ForeignKey { reference, .. }) =
+        &statement.elements[2]
+    else {
+        panic!("expected a table-level foreign key");
+    };
+    assert_eq!(reference.on_delete, ForeignKeyDeleteAction::SetNull);
+    assert_eq!(reference.on_update, ForeignKeyUpdateAction::Restrict);
+
+    let CreateElement::Column(defaulted) = &statement.elements[3] else {
+        panic!("expected a default-action foreign key");
+    };
+    let ColumnModifier::References(defaulted) = &defaulted.modifiers[0] else {
+        panic!("expected REFERENCES");
+    };
+    assert_eq!(defaulted.on_delete, ForeignKeyDeleteAction::Restrict);
+    assert_eq!(defaulted.on_update, ForeignKeyUpdateAction::Restrict);
+}
+
+#[test]
+fn recognizes_on_update_cascade_as_unsupported() {
+    let sql = "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)";
+    let start = sql.find("CASCADE").expect("CASCADE exists");
+    assert!(matches!(
+        parse(sql),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start,
+            span_end,
+        }) if feature == "ON UPDATE CASCADE"
+            && span_start == start
+            && span_end == start + "CASCADE".len()
+    ));
+}
+
+#[test]
+fn foreign_key_action_words_are_reserved_and_cannot_be_used_as_identifiers() {
+    // `ON` introduces the clause but predates this grammar as the join
+    // keyword, where it is deliberately contextual; see
+    // `inner_and_on_remain_contextual_identifiers`.
+    for (sql, keyword, marker) in [
+        ("CREATE TABLE cascade (id INTEGER)", "CASCADE", "cascade"),
+        ("CREATE TABLE t (cascade INTEGER)", "CASCADE", "cascade"),
+        ("CREATE TABLE t (restrict INTEGER)", "RESTRICT", "restrict"),
+        ("INSERT INTO cascade (id) VALUES (1)", "CASCADE", "cascade"),
+        ("SELECT cascade FROM t", "CASCADE", "cascade"),
+        ("SELECT * FROM restrict", "RESTRICT", "restrict"),
+        ("SELECT * FROM t WHERE restrict = 1", "RESTRICT", "restrict"),
+        ("UPDATE t SET restrict = 1", "RESTRICT", "restrict"),
+        ("DELETE FROM cascade", "CASCADE", "cascade"),
+    ] {
+        let span_start = sql.find(marker).expect("fixture contains error marker");
+        match parse(sql) {
+            Err(Error::Parse {
+                message,
+                span_start: actual_start,
+                span_end,
+            }) => {
+                assert_eq!(
+                    message,
+                    format!("reserved keyword `{keyword}` cannot be used as an identifier"),
+                    "message for {sql:?}"
+                );
+                assert_eq!(
+                    (actual_start, span_end),
+                    (span_start, span_start + marker.len()),
+                    "span for {sql:?}"
+                );
+            }
+            other => panic!("expected exact Parse error for {sql:?}, got {other:?}"),
+        }
+    }
+
+    // The keywords still drive the referential clause they were reserved for.
+    let statement = create_table(
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE)",
+    );
+    let CreateElement::Column(column) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        column.modifiers,
+        vec![ColumnModifier::References(ForeignKeyReference {
+            table: "parents".to_owned(),
+            column: "id".to_owned(),
+            on_delete: ForeignKeyDeleteAction::Cascade,
+            on_update: ForeignKeyUpdateAction::Restrict,
+        })]
     );
 }
 
@@ -73,6 +188,8 @@ fn preserves_table_elements_in_source_order() {
                 reference: ForeignKeyReference {
                     table: "parents".to_owned(),
                     column: "id".to_owned(),
+                    on_delete: ForeignKeyDeleteAction::Restrict,
+                    on_update: ForeignKeyUpdateAction::Restrict,
                 },
             }),
             CreateElement::Column(ColumnDef {
@@ -106,12 +223,16 @@ fn preserves_duplicate_declarations_for_semantic_resolution() {
             ColumnModifier::References(ForeignKeyReference {
                 table: "parents".to_owned(),
                 column: "id".to_owned(),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Restrict,
             }),
             ColumnModifier::NotNull,
             ColumnModifier::PrimaryKey,
             ColumnModifier::References(ForeignKeyReference {
                 table: "owners".to_owned(),
                 column: "id".to_owned(),
+                on_delete: ForeignKeyDeleteAction::Restrict,
+                on_update: ForeignKeyUpdateAction::Restrict,
             }),
         ]
     );

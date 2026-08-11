@@ -1,11 +1,11 @@
 //! Decoding of schema and constraint metadata records.
 
-use super::super::TableSchema;
 use super::super::budget::{WorkingBudget, WorkingStringSet};
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
     SCHEMA_PREFIX, UNIQUE_PREFIX, complete_record_body, corrupt, is_valid_identifier,
 };
+use super::super::{ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema};
 use super::decode_integer;
 use crate::{DataType, Result, SchemaColumn};
 
@@ -21,6 +21,8 @@ pub(in crate::storage) struct ForeignKeyMetadata<'a> {
     pub(in crate::storage) column: &'a str,
     pub(in crate::storage) referenced_table: &'a str,
     pub(in crate::storage) referenced_column: &'a str,
+    pub(in crate::storage) on_delete: ForeignKeyDeleteAction,
+    pub(in crate::storage) on_update: ForeignKeyUpdateAction,
 }
 
 pub(in crate::storage) struct AutoIncrementMetadata<'a> {
@@ -156,6 +158,8 @@ pub(in crate::storage) fn decode_foreign_key_record(
     let column = fields.next().unwrap_or_default();
     let referenced_table = fields.next().unwrap_or_default();
     let referenced_column = fields.next().unwrap_or_default();
+    let delete_tag = fields.next();
+    let update_tag = fields.next();
     if fields.next().is_some()
         || !is_valid_identifier(table)
         || !is_valid_identifier(column)
@@ -164,11 +168,43 @@ pub(in crate::storage) fn decode_foreign_key_record(
     {
         return Err(corrupt(offset, "malformed foreign-key metadata"));
     }
+
+    let (on_delete, on_update) = match (delete_tag, update_tag) {
+        (None, None) => (
+            ForeignKeyDeleteAction::Restrict,
+            ForeignKeyUpdateAction::Restrict,
+        ),
+        (Some(delete_tag), Some(update_tag)) => {
+            let on_delete = match delete_tag {
+                "R" => ForeignKeyDeleteAction::Restrict,
+                "C" => ForeignKeyDeleteAction::Cascade,
+                "N" => ForeignKeyDeleteAction::SetNull,
+                _ => return Err(corrupt(offset, "malformed foreign-key action metadata")),
+            };
+            let on_update = match update_tag {
+                "R" => ForeignKeyUpdateAction::Restrict,
+                _ => return Err(corrupt(offset, "malformed foreign-key action metadata")),
+            };
+            if on_delete == ForeignKeyDeleteAction::Restrict
+                && on_update == ForeignKeyUpdateAction::Restrict
+            {
+                return Err(corrupt(
+                    offset,
+                    "explicit RESTRICT/RESTRICT foreign-key actions are noncanonical",
+                ));
+            }
+            (on_delete, on_update)
+        }
+        _ => return Err(corrupt(offset, "malformed foreign-key metadata")),
+    };
+
     Ok(ForeignKeyMetadata {
         table,
         column,
         referenced_table,
         referenced_column,
+        on_delete,
+        on_update,
     })
 }
 
