@@ -2,6 +2,7 @@
 
 mod database;
 mod error;
+mod expression;
 mod limits;
 mod output;
 mod query;

@@ -1,10 +1,11 @@
 //! Semantic orchestration for multi-source `SELECT` statements.
 
 use super::column::ColumnLocation;
+use super::expression::resolve_select_predicate;
 use super::join::{ResolvedJoin, resolve_joins};
-use super::predicate::{ResolvedPredicate, resolve_select_predicate};
 use super::projection::{expanded_len, resolve_projection};
 use super::source::resolve_sources;
+use crate::expression::Predicate as ResolvedPredicate;
 use crate::limits::check_limit;
 use crate::sql::Select;
 use crate::storage::{Catalog, TableSchema};

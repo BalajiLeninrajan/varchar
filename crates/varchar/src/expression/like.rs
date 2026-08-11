@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-/// Logical atoms in a validated SQL `LIKE` pattern.
+/// Logical atoms in one validated SQL `LIKE` pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LikeAtom {
     AnySequence,
@@ -10,8 +10,14 @@ pub(crate) enum LikeAtom {
     Literal(char),
 }
 
-pub(super) fn resolve_like_pattern(pattern: &str) -> Result<Vec<LikeAtom>> {
+pub(crate) fn compile_pattern(pattern: &str) -> Result<Vec<LikeAtom>> {
     let mut atoms = Vec::new();
+    atoms
+        .try_reserve_exact(pattern.chars().count())
+        .map_err(|_| Error::Allocation {
+            operation: "reserving a resolved LIKE pattern",
+        })?;
+
     let mut characters = pattern.chars();
     while let Some(character) = characters.next() {
         match character {

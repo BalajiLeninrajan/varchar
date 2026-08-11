@@ -1,50 +1,16 @@
-//! Schema-aware resolution of row predicates.
+//! Schema-aware semantic resolution of row predicates.
 
 use super::column::{ColumnLocation, require_local_column, resolve_column};
-use super::like::{LikeAtom, resolve_like_pattern};
+use crate::expression::{Predicate as ResolvedPredicate, compile_pattern};
 use crate::sql::{Predicate, PredicateOperator};
 use crate::storage::TableSchema;
 use crate::value::validate_value;
 use crate::{DataType, Error, Result, Value};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ResolvedPredicate<'a> {
-    Equal {
-        column: ColumnLocation,
-        value: &'a Value,
-    },
-    NotEqual {
-        column: ColumnLocation,
-        value: &'a Value,
-    },
-    Like {
-        column: ColumnLocation,
-        atoms: Vec<LikeAtom>,
-    },
-    IsNull {
-        column: ColumnLocation,
-    },
-    IsNotNull {
-        column: ColumnLocation,
-    },
-}
-
-impl ResolvedPredicate<'_> {
-    pub(crate) const fn column(&self) -> ColumnLocation {
-        match self {
-            Self::Equal { column, .. }
-            | Self::NotEqual { column, .. }
-            | Self::Like { column, .. }
-            | Self::IsNull { column }
-            | Self::IsNotNull { column } => *column,
-        }
-    }
-}
-
-pub(crate) fn predicate<'a>(
+pub(crate) fn predicate<'statement>(
     schema: &TableSchema,
-    predicate: &'a Predicate,
-) -> Result<ResolvedPredicate<'a>> {
+    predicate: &'statement Predicate,
+) -> Result<ResolvedPredicate<'statement>> {
     let column = require_local_column(schema, &predicate.column)?;
     predicate_at(
         schema,
@@ -53,19 +19,19 @@ pub(crate) fn predicate<'a>(
     )
 }
 
-pub(super) fn resolve_select_predicate<'a>(
+pub(super) fn resolve_select_predicate<'statement>(
     sources: &[&TableSchema],
-    predicate: &'a Predicate,
-) -> Result<ResolvedPredicate<'a>> {
+    predicate: &'statement Predicate,
+) -> Result<ResolvedPredicate<'statement>> {
     let location = resolve_column(sources, &predicate.column)?;
     predicate_at(sources[location.source], location, &predicate.operator)
 }
 
-fn predicate_at<'a>(
+fn predicate_at<'statement>(
     schema: &TableSchema,
     column: ColumnLocation,
-    operator: &'a PredicateOperator,
-) -> Result<ResolvedPredicate<'a>> {
+    operator: &'statement PredicateOperator,
+) -> Result<ResolvedPredicate<'statement>> {
     let definition = &schema.columns[column.column];
     match operator {
         PredicateOperator::Equal(Value::Null) | PredicateOperator::NotEqual(Value::Null) => {
@@ -90,7 +56,7 @@ fn predicate_at<'a>(
             }
             Ok(ResolvedPredicate::Like {
                 column,
-                atoms: resolve_like_pattern(pattern)?,
+                atoms: compile_pattern(pattern)?,
             })
         }
         PredicateOperator::IsNull => Ok(ResolvedPredicate::IsNull { column }),
