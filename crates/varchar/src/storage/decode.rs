@@ -1,33 +1,21 @@
-//! Canonical decoding and validation of individual storage records.
+//! Canonical decoding and validation of storage records.
 
-use std::collections::{BTreeMap, BTreeSet};
+mod metadata;
+
+use std::collections::BTreeMap;
 use std::ops::Range;
 
+pub(super) use metadata::{
+    AutoIncrementMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, decode_auto_increment_record,
+    decode_foreign_key_record, decode_primary_key_record, decode_schema_record,
+};
+
 use super::format::{
-    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, ROW_PREFIX, RecordKind,
-    SCHEMA_PREFIX, allocation_error, complete_record_body, corrupt, is_valid_identifier,
+    ROW_PREFIX, RecordKind, allocation_error, complete_record_body, corrupt, is_valid_identifier,
     records_from, scan_text,
 };
 use super::{RowLayout, TableSchema};
 use crate::{DataType, Error, Result, SchemaColumn, Value};
-
-pub(super) struct PrimaryKeyMetadata<'a> {
-    pub(super) table: &'a str,
-    pub(super) column: &'a str,
-}
-
-pub(super) struct ForeignKeyMetadata<'a> {
-    pub(super) table: &'a str,
-    pub(super) column: &'a str,
-    pub(super) referenced_table: &'a str,
-    pub(super) referenced_column: &'a str,
-}
-
-pub(super) struct AutoIncrementMetadata<'a> {
-    pub(super) table: &'a str,
-    pub(super) column: &'a str,
-    pub(super) last: i64,
-}
 
 /// A zero-copy view over a parsed V2 row envelope and validated table name.
 ///
@@ -95,129 +83,6 @@ pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Valu
     decode_row_at(record, layout, 0)
 }
 
-pub(super) fn decode_schema_record(record: &str, offset: usize) -> Result<TableSchema> {
-    let body = complete_record_body(record, SCHEMA_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields
-        .next()
-        .ok_or_else(|| corrupt(offset, "schema is missing a table name"))?;
-    if !is_valid_identifier(table) {
-        return Err(corrupt(offset + 3, "invalid or noncanonical table name"));
-    }
-
-    let mut columns = Vec::new();
-    let column_count = body.bytes().filter(|byte| *byte == b'|').count();
-    columns
-        .try_reserve_exact(column_count)
-        .map_err(|_| allocation_error("reserving decoded schema columns"))?;
-    let mut names = BTreeSet::new();
-    for field in fields {
-        let mut parts = field.split(':');
-        let name = parts.next().unwrap_or_default();
-        let data_type = parts.next();
-        let nullability = parts.next();
-        if parts.next().is_some() || data_type.is_none() || nullability.is_none() {
-            return Err(corrupt(offset, "malformed column descriptor"));
-        }
-        if !is_valid_identifier(name) {
-            return Err(corrupt(offset, "invalid or noncanonical column name"));
-        }
-        if !names.insert(name) {
-            return Err(corrupt(offset, "duplicate column name"));
-        }
-        let data_type = match data_type.unwrap() {
-            "T" => DataType::Text,
-            "I" => DataType::Integer,
-            "B" => DataType::Boolean,
-            _ => return Err(corrupt(offset, "unknown column type tag")),
-        };
-        let nullable = match nullability.unwrap() {
-            "?" => true,
-            "!" => false,
-            _ => return Err(corrupt(offset, "invalid column nullability tag")),
-        };
-        columns.push(SchemaColumn {
-            name: name.to_owned(),
-            data_type,
-            nullable,
-        });
-    }
-    if columns.is_empty() {
-        return Err(corrupt(offset, "table must contain at least one column"));
-    }
-
-    Ok(TableSchema {
-        name: table.to_owned(),
-        columns,
-        primary_key: None,
-        foreign_keys: Vec::new(),
-    })
-}
-
-pub(super) fn decode_primary_key_record(
-    record: &str,
-    offset: usize,
-) -> Result<PrimaryKeyMetadata<'_>> {
-    let body = complete_record_body(record, PRIMARY_KEY_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    let column = fields.next().unwrap_or_default();
-    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(corrupt(offset, "malformed primary-key metadata"));
-    }
-    Ok(PrimaryKeyMetadata { table, column })
-}
-
-pub(super) fn decode_foreign_key_record(
-    record: &str,
-    offset: usize,
-) -> Result<ForeignKeyMetadata<'_>> {
-    let body = complete_record_body(record, FOREIGN_KEY_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    let column = fields.next().unwrap_or_default();
-    let referenced_table = fields.next().unwrap_or_default();
-    let referenced_column = fields.next().unwrap_or_default();
-    if fields.next().is_some()
-        || !is_valid_identifier(table)
-        || !is_valid_identifier(column)
-        || !is_valid_identifier(referenced_table)
-        || !is_valid_identifier(referenced_column)
-    {
-        return Err(corrupt(offset, "malformed foreign-key metadata"));
-    }
-    Ok(ForeignKeyMetadata {
-        table,
-        column,
-        referenced_table,
-        referenced_column,
-    })
-}
-
-pub(super) fn decode_auto_increment_record(
-    record: &str,
-    offset: usize,
-) -> Result<AutoIncrementMetadata<'_>> {
-    let body = complete_record_body(record, AUTO_INCREMENT_PREFIX, offset)?;
-    let mut fields = body.split('|');
-    let table = fields.next().unwrap_or_default();
-    let column = fields.next().unwrap_or_default();
-    let encoded_last = fields.next().unwrap_or_default();
-    if fields.next().is_some() || !is_valid_identifier(table) || !is_valid_identifier(column) {
-        return Err(corrupt(offset, "malformed auto-increment metadata"));
-    }
-    let payload = encoded_last
-        .strip_prefix('I')
-        .ok_or_else(|| corrupt(offset, "auto-increment high-water mark must be an INTEGER"))?;
-    let payload_offset = offset + AUTO_INCREMENT_PREFIX.len() + table.len() + 1 + column.len() + 2;
-    let last = decode_integer(payload, payload_offset)?;
-    Ok(AutoIncrementMetadata {
-        table,
-        column,
-        last,
-    })
-}
-
 pub(super) fn validate_row_record(
     record: &str,
     offset: usize,
@@ -227,7 +92,10 @@ pub(super) fn validate_row_record(
     let mut fields = body.split('|');
     let table = fields.next().unwrap_or_default();
     if !is_valid_identifier(table) {
-        return Err(corrupt(offset + 3, "invalid or noncanonical table name"));
+        return Err(corrupt(
+            offset + ROW_PREFIX.len(),
+            "invalid or noncanonical table name",
+        ));
     }
     let schema = tables
         .get(table)
@@ -357,7 +225,7 @@ fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result
     }
 }
 
-fn decode_integer(payload: &str, offset: usize) -> Result<i64> {
+pub(super) fn decode_integer(payload: &str, offset: usize) -> Result<i64> {
     let value: i64 = payload
         .parse()
         .map_err(|_| corrupt(offset, "invalid INTEGER cell"))?;
