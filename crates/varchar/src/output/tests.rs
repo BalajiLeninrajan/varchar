@@ -8,6 +8,13 @@ fn snapshots_expose_read_and_consuming_views() {
     let row_set = RowSet::new(vec![column.clone()], vec![vec![Value::Integer(1)]]);
     let explanation = SelectExplanation::new(
         String::from("row-pattern"),
+        false,
+        vec![String::from("items")],
+        vec![column.clone()],
+    );
+    let exact = SelectExplanation::new(
+        String::from("row-pattern"),
+        true,
         vec![String::from("items")],
         vec![column],
     );
@@ -24,6 +31,9 @@ fn snapshots_expose_read_and_consuming_views() {
     assert_eq!(rows, vec![vec![Value::Integer(1)]]);
 
     assert_eq!(explanation.pattern(), "row-pattern");
+    assert!(!explanation.pattern_is_exact());
+    assert!(exact.pattern_is_exact());
+    assert_ne!(explanation, exact);
     assert_eq!(explanation.sources(), &[String::from("items")]);
     assert_eq!(explanation.columns()[0].label(), "id");
 }

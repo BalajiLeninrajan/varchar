@@ -1,6 +1,7 @@
 //! Flat Boolean-expression programs, validation products, and evaluation.
 
 mod evaluate;
+mod format;
 mod like;
 mod program;
 mod truth;

@@ -184,6 +184,46 @@ fn inner_joins_execute_across_persisted_cli_commands() {
     );
 }
 
+#[test]
+fn explain_regex_reports_whether_the_pattern_is_exact() {
+    let (_directory, path) = initialized_database();
+    exec(
+        &path,
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    )
+    .success();
+    exec(
+        &path,
+        "CREATE TABLE children (parent_id INTEGER REFERENCES parents(id), name TEXT NOT NULL)",
+    )
+    .success();
+
+    exec(&path, "EXPLAIN REGEX SELECT id FROM parents WHERE id = 1")
+        .success()
+        .stdout(
+            predicate::str::starts_with("regex: ").and(predicate::str::ends_with("rows: exact\n")),
+        );
+
+    // A residual factor and a join each leave the pattern a prefilter.
+    exec(
+        &path,
+        "EXPLAIN REGEX SELECT id FROM parents WHERE id = 1 OR id = 2",
+    )
+    .success()
+    .stdout(predicate::str::ends_with(
+        "rows: prefilter (Rust-side filtering applies)\n",
+    ));
+    exec(
+        &path,
+        "EXPLAIN REGEX SELECT parents.name, children.name FROM parents \
+         JOIN children ON parents.id = children.parent_id",
+    )
+    .success()
+    .stdout(predicate::str::ends_with(
+        "rows: prefilter (Rust-side filtering applies)\n",
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn failed_persistence_preserves_the_previous_database() {
