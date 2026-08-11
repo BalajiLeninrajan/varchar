@@ -1,15 +1,18 @@
 //! Derived schema and auto-increment indexes reconstructed from storage.
 
-use std::collections::BTreeMap;
+mod map;
+
 use std::ops::Range;
+
+pub(super) use map::CatalogMap;
 
 use super::{EMPTY_BLOB, TableSchema};
 
 /// The derived schema index reconstructed from the authoritative string.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Catalog {
-    pub(super) tables: BTreeMap<String, TableSchema>,
-    pub(super) auto_increments: BTreeMap<String, AutoIncrementState>,
+    pub(super) tables: CatalogMap<TableSchema>,
+    pub(super) auto_increments: CatalogMap<AutoIncrementState>,
     /// Byte offset at which another schema record can be inserted.
     pub(super) row_start: usize,
 }
@@ -17,14 +20,22 @@ pub(crate) struct Catalog {
 impl Catalog {
     pub(crate) fn empty() -> Self {
         Self {
-            tables: BTreeMap::new(),
-            auto_increments: BTreeMap::new(),
+            tables: CatalogMap::new(),
+            auto_increments: CatalogMap::new(),
             row_start: EMPTY_BLOB.len(),
         }
     }
 
     pub(crate) fn table(&self, name: &str) -> Option<&TableSchema> {
         self.tables.get(name)
+    }
+
+    pub(super) fn schemas(&self) -> impl Iterator<Item = &TableSchema> {
+        self.tables.values()
+    }
+
+    pub(super) fn tables(&self) -> impl Iterator<Item = (&str, &TableSchema)> {
+        self.tables.iter()
     }
 
     pub(crate) fn auto_increment(&self, table: &str) -> Option<AutoIncrement> {

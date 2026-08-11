@@ -59,7 +59,7 @@ impl Database {
             limits.max_database_bytes,
             Resource::DatabaseBytes,
         )?;
-        let storage = storage::StorageState::load(blob)?;
+        let storage = storage::StorageState::load(blob, limits.max_database_bytes)?;
         Ok(Self { storage, limits })
     }
 

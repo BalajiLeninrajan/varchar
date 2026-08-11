@@ -2,6 +2,7 @@
 
 mod metadata;
 
+use super::budget::WorkingBudget;
 use super::decode::{
     decode_auto_increment_record, decode_foreign_key_record, decode_primary_key_record,
     decode_schema_record, validate_row_record,
@@ -19,23 +20,31 @@ pub(super) enum ValidationMode {
 }
 
 /// Validate an authoritative blob and reconstruct its derived schema catalog.
-pub(crate) fn validate_and_catalog(blob: &str) -> Result<Catalog> {
-    validate_with_mode(blob, ValidationMode::Persisted)
+pub(crate) fn validate_and_catalog(
+    blob: &str,
+    max_storage_working_bytes: usize,
+) -> Result<Catalog> {
+    validate_with_mode(blob, ValidationMode::Persisted, max_storage_working_bytes)
 }
 
 /// Validate a database assembled by a SQL mutation.
 ///
 /// Structural encoding failures remain corruption errors. Invalid key
 /// definitions are schema errors, while row-level violations are constraints.
-pub(crate) fn validate_candidate(blob: &str) -> Result<Catalog> {
-    validate_with_mode(blob, ValidationMode::Candidate)
+pub(crate) fn validate_candidate(blob: &str, max_storage_working_bytes: usize) -> Result<Catalog> {
+    validate_with_mode(blob, ValidationMode::Candidate, max_storage_working_bytes)
 }
 
-fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
+fn validate_with_mode(
+    blob: &str,
+    mode: ValidationMode,
+    max_storage_working_bytes: usize,
+) -> Result<Catalog> {
     if !blob.starts_with(HEADER) {
         return Err(corrupt(0, "expected canonical V2; header"));
     }
 
+    let mut budget = WorkingBudget::new(max_storage_working_bytes);
     let mut metadata = MetadataValidator::new();
     let mut row_start = blob.len();
     let mut saw_row = false;
@@ -46,7 +55,7 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
             RecordKind::Schema => {
                 reject_after_rows(saw_row, record.range.start, "schema record")?;
                 let schema = decode_schema_record(record.text, record.range.start)?;
-                metadata.insert_schema(schema, record.range.start)?;
+                metadata.insert_schema(schema, record.range.start, &mut budget)?;
             }
             RecordKind::PrimaryKey => {
                 reject_after_rows(saw_row, record.range.start, "primary-key metadata")?;
@@ -56,12 +65,17 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
             RecordKind::ForeignKey => {
                 reject_after_rows(saw_row, record.range.start, "foreign-key metadata")?;
                 let foreign_key = decode_foreign_key_record(record.text, record.range.start)?;
-                metadata.apply_foreign_key(foreign_key, record.range.start, mode)?;
+                metadata.apply_foreign_key(foreign_key, record.range.start, mode, &mut budget)?;
             }
             RecordKind::AutoIncrement => {
                 reject_after_rows(saw_row, record.range.start, "auto-increment metadata")?;
                 let auto_increment = decode_auto_increment_record(record.text, record.range.start)?;
-                metadata.apply_auto_increment(auto_increment, record.range.clone(), mode)?;
+                metadata.apply_auto_increment(
+                    auto_increment,
+                    record.range.clone(),
+                    mode,
+                    &mut budget,
+                )?;
             }
             RecordKind::Row => {
                 if !saw_row {
@@ -79,7 +93,7 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
     }
 
     let catalog = metadata.finish(row_start);
-    if let Err(error) = integrity::validate_rows(blob, &catalog) {
+    if let Err(error) = integrity::validate_rows(blob, &catalog, &mut budget) {
         return Err(match error {
             integrity::ValidationError::Storage(error) => error,
             integrity::ValidationError::Constraint(violation) => {

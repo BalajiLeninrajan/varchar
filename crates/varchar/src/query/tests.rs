@@ -5,8 +5,11 @@ use crate::{Error, Limits, Resource};
 
 #[test]
 fn select_plans_borrow_sources_while_mutation_scans_own_their_layout() {
-    let state = StorageState::load("V2;~S|items|id:I:!|name:T:?;~S|groups|id:I:!;".to_owned())
-        .expect("fixture storage is valid");
+    let state = StorageState::load(
+        "V2;~S|items|id:I:!|name:T:?;~S|groups|id:I:!;".to_owned(),
+        usize::MAX,
+    )
+    .expect("fixture storage is valid");
     let catalog = state.catalog();
     let items = catalog.table("items").expect("items table exists");
     let groups = catalog.table("groups").expect("groups table exists");
@@ -29,8 +32,8 @@ fn select_plans_borrow_sources_while_mutation_scans_own_their_layout() {
 
 #[test]
 fn select_explanations_obey_the_query_output_budget() {
-    let state =
-        StorageState::load("V2;~S|items|id:I:!;".to_owned()).expect("fixture storage is valid");
+    let state = StorageState::load("V2;~S|items|id:I:!;".to_owned(), usize::MAX)
+        .expect("fixture storage is valid");
     let Statement::Select(statement) =
         sql::parse("SELECT id FROM items").expect("fixture SELECT parses")
     else {

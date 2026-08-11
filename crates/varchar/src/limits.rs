@@ -29,6 +29,8 @@ pub enum Resource {
     /// Backtracking performed by one regex search, and wildcard backtracking
     /// performed by the `LIKE` matcher across one statement.
     RegexBacktracking,
+    /// Auxiliary memory used while rebuilding or validating storage state.
+    StorageWorkingBytes,
 }
 
 impl fmt::Display for Resource {
@@ -43,6 +45,7 @@ impl fmt::Display for Resource {
             Self::QueryOutputBytes => "query output bytes",
             Self::JoinSteps => "JOIN execution steps",
             Self::RegexBacktracking => "regex backtracking steps",
+            Self::StorageWorkingBytes => "storage working bytes",
         })
     }
 }

@@ -2,16 +2,14 @@ use super::StorageState;
 
 #[test]
 fn failed_splice_leaves_the_candidate_reusable() {
-    let state =
-        StorageState::load(String::from("V2;~S|t|id:I:!;~R|t|I1;")).expect("source is valid");
+    let state = StorageState::load(String::from("V2;~S|t|id:I:!;~R|t|I1;"), usize::MAX)
+        .expect("source is valid");
     let source = state.as_str();
-    let mut candidate = state.candidate(source.len()).expect("source fits");
+    let max_bytes = 256;
+    let mut candidate = state.candidate(max_bytes).expect("source fits");
+    let oversized = "x".repeat(max_bytes + 1);
 
-    assert!(
-        candidate
-            .splice(3..source.len(), "replacement is too large")
-            .is_err()
-    );
+    assert!(candidate.splice(3..source.len(), &oversized).is_err());
     assert_eq!(
         candidate
             .finish()
