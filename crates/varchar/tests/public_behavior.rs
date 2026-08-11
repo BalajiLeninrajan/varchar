@@ -709,6 +709,34 @@ fn canonical_storage_is_strictly_validated() {
 }
 
 #[test]
+fn legacy_v2_storage_diagnostics_remain_compatible() {
+    for (blob, needle, expected) in [
+        (
+            "V2;~S|t|v:I:?;~R|t|I1;~S|u|v:I:?;",
+            "~S|u",
+            "schema record appears after a row record",
+        ),
+        (
+            "V2;~S|t|id:I:!;~A|t|id|I-1;",
+            "~A|",
+            "auto-increment metadata must follow its table's primary and foreign keys",
+        ),
+        (
+            "V2;~S|t|id:I:!;~A|t|id|I0;",
+            "~A|",
+            "auto-increment metadata must follow its table's primary and foreign keys",
+        ),
+    ] {
+        let expected_offset = blob.find(needle).expect("offending record exists");
+        assert!(matches!(
+            Database::from_string(blob.to_owned()),
+            Err(Error::CorruptStorage { offset, message })
+                if offset == expected_offset && message == expected
+        ));
+    }
+}
+
+#[test]
 fn known_v2_storage_fixture_is_canonical() {
     let blob =
         "V2;~S|people|id:I:!|note:T:?|active:B:!;~R|people|I-7|Tsemi%00003Bline%002028break|B1;";

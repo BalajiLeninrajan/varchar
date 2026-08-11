@@ -19,17 +19,18 @@ enum ValidationMode {
     Candidate,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MetadataPhase {
     None,
-    PrimaryOrForeignKey,
-    ForeignKeys,
-    Complete,
+    Keys,
+    AutoIncrement,
 }
 
 struct MetadataState {
     table: String,
     phase: MetadataPhase,
+    saw_primary_key: bool,
+    saw_foreign_key: bool,
     next_foreign_key_column: usize,
 }
 
@@ -38,6 +39,8 @@ impl MetadataState {
         Self {
             table: String::new(),
             phase: MetadataPhase::None,
+            saw_primary_key: false,
+            saw_foreign_key: false,
             next_foreign_key_column: 0,
         }
     }
@@ -45,7 +48,9 @@ impl MetadataState {
     fn begin_table(table: &str) -> Self {
         Self {
             table: table.to_owned(),
-            phase: MetadataPhase::PrimaryOrForeignKey,
+            phase: MetadataPhase::Keys,
+            saw_primary_key: false,
+            saw_foreign_key: false,
             next_foreign_key_column: 0,
         }
     }
@@ -79,12 +84,7 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
         let record = record?;
         match record.kind {
             RecordKind::Schema => {
-                if saw_row {
-                    return Err(corrupt(
-                        record.range.start,
-                        "schema record appears after a row record",
-                    ));
-                }
+                reject_after_rows(saw_row, record.range.start, "schema record")?;
                 let schema = decode_schema_record(record.text, record.range.start)?;
                 if tables.contains_key(&schema.name) {
                     return Err(corrupt(record.range.start, "duplicate table schema"));
@@ -93,34 +93,19 @@ fn validate_with_mode(blob: &str, mode: ValidationMode) -> Result<Catalog> {
                 tables.insert(schema.name.clone(), schema);
             }
             RecordKind::PrimaryKey => {
-                if saw_row {
-                    return Err(corrupt(
-                        record.range.start,
-                        "primary-key metadata appears after a row record",
-                    ));
-                }
+                reject_after_rows(saw_row, record.range.start, "primary-key metadata")?;
                 let primary_key = decode_primary_key_record(record.text, record.range.start)?;
                 apply_primary_key(&mut tables, &mut metadata, primary_key, record.range.start)
                     .map_err(|violation| map_schema_violation(violation, mode))?;
             }
             RecordKind::ForeignKey => {
-                if saw_row {
-                    return Err(corrupt(
-                        record.range.start,
-                        "foreign-key metadata appears after a row record",
-                    ));
-                }
+                reject_after_rows(saw_row, record.range.start, "foreign-key metadata")?;
                 let foreign_key = decode_foreign_key_record(record.text, record.range.start)?;
                 apply_foreign_key(&mut tables, &mut metadata, foreign_key, record.range.start)
                     .map_err(|violation| map_schema_violation(violation, mode))?;
             }
             RecordKind::AutoIncrement => {
-                if saw_row {
-                    return Err(corrupt(
-                        record.range.start,
-                        "auto-increment metadata appears after a row record",
-                    ));
-                }
+                reject_after_rows(saw_row, record.range.start, "auto-increment metadata")?;
                 let auto_increment = decode_auto_increment_record(record.text, record.range.start)?;
                 apply_auto_increment(
                     &tables,
@@ -166,7 +151,11 @@ fn apply_primary_key(
     metadata: PrimaryKeyMetadata<'_>,
     offset: usize,
 ) -> std::result::Result<(), Violation> {
-    if state.phase != MetadataPhase::PrimaryOrForeignKey || metadata.table != state.table {
+    if state.phase != MetadataPhase::Keys
+        || state.saw_primary_key
+        || state.saw_foreign_key
+        || metadata.table != state.table
+    {
         return Err(Violation::new(
             offset,
             "primary-key metadata must immediately follow its table schema",
@@ -198,7 +187,7 @@ fn apply_primary_key(
         ));
     }
     schema.primary_key = Some(column);
-    state.phase = MetadataPhase::ForeignKeys;
+    state.saw_primary_key = true;
     Ok(())
 }
 
@@ -208,14 +197,10 @@ fn apply_foreign_key(
     metadata: ForeignKeyMetadata<'_>,
     offset: usize,
 ) -> std::result::Result<(), Violation> {
-    if !matches!(
-        state.phase,
-        MetadataPhase::PrimaryOrForeignKey | MetadataPhase::ForeignKeys
-    ) || metadata.table != state.table
-    {
+    if state.phase != MetadataPhase::Keys || metadata.table != state.table {
         return Err(Violation::new(
             offset,
-            "foreign-key metadata must immediately follow its table schema or another key",
+            "foreign-key metadata must follow its table schema and primary key",
         ));
     }
 
@@ -294,7 +279,7 @@ fn apply_foreign_key(
             referenced_table: metadata.referenced_table.to_owned(),
             referenced_column: metadata.referenced_column.to_owned(),
         });
-    state.phase = MetadataPhase::ForeignKeys;
+    state.saw_foreign_key = true;
     state.next_foreign_key_column = column + 1;
     Ok(())
 }
@@ -307,7 +292,10 @@ fn apply_auto_increment(
     record_range: Range<usize>,
 ) -> std::result::Result<(), Violation> {
     let offset = record_range.start;
-    if state.phase != MetadataPhase::ForeignKeys || metadata.table != state.table {
+    if state.phase != MetadataPhase::Keys
+        || (!state.saw_primary_key && !state.saw_foreign_key)
+        || metadata.table != state.table
+    {
         return Err(Violation::new(
             offset,
             "auto-increment metadata must follow its table's primary and foreign keys",
@@ -318,6 +306,9 @@ fn apply_auto_increment(
             offset,
             "auto-increment high-water mark must be nonnegative",
         ));
+    }
+    if auto_increments.contains_key(metadata.table) {
+        return Err(Violation::new(offset, "duplicate auto-increment metadata"));
     }
 
     let schema = tables
@@ -348,7 +339,7 @@ fn apply_auto_increment(
             record_range,
         },
     );
-    state.phase = MetadataPhase::Complete;
+    state.phase = MetadataPhase::AutoIncrement;
     Ok(())
 }
 
@@ -370,6 +361,17 @@ fn map_schema_violation(violation: Violation, mode: ValidationMode) -> Error {
     match mode {
         ValidationMode::Persisted => corrupt(violation.offset, violation.message),
         ValidationMode::Candidate => Error::Schema(violation.message),
+    }
+}
+
+fn reject_after_rows(saw_row: bool, offset: usize, record: &str) -> Result<()> {
+    if saw_row {
+        Err(corrupt(
+            offset,
+            format!("{record} appears after a row record"),
+        ))
+    } else {
+        Ok(())
     }
 }
 

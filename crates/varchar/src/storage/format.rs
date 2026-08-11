@@ -64,7 +64,7 @@ impl<'a> Iterator for RecordIter<'a> {
             self.failed = true;
             return Some(Err(corrupt(
                 start,
-                "expected a schema, key metadata, or row record",
+                "expected a schema, constraint metadata, or row record",
             )));
         }
         let Some(relative_end) = remaining.find(';') else {
