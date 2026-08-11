@@ -96,11 +96,12 @@ Omitting the generated column from a named-column insert, or explicitly insertin
 
 `WHERE` supports parentheses plus `AND`/`OR`, with `AND` binding more tightly than `OR`. Predicate leaves are:
 
-- `=`, `!=`
+- `=`, `!=`, `<`, `<=`, `>`, `>=`
+- `IN (literal, ...)`, with at least one literal
 - `LIKE`, where `%` matches any sequence and `_` matches one Unicode scalar
 - `IS NULL`, `IS NOT NULL`
 
-Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons and `LIKE` use SQL three-valued truth for nullable columns: a `NULL` input produces unknown, and `WHERE` retains only true. Direct `= NULL` and `!= NULL` comparisons are type errors; use `IS NULL` or `IS NOT NULL`. All leaves are resolved and type-checked before execution, even when runtime short-circuiting would skip one. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
+Backslash escapes `%`, `_`, and backslash inside a `LIKE` pattern. Comparisons, `IN`, and `LIKE` use SQL three-valued truth for nullable columns: a `NULL` left value produces unknown, and `WHERE` retains only true. Direct comparison to a `NULL` literal is a type error for every comparison operator; use `IS NULL` or `IS NOT NULL`. Ordered operands must have the column's type: integers use signed numeric order, booleans use `FALSE < TRUE`, and text uses case-sensitive decoded Unicode-scalar order without normalization. Every non-`NULL` `IN` member must have the column's type; an all-`NULL` list is valid for every column type, and duplicate members are preserved without changing the result. For a non-`NULL` left value, `IN` returns true for any equal non-`NULL` member, otherwise unknown when the list contains `NULL`, and otherwise false; a `NULL` left value is always unknown. Every list member is resolved left to right before execution, even when an earlier member matches. All leaves are resolved and type-checked before execution, even when runtime short-circuiting would skip one. Keywords and unquoted ASCII identifiers are case-insensitive. Text values and `LIKE` matching are case-sensitive.
 
 `SELECT` supports inner equijoins using either `JOIN` or `INNER JOIN`:
 
@@ -119,7 +120,7 @@ Each library result column includes its display label and the table/column it or
 
 Unconstrained tables retain duplicate rows. Projection order, duplicate projected columns, and physical insertion order are preserved.
 
-The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, ordering, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
+The intentionally small dialect does not include outer joins, aliases, self-joins, aggregation, `ORDER BY`, subqueries, unary `NOT`, quoted identifiers, comments, statement batches, or schema alteration. Unsupported syntax is rejected rather than partially interpreted.
 
 ## The one string
 
@@ -208,7 +209,7 @@ The punchline is also the performance model:
 - Every query scans the database string once. Single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts.
 - Every mutation builds and validates a candidate string before replacing the old state. Inserts and schema changes copy the authoritative blob, while updates and deletes scan and finish a candidate even when no row matches, so all mutation paths are **O(n)** in database size. A zero-match update or delete installs a separately validated but byte-identical state.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: the current operators consume one unit per leaf, while `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, and rows plus pointer state retained for joins. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
+- Inputs, generated regexes, join execution work, and regex backtracking are bounded. `max_predicates` bounds each `WHERE` independently by predicate units: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, and rows plus pointer state retained for joins. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and projected rows or materialized `SelectExplanation` patterns, sources, and column metadata. These are safety rails, not a total query or process memory cap; they exclude other planning allocations, regex-engine scratch space, catalog and integrity-index allocations, the authoritative string, allocator overhead and capacity beyond the conservative descriptor charges, and mutation candidates. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.
 

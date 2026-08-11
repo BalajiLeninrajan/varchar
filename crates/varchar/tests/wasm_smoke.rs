@@ -112,6 +112,80 @@ fn boolean_residuals_execute_after_reload_in_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn ordered_and_membership_predicates_execute_after_reload_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE ordered_members (\
+                 id INTEGER NOT NULL, \
+                 priority INTEGER, \
+                 state TEXT, \
+                 enabled BOOLEAN NOT NULL\
+             )",
+        )
+        .unwrap();
+    for sql in [
+        "INSERT INTO ordered_members VALUES (1, 5, 'queued', TRUE)",
+        "INSERT INTO ordered_members VALUES (2, 10, 'running', TRUE)",
+        "INSERT INTO ordered_members VALUES (3, 20, 'done', FALSE)",
+        "INSERT INTO ordered_members VALUES (4, NULL, NULL, TRUE)",
+    ] {
+        database.execute(sql).unwrap();
+    }
+    let mut database = Database::from_string(database.into_string()).unwrap();
+
+    assert_eq!(
+        rows(
+            database
+                .execute(
+                    "SELECT id FROM ordered_members \
+                     WHERE (priority >= 10 AND state IN ('running', 'running', NULL)) \
+                        OR enabled IN (FALSE)",
+                )
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]
+    );
+    assert!(
+        rows(
+            database
+                .execute("SELECT id FROM ordered_members WHERE state IN (NULL, NULL)")
+                .unwrap()
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        database
+            .execute("UPDATE ordered_members SET enabled = FALSE WHERE id IN (1, 4)")
+            .unwrap(),
+        Outcome::Affected { rows: 2 }
+    );
+    assert_eq!(
+        database
+            .execute(
+                "DELETE FROM ordered_members \
+                 WHERE (priority < 10 OR enabled IN (FALSE)) AND id >= 1",
+            )
+            .unwrap(),
+        Outcome::Affected { rows: 3 }
+    );
+
+    let mut database = Database::from_string(database.into_string()).unwrap();
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT id, state, enabled FROM ordered_members")
+                .unwrap()
+        ),
+        vec![vec![
+            Value::Integer(2),
+            Value::Text("running".to_owned()),
+            Value::Boolean(true),
+        ]]
+    );
+}
+
+#[wasm_bindgen_test]
 fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
     assert!(matches!(
         Database::from_string("not a database".to_owned()),

@@ -1,5 +1,7 @@
 //! Iterative evaluation of resolved expression programs.
 
+use std::cmp::Ordering;
+
 use crate::resolve::ColumnLocation;
 use crate::{Error, Result, Value};
 
@@ -173,6 +175,14 @@ fn evaluate_predicate(
             Truth::False => Truth::True,
             Truth::Unknown => Truth::Unknown,
         },
+        Predicate::LessThan { value, .. } => compare_ordered(left, value, Ordering::is_lt)?,
+        Predicate::LessThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| !ordering.is_gt())?
+        }
+        Predicate::GreaterThan { value, .. } => compare_ordered(left, value, Ordering::is_gt)?,
+        Predicate::GreaterThanOrEqual { value, .. } => {
+            compare_ordered(left, value, |ordering| !ordering.is_lt())?
+        }
         Predicate::Like { atoms, .. } => match left {
             Value::Text(value) => truth(like::matches_charged(value, atoms, like_work)?),
             Value::Null => Truth::Unknown,
@@ -184,6 +194,7 @@ fn evaluate_predicate(
         },
         Predicate::IsNull { .. } => truth(matches!(left, Value::Null)),
         Predicate::IsNotNull { .. } => truth(!matches!(left, Value::Null)),
+        Predicate::In { values, .. } => compare_in(left, values),
     })
 }
 
@@ -213,6 +224,50 @@ fn compare_equal(left: &Value, right: &Value) -> Truth {
         Truth::Unknown
     } else if values_equal(left, right) {
         Truth::True
+    } else {
+        Truth::False
+    }
+}
+
+fn compare_ordered(
+    left: &Value,
+    right: &Value,
+    accepts: impl FnOnce(Ordering) -> bool,
+) -> Result<Truth> {
+    if matches!(left, Value::Null) {
+        return Ok(Truth::Unknown);
+    }
+    let ordering = match (left, right) {
+        (Value::Text(left), Value::Text(right)) => left.chars().cmp(right.chars()),
+        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+        (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
+        (
+            Value::Text(_) | Value::Integer(_) | Value::Boolean(_) | Value::Null,
+            Value::Text(_) | Value::Integer(_) | Value::Boolean(_) | Value::Null,
+        ) => {
+            return Err(Error::Type(String::from(
+                "resolved ordered predicate contained incompatible scalar values",
+            )));
+        }
+    };
+    Ok(truth(accepts(ordering)))
+}
+
+fn compare_in(left: &Value, values: &[Value]) -> Truth {
+    if matches!(left, Value::Null) {
+        return Truth::Unknown;
+    }
+
+    let mut contains_null = false;
+    for value in values {
+        if matches!(value, Value::Null) {
+            contains_null = true;
+        } else if values_equal(left, value) {
+            return Truth::True;
+        }
+    }
+    if contains_null {
+        Truth::Unknown
     } else {
         Truth::False
     }

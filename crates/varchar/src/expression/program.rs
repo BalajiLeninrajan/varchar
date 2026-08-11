@@ -64,6 +64,22 @@ pub(crate) enum Predicate<'statement> {
         column: ColumnLocation,
         value: &'statement Value,
     },
+    LessThan {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    LessThanOrEqual {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    GreaterThan {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
+    GreaterThanOrEqual {
+        column: ColumnLocation,
+        value: &'statement Value,
+    },
     Like {
         column: ColumnLocation,
         atoms: Vec<LikeAtom>,
@@ -74,6 +90,10 @@ pub(crate) enum Predicate<'statement> {
     IsNotNull {
         column: ColumnLocation,
     },
+    In {
+        column: ColumnLocation,
+        values: &'statement [Value],
+    },
 }
 
 impl Predicate<'_> {
@@ -81,9 +101,14 @@ impl Predicate<'_> {
         match self {
             Self::Equal { column, .. }
             | Self::NotEqual { column, .. }
+            | Self::LessThan { column, .. }
+            | Self::LessThanOrEqual { column, .. }
+            | Self::GreaterThan { column, .. }
+            | Self::GreaterThanOrEqual { column, .. }
             | Self::Like { column, .. }
             | Self::IsNull { column }
-            | Self::IsNotNull { column } => *column,
+            | Self::IsNotNull { column }
+            | Self::In { column, .. } => *column,
         }
     }
 }
@@ -96,6 +121,12 @@ fn valid_program(nodes: &[ProgramNode<'_>]) -> bool {
         };
         pending = after_node;
 
+        if matches!(
+            node,
+            ProgramNode::Predicate(Predicate::In { values, .. }) if values.is_empty()
+        ) {
+            return false;
+        }
         let children = node.child_count();
         if matches!(node, ProgramNode::And { .. } | ProgramNode::Or { .. }) && children < 2 {
             return false;

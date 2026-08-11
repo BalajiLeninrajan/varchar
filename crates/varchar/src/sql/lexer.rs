@@ -12,10 +12,34 @@ pub(super) enum TokenKind {
     Comma,
     Dot,
     Star,
+    ExpressionOperator(char),
+    Bang,
     Equal,
     NotEqual,
+    LessThan,
+    GreaterThan,
+    LexicalError(LexicalErrorKind),
     Semicolon,
     End,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum LexicalErrorKind {
+    UnexpectedCharacter(char),
+    UnterminatedString,
+    QuotedIdentifier,
+    SqlComment,
+}
+
+impl LexicalErrorKind {
+    pub(super) fn error(&self, span: Span) -> Error {
+        match self {
+            Self::UnexpectedCharacter(character) => unexpected_character_error(*character, span),
+            Self::UnterminatedString => Error::parse("unterminated string literal", span),
+            Self::QuotedIdentifier => Error::unsupported("quoted identifiers", span),
+            Self::SqlComment => Error::unsupported("SQL comments", span),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +48,7 @@ pub(super) struct Token {
     pub(super) span: Span,
 }
 
-pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
+pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut cursor = 0;
     let bytes = input.as_bytes();
@@ -63,23 +87,34 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
                 cursor += 1;
                 TokenKind::Star
             }
+            '+' | '%' | '|' => {
+                cursor += 1;
+                TokenKind::ExpressionOperator(character)
+            }
+            '!' => {
+                cursor += 1;
+                if bytes.get(cursor) == Some(&b'=') {
+                    cursor += 1;
+                    TokenKind::NotEqual
+                } else {
+                    TokenKind::Bang
+                }
+            }
+            '<' => {
+                cursor += 1;
+                TokenKind::LessThan
+            }
             '=' => {
                 cursor += 1;
                 TokenKind::Equal
             }
+            '>' => {
+                cursor += 1;
+                TokenKind::GreaterThan
+            }
             ';' => {
                 cursor += 1;
                 TokenKind::Semicolon
-            }
-            '!' if bytes.get(cursor + 1) == Some(&b'=') => {
-                cursor += 2;
-                TokenKind::NotEqual
-            }
-            '!' => {
-                return Err(Error::parse(
-                    "expected `=` after `!`",
-                    Span::new(start, start + 1),
-                ));
             }
             '\'' => {
                 cursor += 1;
@@ -104,31 +139,23 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
                         cursor += next.len_utf8();
                     }
                 }
-                if !closed {
-                    return Err(Error::parse(
-                        "unterminated string literal",
-                        Span::new(start, bytes.len()),
-                    ));
+                if closed {
+                    TokenKind::String(value)
+                } else {
+                    TokenKind::LexicalError(LexicalErrorKind::UnterminatedString)
                 }
-                TokenKind::String(value)
             }
             '"' => {
-                return Err(Error::unsupported(
-                    "quoted identifiers",
-                    Span::new(start, start + 1),
-                ));
+                cursor += 1;
+                TokenKind::LexicalError(LexicalErrorKind::QuotedIdentifier)
             }
             '-' if bytes.get(cursor + 1) == Some(&b'-') => {
-                return Err(Error::unsupported(
-                    "SQL comments",
-                    Span::new(start, bytes.len()),
-                ));
+                cursor = bytes.len();
+                TokenKind::LexicalError(LexicalErrorKind::SqlComment)
             }
             '/' if bytes.get(cursor + 1) == Some(&b'*') => {
-                return Err(Error::unsupported(
-                    "SQL comments",
-                    Span::new(start, bytes.len()),
-                ));
+                cursor = bytes.len();
+                TokenKind::LexicalError(LexicalErrorKind::SqlComment)
             }
             '-' if bytes.get(cursor + 1).is_some_and(u8::is_ascii_digit) => {
                 cursor += 1;
@@ -136,6 +163,10 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
                     cursor += 1;
                 }
                 TokenKind::Number(input[start..cursor].to_owned())
+            }
+            '-' | '/' => {
+                cursor += 1;
+                TokenKind::ExpressionOperator(character)
             }
             value if value.is_ascii_digit() => {
                 cursor += 1;
@@ -154,23 +185,19 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
                 }
                 TokenKind::Word(input[start..cursor].to_ascii_uppercase())
             }
-            '<' | '>' => {
-                return Err(Error::unsupported(
-                    "ordered comparisons",
-                    Span::new(start, start + width),
-                ));
-            }
             _ => {
-                return Err(Error::parse(
-                    format!("unexpected character {character:?}"),
-                    Span::new(start, start + width),
-                ));
+                cursor += width;
+                TokenKind::LexicalError(LexicalErrorKind::UnexpectedCharacter(character))
             }
         };
+        let stops_lexing = matches!(&kind, TokenKind::LexicalError(_));
         tokens.push(Token {
             kind,
             span: Span::new(start, cursor),
         });
+        if stops_lexing {
+            break;
+        }
     }
 
     tokens.push(Token {
@@ -178,6 +205,18 @@ pub(super) fn lex(input: &str) -> Result<Vec<Token>> {
         span: Span::new(input.len(), input.len()),
     });
     Ok(tokens)
+}
+
+pub(super) fn unexpected_character_error(character: char, span: Span) -> Error {
+    Error::parse(format!("unexpected character {character:?}"), span)
+}
+
+pub(super) fn comparison_error(operator: &str, span: Span) -> Error {
+    match operator {
+        "<>" => Error::unsupported("comparison operator `<>`", span),
+        "!" => Error::parse("expected `=` after `!`", span),
+        _ => Error::parse(format!("malformed comparison operator `{operator}`"), span),
+    }
 }
 
 #[cfg(test)]

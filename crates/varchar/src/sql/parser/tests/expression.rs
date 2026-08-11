@@ -1,6 +1,6 @@
 use super::{parse, select};
-use crate::Error;
-use crate::sql::ast::{Expression, ExpressionNode, Statement};
+use crate::sql::ast::{Expression, ExpressionNode, PredicateOperator, Statement};
+use crate::{Error, Value};
 
 fn expression(sql: &str) -> Expression {
     select(sql)
@@ -32,6 +32,26 @@ fn assert_unsupported(sql: &str, expected_feature: &str, marker: &str) {
             );
         }
         other => panic!("expected exact Unsupported error for {sql:?}, got {other:?}"),
+    }
+}
+
+fn assert_parse_error(sql: &str, expected_message: &str, marker: &str) {
+    let span_start = sql.find(marker).expect("fixture contains error marker");
+    let span_end = span_start + marker.len();
+    match parse(sql) {
+        Err(Error::Parse {
+            message,
+            span_start: actual_start,
+            span_end: actual_end,
+        }) => {
+            assert_eq!(message, expected_message, "message for {sql:?}");
+            assert_eq!(
+                (actual_start, actual_end),
+                (span_start, span_end),
+                "span for {sql:?}"
+            );
+        }
+        other => panic!("expected exact Parse error for {sql:?}, got {other:?}"),
     }
 }
 
@@ -159,6 +179,172 @@ fn excluded_expression_forms_have_structured_features_and_exact_spans() {
     ] {
         assert_unsupported(sql, feature, marker);
     }
+}
+
+#[test]
+fn ordered_and_membership_predicates_stay_flat_and_format_canonically() {
+    let expression = expression(
+        "SELECT * FROM t WHERE a < 1 AND b <= 2 AND c > 3 AND d >= 4 AND e IN ('x', NULL, 'x')",
+    );
+
+    assert!(matches!(
+        expression.nodes()[0],
+        ExpressionNode::And { children: 5 }
+    ));
+    assert!(matches!(
+        &expression.nodes()[1],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::LessThan(Value::Integer(1))
+    ));
+    assert!(matches!(
+        &expression.nodes()[2],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::LessThanOrEqual(Value::Integer(2))
+    ));
+    assert!(matches!(
+        &expression.nodes()[3],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::GreaterThan(Value::Integer(3))
+    ));
+    assert!(matches!(
+        &expression.nodes()[4],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator == PredicateOperator::GreaterThanOrEqual(Value::Integer(4))
+    ));
+    assert!(matches!(
+        &expression.nodes()[5],
+        ExpressionNode::Predicate(predicate)
+            if predicate.operator
+                == PredicateOperator::In(vec![
+                    Value::Text(String::from("x")),
+                    Value::Null,
+                    Value::Text(String::from("x")),
+                ])
+    ));
+    assert_eq!(expression.predicate_units().expect("count fits"), 7);
+    assert_eq!(
+        expression.to_string(),
+        "a < 1 AND b <= 2 AND c > 3 AND d >= 4 AND e IN ('x', NULL, 'x')"
+    );
+}
+
+#[test]
+fn empty_in_is_excluded_while_all_null_lists_are_valid() {
+    let sql = "SELECT * FROM t WHERE value IN ()";
+    assert!(matches!(
+        parse(sql),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 28,
+            span_end: 30,
+        }) if feature == "empty IN lists"
+    ));
+
+    let expression = expression("SELECT * FROM t WHERE value IN (NULL, NULL)");
+    assert_eq!(expression.predicate_units().expect("count fits"), 2);
+    assert_eq!(expression.to_string(), "value IN (NULL, NULL)");
+
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (1, )"),
+        Err(Error::Parse { .. })
+    ));
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (SELECT id FROM t)"),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 32,
+            span_end: 38,
+        }) if feature == "subqueries in IN lists"
+    ));
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN (1 = 1)"),
+        Err(Error::Unsupported {
+            ref feature,
+            span_start: 34,
+            span_end: 35,
+        }) if feature == "expressions in IN lists"
+    ));
+    assert_unsupported(
+        "SELECT * FROM t WHERE value IN (1 BETWEEN 0 AND 2)",
+        "expressions in IN lists",
+        "BETWEEN",
+    );
+    assert_unsupported(
+        "SELECT * FROM t WHERE value IN (1 + 2)",
+        "expressions in IN lists",
+        "+",
+    );
+}
+
+#[test]
+fn in_is_reserved_and_cannot_be_used_as_an_identifier() {
+    for (sql, marker) in [
+        ("CREATE TABLE in (id INTEGER)", "in"),
+        ("CREATE TABLE t (in INTEGER)", "in"),
+        ("SELECT in FROM t", "in"),
+        ("SELECT * FROM in", "in"),
+        ("SELECT * FROM t WHERE in = 1", "in"),
+        ("INSERT INTO in (id) VALUES (1)", "in"),
+        ("UPDATE in SET id = 1", "in"),
+        ("DELETE FROM in", "in"),
+    ] {
+        assert_parse_error(
+            sql,
+            "reserved keyword `IN` cannot be used as an identifier",
+            marker,
+        );
+    }
+}
+
+#[test]
+fn in_still_drives_the_membership_predicate_after_reservation() {
+    let membership = expression("SELECT * FROM t WHERE value IN (1)");
+    assert_eq!(membership.to_string(), "value IN (1)");
+
+    assert!(matches!(
+        parse("SELECT * FROM t WHERE value IN"),
+        Err(Error::Parse {
+            ref message,
+            span_start: 28,
+            span_end: 30,
+        }) if message.starts_with("expected `=`, `!=`")
+    ));
+}
+
+#[test]
+fn malformed_comparison_operators_are_rejected_as_units_by_the_parser() {
+    for operator in ["==", "=>", "<<", ">>", "!<", "!==", "<==", "><", "<>="] {
+        let sql = format!("SELECT * FROM t WHERE a {operator} 1");
+        assert_parse_error(
+            &sql,
+            &format!("malformed comparison operator `{operator}`"),
+            operator,
+        );
+    }
+
+    assert_parse_error("SELECT * FROM t WHERE a ! 1", "expected `=` after `!`", "!");
+    assert_unsupported(
+        "SELECT * FROM t WHERE a <> 1",
+        "comparison operator `<>`",
+        "<>",
+    );
+}
+
+#[test]
+fn deferred_lexical_errors_surface_with_their_original_diagnostics() {
+    assert_parse_error(
+        "SELECT * FROM t WHERE a = '\u{e9}",
+        "unterminated string literal",
+        "'\u{e9}",
+    );
+    assert_parse_error(
+        "SELECT \u{1f4a5} FROM t",
+        "unexpected character '\u{1f4a5}'",
+        "\u{1f4a5}",
+    );
+    assert_unsupported("SELECT \"a\" FROM t", "quoted identifiers", "\"");
+    assert_unsupported("SELECT a FROM t -- tail", "SQL comments", "-- tail");
+    assert_unsupported("SELECT a FROM t /* tail", "SQL comments", "/* tail");
 }
 
 #[test]

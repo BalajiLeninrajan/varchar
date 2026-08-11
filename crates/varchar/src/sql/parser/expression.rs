@@ -38,7 +38,42 @@ impl Parser {
         if !self.consume_keyword("WHERE") {
             return Ok(None);
         }
+
+        let start = self.position;
+        self.where_expression = Some(start..self.where_expression_end(start));
         self.parse_expression().map(Some)
+    }
+
+    fn where_expression_end(&self, start: usize) -> usize {
+        let mut depth = 0_usize;
+        let mut index = start;
+        while let Some(token) = self.tokens.get(index) {
+            if matches!(&token.kind, TokenKind::End | TokenKind::Semicolon)
+                || (depth == 0 && self.starts_trailing_clause(index))
+            {
+                break;
+            }
+            match &token.kind {
+                TokenKind::LeftParen => depth = depth.saturating_add(1),
+                TokenKind::RightParen if depth > 0 => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        index
+    }
+
+    fn starts_trailing_clause(&self, index: usize) -> bool {
+        match self.word_at(index) {
+            Some("JOIN" | "ORDER" | "GROUP" | "LIMIT" | "AS") => true,
+            Some("LEFT" | "RIGHT" | "FULL") => {
+                self.word_at(index + 1) == Some("JOIN")
+                    || (self.word_at(index + 1) == Some("OUTER")
+                        && self.word_at(index + 2) == Some("JOIN"))
+            }
+            Some("OUTER" | "CROSS" | "NATURAL") => self.word_at(index + 1) == Some("JOIN"),
+            _ => false,
+        }
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
@@ -211,6 +246,26 @@ impl Parser {
                 self.advance();
                 PredicateOperator::NotEqual(self.parse_predicate_value()?)
             }
+            TokenKind::LessThan => {
+                let inclusive = self.peek_is_adjacent(&TokenKind::Equal);
+                self.advance();
+                if inclusive {
+                    self.advance();
+                    PredicateOperator::LessThanOrEqual(self.parse_predicate_value()?)
+                } else {
+                    PredicateOperator::LessThan(self.parse_predicate_value()?)
+                }
+            }
+            TokenKind::GreaterThan => {
+                let inclusive = self.peek_is_adjacent(&TokenKind::Equal);
+                self.advance();
+                if inclusive {
+                    self.advance();
+                    PredicateOperator::GreaterThanOrEqual(self.parse_predicate_value()?)
+                } else {
+                    PredicateOperator::GreaterThan(self.parse_predicate_value()?)
+                }
+            }
             TokenKind::Word(ref word) if word == "LIKE" => {
                 self.advance();
                 match self.current().kind.clone() {
@@ -236,14 +291,91 @@ impl Parser {
                     PredicateOperator::IsNull
                 }
             }
+            TokenKind::Word(ref word) if word == "IN" && self.peek_is(&TokenKind::LeftParen) => {
+                let keyword_span = self.current().span;
+                self.advance();
+                PredicateOperator::In(self.parse_in_values(keyword_span)?)
+            }
             _ => {
                 return Err(Error::parse(
-                    "expected `=`, `!=`, `LIKE`, or `IS [NOT] NULL`",
+                    "expected `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `IS [NOT] NULL`, or `IN (...)`",
                     self.current().span,
                 ));
             }
         };
         Ok(Predicate { column, operator })
+    }
+
+    fn parse_in_values(&mut self, keyword_span: Span) -> Result<Vec<Value>> {
+        self.expect(TokenKind::LeftParen, "expected `(` after IN")?;
+        if matches!(self.current().kind, TokenKind::RightParen) {
+            return Err(Error::unsupported("empty IN lists", keyword_span));
+        }
+
+        let mut values = Vec::new();
+        loop {
+            let value = self.parse_in_value()?;
+            try_push(&mut values, value, "growing an IN literal list")?;
+            if self.consume(&TokenKind::Comma) {
+                continue;
+            }
+            if self.current_starts_in_list_expression() {
+                return Err(self.unsupported_in_list_expression());
+            }
+            break;
+        }
+        self.expect(TokenKind::RightParen, "expected `)` after IN list")?;
+        Ok(values)
+    }
+
+    fn parse_in_value(&mut self) -> Result<Value> {
+        if self.current_word() == Some("SELECT") {
+            self.claimed_in_expression = Some(self.position);
+            return Err(Error::unsupported(
+                "subqueries in IN lists",
+                self.current().span,
+            ));
+        }
+        if matches!(
+            &self.current().kind,
+            TokenKind::Word(word) if !matches!(word.as_str(), "TRUE" | "FALSE" | "NULL")
+        ) || matches!(
+            self.current().kind,
+            TokenKind::LeftParen | TokenKind::ExpressionOperator(_)
+        ) {
+            return Err(self.unsupported_in_list_expression());
+        }
+        self.parse_value()
+    }
+
+    fn current_starts_in_list_expression(&self) -> bool {
+        matches!(
+            self.current().kind,
+            TokenKind::Equal
+                | TokenKind::NotEqual
+                | TokenKind::LessThan
+                | TokenKind::GreaterThan
+                | TokenKind::Star
+                | TokenKind::ExpressionOperator(_)
+        ) || matches!(
+            &self.current().kind,
+            TokenKind::Number(value) if value.starts_with('-')
+        ) || matches!(
+            self.current_word(),
+            Some("AND" | "OR" | "IS" | "LIKE" | "IN" | "BETWEEN" | "NOT" | "COLLATE")
+        )
+    }
+
+    fn unsupported_in_list_expression(&mut self) -> Error {
+        let token = self.current();
+        let span = match &token.kind {
+            TokenKind::Number(value) if value.starts_with('-') => {
+                Span::new(token.span.start, token.span.start + 1)
+            }
+            _ => token.span,
+        };
+        self.claimed_in_expression = Some(self.position);
+        Error::unsupported("expressions in IN lists", span)
     }
 
     fn parse_predicate_value(&mut self) -> Result<Value> {

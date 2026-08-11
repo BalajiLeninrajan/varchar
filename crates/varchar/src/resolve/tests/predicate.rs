@@ -1,5 +1,5 @@
 use super::{catalog, people_schema, select_statement};
-use crate::resolve::{predicate, select};
+use crate::resolve::{ResolvedPredicate, predicate, select};
 use crate::sql::{ColumnRef, Predicate, PredicateOperator};
 use crate::{Error, Resource, Value};
 
@@ -44,6 +44,118 @@ fn predicate_resolution_preserves_name_and_operator_error_order() {
         predicate(&schema, &wrong_like_type),
         Err(Error::Type(ref message))
             if message == "LIKE requires a TEXT column; \"id\" is INTEGER"
+    ));
+}
+
+#[test]
+fn ordered_predicates_require_same_type_non_null_scalars() {
+    let schema = people_schema();
+    for (name, operator) in [
+        ("id", PredicateOperator::LessThan(Value::Integer(10))),
+        (
+            "note",
+            PredicateOperator::LessThanOrEqual(Value::Text(String::from("m"))),
+        ),
+        (
+            "active",
+            PredicateOperator::GreaterThan(Value::Boolean(false)),
+        ),
+        (
+            "id",
+            PredicateOperator::GreaterThanOrEqual(Value::Integer(1)),
+        ),
+    ] {
+        let parsed = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: name.to_owned(),
+            },
+            operator,
+        };
+        predicate(&schema, &parsed).expect("same-type ordered predicate resolves");
+    }
+
+    for operator in [
+        PredicateOperator::LessThan(Value::Null),
+        PredicateOperator::LessThanOrEqual(Value::Null),
+        PredicateOperator::GreaterThan(Value::Null),
+        PredicateOperator::GreaterThanOrEqual(Value::Null),
+    ] {
+        let null_ordering = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: String::from("id"),
+            },
+            operator,
+        };
+        assert!(matches!(
+            predicate(&schema, &null_ordering),
+            Err(Error::Type(ref message))
+                if message
+                    == "NULL cannot be compared with `<`, `<=`, `>`, or `>=`; use IS NULL or IS NOT NULL"
+        ));
+    }
+
+    let wrong_type = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("active"),
+        },
+        operator: PredicateOperator::GreaterThan(Value::Integer(0)),
+    };
+    assert!(matches!(
+        predicate(&schema, &wrong_type),
+        Err(Error::Type(ref message))
+            if message == "column \"active\" expects BOOLEAN, got INTEGER"
+    ));
+}
+
+#[test]
+fn in_resolves_every_member_left_to_right_and_allows_untyped_null() {
+    let schema = people_schema();
+    for name in ["id", "note", "active"] {
+        let all_null = Predicate {
+            column: ColumnRef {
+                qualifier: None,
+                name: name.to_owned(),
+            },
+            operator: PredicateOperator::In(vec![Value::Null, Value::Null]),
+        };
+        assert!(matches!(
+            predicate(&schema, &all_null),
+            Ok(ResolvedPredicate::In { values, .. })
+                if values == [Value::Null, Value::Null]
+        ));
+    }
+
+    let duplicates = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("id"),
+        },
+        operator: PredicateOperator::In(vec![Value::Integer(1), Value::Integer(1), Value::Null]),
+    };
+    assert!(matches!(
+        predicate(&schema, &duplicates),
+        Ok(ResolvedPredicate::In { values, .. })
+            if values == [Value::Integer(1), Value::Integer(1), Value::Null]
+    ));
+
+    let bad_later_member = Predicate {
+        column: ColumnRef {
+            qualifier: None,
+            name: String::from("id"),
+        },
+        operator: PredicateOperator::In(vec![
+            Value::Integer(1),
+            Value::Text(String::from("wrong")),
+            Value::Boolean(false),
+        ]),
+    };
+    assert!(matches!(
+        predicate(&schema, &bad_later_member),
+        Err(Error::Type(ref message))
+            if message == "column \"id\" expects INTEGER, got TEXT"
     ));
 }
 

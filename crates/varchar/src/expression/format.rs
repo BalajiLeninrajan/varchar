@@ -126,12 +126,38 @@ fn format_predicate(formatter: &mut fmt::Formatter<'_>, predicate: &Predicate) -
             formatter.write_str(" != ")?;
             format_value(formatter, value)
         }
+        PredicateOperator::LessThan(value) => {
+            formatter.write_str(" < ")?;
+            format_value(formatter, value)
+        }
+        PredicateOperator::LessThanOrEqual(value) => {
+            formatter.write_str(" <= ")?;
+            format_value(formatter, value)
+        }
+        PredicateOperator::GreaterThan(value) => {
+            formatter.write_str(" > ")?;
+            format_value(formatter, value)
+        }
+        PredicateOperator::GreaterThanOrEqual(value) => {
+            formatter.write_str(" >= ")?;
+            format_value(formatter, value)
+        }
         PredicateOperator::Like(pattern) => {
             formatter.write_str(" LIKE ")?;
             format_text(formatter, pattern)
         }
         PredicateOperator::IsNull => formatter.write_str(" IS NULL"),
         PredicateOperator::IsNotNull => formatter.write_str(" IS NOT NULL"),
+        PredicateOperator::In(values) => {
+            formatter.write_str(" IN (")?;
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    formatter.write_str(", ")?;
+                }
+                format_value(formatter, value)?;
+            }
+            formatter.write_char(')')
+        }
     }
 }
 
