@@ -1,15 +1,18 @@
 //! Canonical metadata phase validation and catalog reconstruction.
 
+mod check;
+
 use std::ops::Range;
 
 use super::super::budget::WorkingBudget;
 use super::super::catalog::{AutoIncrementState, CatalogMap};
 use super::super::decode::{
-    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, UniqueMetadata,
-    decode_cell_at, validate_cell_at,
+    AutoIncrementMetadata, CheckMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata,
+    UniqueMetadata, decode_cell_at, validate_cell_at,
 };
 use super::super::{Catalog, ForeignKey, TableSchema};
 use super::ValidationMode;
+use crate::expression::CheckProgram;
 use crate::{DataType, Error, Result};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,6 +22,7 @@ enum MetadataPhase {
     AutoIncrement,
     Defaults,
     Unique,
+    Checks,
 }
 
 struct MetadataState {
@@ -29,6 +33,7 @@ struct MetadataState {
     next_foreign_key_column: usize,
     next_default_column: usize,
     next_unique_column: usize,
+    check_predicates: usize,
 }
 
 impl MetadataState {
@@ -41,6 +46,7 @@ impl MetadataState {
             next_foreign_key_column: 0,
             next_default_column: 0,
             next_unique_column: 0,
+            check_predicates: 0,
         }
     }
 
@@ -53,6 +59,7 @@ impl MetadataState {
             next_foreign_key_column: 0,
             next_default_column: 0,
             next_unique_column: 0,
+            check_predicates: 0,
         }
     }
 }
@@ -152,6 +159,18 @@ impl MetadataValidator {
         budget: &mut WorkingBudget,
     ) -> Result<()> {
         let result = self.apply_unique_inner(metadata, offset, budget);
+        result.map_err(|violation| violation.into_error(mode))
+    }
+
+    pub(super) fn apply_check(
+        &mut self,
+        metadata: CheckMetadata<'_>,
+        offset: usize,
+        mode: ValidationMode,
+        max_predicates: usize,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        let result = self.apply_check_inner(metadata, offset, max_predicates, budget);
         result.map_err(|violation| violation.into_error(mode))
     }
 
@@ -515,6 +534,74 @@ impl MetadataValidator {
         self.state.next_unique_column = column + 1;
         Ok(())
     }
+
+    fn apply_check_inner(
+        &mut self,
+        metadata: CheckMetadata<'_>,
+        offset: usize,
+        max_predicates: usize,
+        budget: &mut WorkingBudget,
+    ) -> std::result::Result<(), Violation> {
+        if !matches!(
+            self.state.phase,
+            MetadataPhase::Keys
+                | MetadataPhase::AutoIncrement
+                | MetadataPhase::Defaults
+                | MetadataPhase::Unique
+                | MetadataPhase::Checks
+        ) || metadata.table != self.state.table
+        {
+            return Err(Violation::new(
+                offset,
+                "CHECK metadata is outside its table's CHECK phase",
+            ));
+        }
+
+        let schema = self
+            .tables
+            .get(&self.state.table)
+            .expect("metadata state always names the most recent schema");
+        let (program, predicates) = check::decode_program(
+            schema,
+            metadata,
+            self.state.check_predicates,
+            max_predicates,
+            budget,
+        )
+        .map_err(Violation::storage)?;
+
+        let checks = &mut self
+            .tables
+            .get_mut(&self.state.table)
+            .expect("metadata state always names the most recent schema")
+            .checks;
+        reserve_check_program(checks, budget).map_err(Violation::storage)?;
+        checks.push(program);
+        self.state.phase = MetadataPhase::Checks;
+        self.state.check_predicates = predicates;
+        Ok(())
+    }
+}
+
+fn reserve_check_program(checks: &mut Vec<CheckProgram>, budget: &mut WorkingBudget) -> Result<()> {
+    const OPERATION: &str = "reserving decoded CHECK metadata";
+
+    budget.charge_items::<CheckProgram>(1)?;
+    if checks.len() == checks.capacity() {
+        let additional = checks.capacity().max(1);
+        checks
+            .capacity()
+            .checked_add(additional)
+            .ok_or(Error::Capacity {
+                operation: OPERATION,
+            })?;
+        checks
+            .try_reserve_exact(additional)
+            .map_err(|_| Error::Allocation {
+                operation: OPERATION,
+            })?;
+    }
+    Ok(())
 }
 
 fn reserve_unique_column(columns: &mut Vec<usize>, budget: &mut WorkingBudget) -> Result<()> {

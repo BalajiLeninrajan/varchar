@@ -24,12 +24,17 @@ pub(crate) struct Candidate<'a> {
     cursor: usize,
     output: String,
     max_bytes: usize,
+    max_predicates: usize,
     format: FormatVersion,
     deferred_auto_increment: Option<DeferredAutoIncrement<'a>>,
 }
 
 impl<'a> Candidate<'a> {
-    pub(super) fn new(state: &'a StorageState, max_bytes: usize) -> Result<Self> {
+    pub(super) fn new(
+        state: &'a StorageState,
+        max_bytes: usize,
+        max_predicates: usize,
+    ) -> Result<Self> {
         let source = state.as_str();
         check_size(source.len(), max_bytes)?;
         let mut output = String::new();
@@ -41,6 +46,7 @@ impl<'a> Candidate<'a> {
             cursor: 0,
             output,
             max_bytes,
+            max_predicates,
             format: state.format(),
             deferred_auto_increment: None,
         })
@@ -157,7 +163,7 @@ impl<'a> Candidate<'a> {
 
     pub(crate) fn finish(mut self) -> Result<StorageState> {
         self.push_source(self.cursor..self.state.as_str().len())?;
-        StorageState::from_candidate(self.output, self.max_bytes)
+        StorageState::from_candidate(self.output, self.max_bytes, self.max_predicates)
     }
 
     fn check_projected_table_insert_size(

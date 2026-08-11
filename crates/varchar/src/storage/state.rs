@@ -2,7 +2,7 @@
 
 use super::budget::working_limit;
 use super::format::{FormatVersion, V2_HEADER};
-use super::validate::{validate_and_catalog, validate_candidate};
+use super::validate::{validate_and_catalog_with_limits, validate_candidate};
 use super::{Candidate, Catalog};
 use crate::Result;
 
@@ -26,8 +26,21 @@ impl StorageState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn load(blob: String, max_database_bytes: usize) -> Result<Self> {
-        let (format, catalog) = validate_and_catalog(&blob, working_limit(max_database_bytes))?;
+        Self::load_with_validation_limits(blob, max_database_bytes, usize::MAX)
+    }
+
+    pub(crate) fn load_with_validation_limits(
+        blob: String,
+        max_database_bytes: usize,
+        max_predicates: usize,
+    ) -> Result<Self> {
+        let (format, catalog) = validate_and_catalog_with_limits(
+            &blob,
+            working_limit(max_database_bytes),
+            max_predicates,
+        )?;
         Ok(Self {
             blob,
             catalog,
@@ -35,8 +48,13 @@ impl StorageState {
         })
     }
 
-    pub(super) fn from_candidate(blob: String, max_database_bytes: usize) -> Result<Self> {
-        let (format, catalog) = validate_candidate(&blob, working_limit(max_database_bytes))?;
+    pub(super) fn from_candidate(
+        blob: String,
+        max_database_bytes: usize,
+        max_predicates: usize,
+    ) -> Result<Self> {
+        let (format, catalog) =
+            validate_candidate(&blob, working_limit(max_database_bytes), max_predicates)?;
         Ok(Self {
             blob,
             catalog,
@@ -60,7 +78,16 @@ impl StorageState {
         self.format
     }
 
+    #[cfg(test)]
     pub(crate) fn candidate(&self, max_bytes: usize) -> Result<Candidate<'_>> {
-        Candidate::new(self, max_bytes)
+        self.candidate_with_validation_limits(max_bytes, usize::MAX)
+    }
+
+    pub(crate) fn candidate_with_validation_limits(
+        &self,
+        max_bytes: usize,
+        max_predicates: usize,
+    ) -> Result<Candidate<'_>> {
+        Candidate::new(self, max_bytes, max_predicates)
     }
 }

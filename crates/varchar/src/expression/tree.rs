@@ -58,46 +58,197 @@ pub(crate) trait Leaf {
     fn is_degenerate(&self) -> bool;
 }
 
-/// Whether `nodes` form one complete preorder tree.
-///
-/// Reserved for the debug assertions that guard program construction: every
-/// logical node needs at least two children, every leaf has to be satisfiable,
-/// and the walk has to consume the program exactly.
-pub(crate) fn is_well_formed<Payload: Leaf>(nodes: &[Node<Payload>]) -> bool {
-    walk_shape(nodes)
+/// The structural rules one flat program is validated against.
+#[derive(Clone, Copy)]
+pub(crate) struct ShapeRules {
+    reject_associative_nesting: bool,
 }
 
-fn walk_shape<Payload: Leaf>(nodes: &[Node<Payload>]) -> bool {
+impl ShapeRules {
+    /// Every program must be one complete preorder tree whose logical nodes
+    /// each have at least two children and whose leaves are all satisfiable.
+    pub(crate) const COMPLETE: Self = Self {
+        reject_associative_nesting: false,
+    };
+
+    /// Persisted `CHECK` programs additionally store associative chains
+    /// flattened, so an `AND` directly beneath an `AND` — or an `OR` beneath an
+    /// `OR` — is a second encoding of a tree that already has a canonical one.
+    pub(crate) const CANONICAL: Self = Self {
+        reject_associative_nesting: true,
+    };
+}
+
+/// The operation labels a shape walk reports its failures under.
+///
+/// Each pipeline keeps its own wording rather than the shared walk inventing a
+/// neutral one, so unifying the walk leaves every diagnostic unchanged.
+#[derive(Clone, Copy)]
+pub(crate) struct ShapeLabels {
+    /// Arithmetic that cannot represent the program's own child counts.
+    pub(crate) capacity: &'static str,
+    /// A failure to reserve one more open logical frame.
+    pub(crate) allocation: &'static str,
+}
+
+impl ShapeLabels {
+    /// Labels for the debug assertions that guard program construction, which
+    /// discard the error and report only that the program is malformed.
+    const CONSTRUCTION: Self = Self {
+        capacity: "validating a constructed expression program shape",
+        allocation: "reserving constructed expression shape validation state",
+    };
+}
+
+/// One logical node whose children are still being read.
+struct Frame {
+    operator: LogicalOperator,
+    remaining: usize,
+}
+
+/// Byte accounting for the frames a canonical-shape walk keeps open.
+pub(crate) trait FrameAccounting {
+    fn retain(&mut self, frames: usize) -> Result<()>;
+    fn release(&mut self, frames: usize);
+}
+
+/// Accounting for callers that do not meter shape-validation state.
+pub(crate) struct UntrackedFrames;
+
+impl FrameAccounting for UntrackedFrames {
+    fn retain(&mut self, _frames: usize) -> Result<()> {
+        Ok(())
+    }
+
+    fn release(&mut self, _frames: usize) {}
+}
+
+/// The byte size of one simultaneously open logical frame.
+#[cfg(test)]
+pub(crate) const fn frame_bytes() -> usize {
+    std::mem::size_of::<Frame>()
+}
+
+/// Whether `nodes` satisfy `rules`.
+///
+/// Reserved for the debug assertions that guard program construction: they have
+/// no error channel, so an exhausted allocator reads as a malformed program.
+pub(crate) fn is_well_formed<Payload: Leaf>(nodes: &[Node<Payload>], rules: ShapeRules) -> bool {
+    validate_shape(
+        nodes,
+        rules,
+        &mut UntrackedFrames,
+        ShapeLabels::CONSTRUCTION,
+    )
+    .unwrap_or(false)
+}
+
+/// Whether `nodes` form one complete preorder tree obeying `rules`.
+///
+/// `Ok(false)` reports a malformed program; the error channel is reserved for a
+/// walk that could not be carried out at all, so callers that turn a malformed
+/// program into a typed error keep that error distinct from exhaustion.
+///
+/// Only the associative-nesting rule needs to remember ancestors, so a walk
+/// without it neither allocates nor charges `accounting`.
+pub(crate) fn validate_shape<Payload: Leaf>(
+    nodes: &[Node<Payload>],
+    rules: ShapeRules,
+    accounting: &mut impl FrameAccounting,
+    labels: ShapeLabels,
+) -> Result<bool> {
+    let mut open = Vec::new();
+    let result = walk_shape(nodes, rules, accounting, labels, &mut open);
+    while !open.is_empty() {
+        release_frame(&mut open, accounting);
+    }
+    result
+}
+
+fn walk_shape<Payload: Leaf>(
+    nodes: &[Node<Payload>],
+    rules: ShapeRules,
+    accounting: &mut impl FrameAccounting,
+    labels: ShapeLabels,
+    open: &mut Vec<Frame>,
+) -> Result<bool> {
     let mut pending = 1_usize;
 
     for node in nodes {
         let Some(after_node) = pending.checked_sub(1) else {
-            return false;
+            return Ok(false);
         };
         pending = after_node;
 
+        if rules.reject_associative_nesting
+            && let Some(parent) = open.last_mut()
+        {
+            let Some(remaining) = parent.remaining.checked_sub(1) else {
+                return Ok(false);
+            };
+            parent.remaining = remaining;
+        }
+
         let children = match node.logical() {
-            Some((_, children)) => {
+            Some((operator, children)) => {
                 if children < 2 {
-                    return false;
+                    return Ok(false);
+                }
+                if rules.reject_associative_nesting {
+                    if open
+                        .last()
+                        .is_some_and(|parent| parent.operator == operator)
+                    {
+                        return Ok(false);
+                    }
+                    retain_frame(open, accounting, labels)?;
+                    open.push(Frame {
+                        operator,
+                        remaining: children,
+                    });
                 }
                 children
             }
             None => {
                 if node.leaf().is_some_and(Leaf::is_degenerate) {
-                    return false;
+                    return Ok(false);
+                }
+                if rules.reject_associative_nesting {
+                    while open.last().is_some_and(|frame| frame.remaining == 0) {
+                        release_frame(open, accounting);
+                    }
                 }
                 0
             }
         };
 
-        let Some(next) = pending.checked_add(children) else {
-            return false;
-        };
-        pending = next;
+        pending = pending.checked_add(children).ok_or(Error::Capacity {
+            operation: labels.capacity,
+        })?;
     }
 
-    pending == 0
+    Ok(pending == 0)
+}
+
+fn retain_frame(
+    open: &mut Vec<Frame>,
+    accounting: &mut impl FrameAccounting,
+    labels: ShapeLabels,
+) -> Result<()> {
+    accounting.retain(1)?;
+    if open.try_reserve(1).is_err() {
+        accounting.release(1);
+        return Err(Error::Allocation {
+            operation: labels.allocation,
+        });
+    }
+    Ok(())
+}
+
+fn release_frame(open: &mut Vec<Frame>, accounting: &mut impl FrameAccounting) {
+    open.pop()
+        .expect("shape accounting only releases retained frames");
+    accounting.release(1);
 }
 
 /// The size of the subtree rooted at each node, in preorder positions.

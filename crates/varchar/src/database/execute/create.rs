@@ -13,7 +13,10 @@ impl Database {
             self.limits.max_predicates,
         )?;
         let table = resolved.schema.name.clone();
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate_with_validation_limits(
+            self.limits.max_database_bytes,
+            self.limits.max_predicates,
+        )?;
         candidate.insert_schema_with_auto_increment(&resolved.schema, resolved.auto_increment)?;
         self.storage = candidate.finish()?;
         Ok(Outcome::Created { table })

@@ -11,7 +11,10 @@ impl Database {
         let auto_increment = self.storage.catalog().auto_increment(&statement.table);
         let resolved =
             resolve::insert_values(schema, auto_increment, statement.columns, statement.values)?;
-        let mut candidate = self.storage.candidate(self.limits.max_database_bytes)?;
+        let mut candidate = self.storage.candidate_with_validation_limits(
+            self.limits.max_database_bytes,
+            self.limits.max_predicates,
+        )?;
         if let Some(last) = resolved.next_auto_increment {
             candidate.advance_auto_increment(&statement.table, last)?;
         }
