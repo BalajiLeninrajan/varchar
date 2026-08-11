@@ -1,7 +1,7 @@
 use super::ResultColumn;
 use crate::value::Value;
 
-/// An immutable, materialized snapshot returned by a `SELECT`.
+/// An immutable, materialized tabular result returned by a statement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowSet {
     columns: Vec<ResultColumn>,
@@ -17,7 +17,7 @@ impl RowSet {
         Self { columns, rows }
     }
 
-    /// Projected columns, in query order and including duplicates.
+    /// Result columns, in statement-defined order and including duplicates.
     #[must_use]
     pub fn columns(&self) -> &[ResultColumn] {
         &self.columns

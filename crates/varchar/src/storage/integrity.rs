@@ -5,10 +5,10 @@ mod unique;
 
 use std::cmp::Ordering;
 
-use super::budget::WorkingBudget;
 use super::decode::row_records;
 use super::{Catalog, TableSchema};
 use crate::Error;
+use crate::limits::ByteBudget;
 
 pub(super) enum ValidationError {
     Storage(Error),
@@ -61,7 +61,7 @@ impl<'a> PrimaryValueSet<'a> {
     ///
     /// Returns the working bytes the key charged, so the pass that owns the index accumulates
     /// exactly what it has to hand back.
-    fn push(&mut self, value: &'a str, budget: &mut WorkingBudget) -> Result<usize, Error> {
+    fn push(&mut self, value: &'a str, budget: &mut ByteBudget) -> Result<usize, Error> {
         match self {
             Self::Single(slot @ None) => {
                 *slot = Some(value);
@@ -139,7 +139,7 @@ fn primary_values_index(values: &[PrimaryValues<'_>], table: &str) -> Option<usi
 pub(super) fn validate_rows(
     blob: &str,
     catalog: &Catalog,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
     check_like_work_limit: usize,
 ) -> ValidationResult<()> {
     let primary_count = catalog

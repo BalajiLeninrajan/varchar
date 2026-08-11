@@ -3,8 +3,9 @@
 use std::cell::Cell;
 use std::cmp::Ordering;
 
-use super::model::{FrozenRow, RowIdentity, WorkingBudget, decoded_values_bytes};
+use super::model::{FrozenRow, RowIdentity, decoded_values_bytes};
 use super::{invalid_range, push_delete_queue, row_record_for_identity};
+use crate::limits::ByteBudget;
 use crate::storage::{
     self, Catalog, ForeignKey, ForeignKeyDeleteAction, ForeignKeyUpdateAction, TableSchema,
 };
@@ -34,7 +35,7 @@ impl ReferentialRelevance {
         self.tables.iter().any(|flags| flags & RELEVANT_CHILD != 0)
     }
 
-    fn release(self, budget: &mut WorkingBudget) {
+    fn release(self, budget: &mut ByteBudget) {
         let working_bytes = self.working_bytes;
         drop(self);
         budget.release(working_bytes);
@@ -84,7 +85,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         root_table: &str,
         root_rows: &[FrozenRow],
         action: ReferentialAction,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<Self> {
         let relevance = referential_relevance(catalog, root_table, action, budget)?;
         let mut index = Self {
@@ -189,7 +190,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         Ok(index)
     }
 
-    pub(super) fn release(self, budget: &mut WorkingBudget) {
+    pub(super) fn release(self, budget: &mut ByteBudget) {
         let working_bytes = self.working_bytes;
         drop(self);
         budget.release(working_bytes);
@@ -220,7 +221,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         rows: &mut Vec<FrozenRow>,
         delete_queue: &mut Vec<RowIdentity>,
         queue_working_bytes: &mut usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         // Every direct target is frozen and marked deleted before expansion
         // starts, so this prefix is a statement-wide fact rather than a
@@ -299,7 +300,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         rows: &mut Vec<FrozenRow>,
         update_queue: &mut Vec<usize>,
         queue_working_bytes: &mut usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let mut cursor = 0;
         while let Some(parent_index) = update_queue.get(cursor).copied() {
@@ -434,7 +435,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         &self,
         child: usize,
         rows: &mut Vec<FrozenRow>,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<usize> {
         let child = &self.children[child];
         let frozen_index = child.frozen_index.get();
@@ -469,7 +470,7 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         ))
     }
 
-    fn reserve_child(&mut self, budget: &mut WorkingBudget) -> Result<()> {
+    fn reserve_child(&mut self, budget: &mut ByteBudget) -> Result<()> {
         let charged = budget.reserve_for_push_charged(
             &mut self.children,
             "reserving indexed referential child rows",
@@ -477,13 +478,13 @@ impl<'catalog, 'blob> ReferentialIndex<'catalog, 'blob> {
         self.add_working_bytes(charged, budget)
     }
 
-    fn reserve_edge(&mut self, budget: &mut WorkingBudget) -> Result<()> {
+    fn reserve_edge(&mut self, budget: &mut ByteBudget) -> Result<()> {
         let charged = budget
             .reserve_for_push_charged(&mut self.edges, "reserving indexed referential edges")?;
         self.add_working_bytes(charged, budget)
     }
 
-    fn add_working_bytes(&mut self, charged: usize, budget: &WorkingBudget) -> Result<()> {
+    fn add_working_bytes(&mut self, charged: usize, budget: &ByteBudget) -> Result<()> {
         self.working_bytes = self
             .working_bytes
             .checked_add(charged)
@@ -496,7 +497,7 @@ fn push_update_queue(
     queue: &mut Vec<usize>,
     frozen_index: usize,
     queue_working_bytes: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let charged =
         budget.reserve_for_push_charged(queue, "reserving the referential update queue")?;
@@ -511,7 +512,7 @@ fn referential_relevance(
     catalog: &Catalog,
     root_table: &str,
     action: ReferentialAction,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<ReferentialRelevance> {
     let table_count = catalog.table_count();
     let mut tables = Vec::new();
@@ -574,7 +575,7 @@ fn expand_cascade_tables(
     root: usize,
     relevant: &mut [u8],
     action: ReferentialAction,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<bool> {
     let mut cascade_edges = Vec::new();
     let mut cascade_edge_bytes = 0_usize;
@@ -660,7 +661,7 @@ fn direct_parent_keys<'blob>(
     catalog: &Catalog,
     root_table: &str,
     rows: &[FrozenRow],
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<(Vec<&'blob str>, usize)> {
     let schema = catalog
         .table(root_table)

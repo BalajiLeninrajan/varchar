@@ -3,6 +3,7 @@
 mod create;
 mod delete;
 mod insert;
+mod metadata;
 mod mutation_plan;
 mod update;
 
@@ -26,6 +27,16 @@ impl Database {
             }
             Statement::Update(statement) => self.execute_update(statement),
             Statement::Delete(statement) => self.execute_delete(statement),
+            Statement::ShowTables => {
+                metadata::show_tables(self.storage.catalog(), self.limits.max_query_output_bytes)
+                    .map(Outcome::Rows)
+            }
+            Statement::DescribeTable(statement) => metadata::describe_table(
+                self.storage.catalog(),
+                &statement,
+                self.limits.max_query_output_bytes,
+            )
+            .map(Outcome::Rows),
             Statement::ExplainRegex(statement) => self
                 .compile_select_ast(&statement)?
                 .into_explanation(self.limits.max_query_output_bytes)

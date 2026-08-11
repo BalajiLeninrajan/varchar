@@ -1,12 +1,12 @@
 use super::{CatalogMap, next_capacity};
-use crate::storage::budget::WorkingBudget;
+use crate::limits::ByteBudget;
 use crate::{Error, Resource};
 
 #[test]
 fn ascending_and_descending_insertions_remain_searchable() {
     for descending in [false, true] {
         let mut map = CatalogMap::new();
-        let mut budget = WorkingBudget::new(usize::MAX);
+        let mut budget = ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes);
         let keys = (0..1_024).map(|index| format!("table_{index:04}"));
         let keys: Vec<_> = if descending {
             keys.rev().collect()
@@ -32,7 +32,7 @@ fn ascending_and_descending_insertions_remain_searchable() {
 #[test]
 fn index_accounting_precedes_catalog_allocation() {
     let limit = std::mem::size_of::<usize>() * 3 - 1;
-    let mut budget = WorkingBudget::new(limit);
+    let mut budget = ByteBudget::new(limit, Resource::StorageWorkingBytes);
     let mut map = CatalogMap::new();
 
     assert!(matches!(
@@ -53,7 +53,7 @@ fn index_accounting_precedes_catalog_allocation() {
 #[test]
 fn exact_index_charge_is_independent_of_payload_size() {
     let index_bytes = std::mem::size_of::<usize>() * 3;
-    let mut budget = WorkingBudget::new(index_bytes);
+    let mut budget = ByteBudget::new(index_bytes, Resource::StorageWorkingBytes);
     let mut map = CatalogMap::new();
 
     map.insert_new(
@@ -83,7 +83,7 @@ fn exact_index_charge_is_independent_of_payload_size() {
 fn failed_second_index_charge_preserves_the_first_entry() {
     let index_bytes = std::mem::size_of::<usize>() * 3;
     let limit = index_bytes * 2 - 1;
-    let mut budget = WorkingBudget::new(limit);
+    let mut budget = ByteBudget::new(limit, Resource::StorageWorkingBytes);
     let mut map = CatalogMap::new();
 
     map.insert_new(

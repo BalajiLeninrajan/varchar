@@ -4,7 +4,6 @@ mod check;
 
 use std::ops::Range;
 
-use super::super::budget::WorkingBudget;
 use super::super::catalog::{AutoIncrementState, CatalogMap};
 use super::super::decode::{
     AutoIncrementMetadata, CheckMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata,
@@ -13,6 +12,7 @@ use super::super::decode::{
 use super::super::{Catalog, ForeignKey, ForeignKeyDeleteAction, TableSchema};
 use super::ValidationMode;
 use crate::expression::CheckProgram;
+use crate::limits::ByteBudget;
 use crate::{DataType, Error, Result};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -87,7 +87,7 @@ impl MetadataValidator {
         &mut self,
         schema: TableSchema,
         offset: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         if self.tables.contains_key(&schema.name) {
             return Err(super::super::format::corrupt(
@@ -123,7 +123,7 @@ impl MetadataValidator {
         metadata: ForeignKeyMetadata<'_>,
         offset: usize,
         mode: ValidationMode,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let result = self.apply_foreign_key_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
@@ -134,7 +134,7 @@ impl MetadataValidator {
         metadata: AutoIncrementMetadata<'_>,
         record_range: Range<usize>,
         mode: ValidationMode,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let result = self.apply_auto_increment_inner(metadata, record_range, budget);
         result.map_err(|violation| violation.into_error(mode))
@@ -145,7 +145,7 @@ impl MetadataValidator {
         metadata: DefaultMetadata<'_>,
         offset: usize,
         mode: ValidationMode,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let result = self.apply_default_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
@@ -156,7 +156,7 @@ impl MetadataValidator {
         metadata: UniqueMetadata<'_>,
         offset: usize,
         mode: ValidationMode,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let result = self.apply_unique_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
@@ -168,7 +168,7 @@ impl MetadataValidator {
         offset: usize,
         mode: ValidationMode,
         max_predicates: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> Result<()> {
         let result = self.apply_check_inner(metadata, offset, max_predicates, budget);
         result.map_err(|violation| violation.into_error(mode))
@@ -232,7 +232,7 @@ impl MetadataValidator {
         &mut self,
         metadata: ForeignKeyMetadata<'_>,
         offset: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> std::result::Result<(), Violation> {
         if self.state.phase != MetadataPhase::Keys || metadata.table != self.state.table {
             return Err(Violation::new(
@@ -358,7 +358,7 @@ impl MetadataValidator {
         &mut self,
         metadata: AutoIncrementMetadata<'_>,
         record_range: Range<usize>,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> std::result::Result<(), Violation> {
         let offset = record_range.start;
         if self.state.phase != MetadataPhase::Keys
@@ -424,7 +424,7 @@ impl MetadataValidator {
         &mut self,
         metadata: DefaultMetadata<'_>,
         offset: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> std::result::Result<(), Violation> {
         if !matches!(
             self.state.phase,
@@ -493,7 +493,7 @@ impl MetadataValidator {
         &mut self,
         metadata: UniqueMetadata<'_>,
         offset: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> std::result::Result<(), Violation> {
         if !matches!(
             self.state.phase,
@@ -556,7 +556,7 @@ impl MetadataValidator {
         metadata: CheckMetadata<'_>,
         offset: usize,
         max_predicates: usize,
-        budget: &mut WorkingBudget,
+        budget: &mut ByteBudget,
     ) -> std::result::Result<(), Violation> {
         if !matches!(
             self.state.phase,
@@ -599,7 +599,7 @@ impl MetadataValidator {
     }
 }
 
-fn reserve_check_program(checks: &mut Vec<CheckProgram>, budget: &mut WorkingBudget) -> Result<()> {
+fn reserve_check_program(checks: &mut Vec<CheckProgram>, budget: &mut ByteBudget) -> Result<()> {
     const OPERATION: &str = "reserving decoded CHECK metadata";
 
     budget.charge_items::<CheckProgram>(1)?;
@@ -620,7 +620,7 @@ fn reserve_check_program(checks: &mut Vec<CheckProgram>, budget: &mut WorkingBud
     Ok(())
 }
 
-fn reserve_unique_column(columns: &mut Vec<usize>, budget: &mut WorkingBudget) -> Result<()> {
+fn reserve_unique_column(columns: &mut Vec<usize>, budget: &mut ByteBudget) -> Result<()> {
     const OPERATION: &str = "reserving decoded UNIQUE metadata";
 
     budget.charge_items::<usize>(1)?;

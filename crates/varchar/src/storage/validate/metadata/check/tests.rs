@@ -1,8 +1,8 @@
 use super::super::reserve_check_program;
 use super::{Field, ShapeFrame, decode_program, decode_usize};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
+use crate::limits::ByteBudget;
 use crate::storage::TableSchema;
-use crate::storage::budget::WorkingBudget;
 use crate::storage::decode::CheckMetadata;
 use crate::{DataType, Error, Resource, SchemaColumn, Value};
 
@@ -69,7 +69,7 @@ fn check_programs_accept_the_exact_logical_budget_and_reject_one_under() {
         + in_values * std::mem::size_of::<Value>()
         + charged_text_bytes;
 
-    let mut exact_budget = WorkingBudget::new(exact);
+    let mut exact_budget = ByteBudget::new(exact, Resource::StorageWorkingBytes);
     let (decoded, predicates) = decode_program(&schema, metadata, 0, usize::MAX, &mut exact_budget)
         .expect("the exact CHECK reconstruction budget is sufficient");
     assert_eq!(decoded.nodes().len(), node_count);
@@ -97,7 +97,7 @@ fn check_programs_accept_the_exact_logical_budget_and_reject_one_under() {
         },
         0,
         usize::MAX,
-        &mut WorkingBudget::new(exact - 1),
+        &mut ByteBudget::new(exact - 1, Resource::StorageWorkingBytes),
     )
     .expect_err("one byte below the CHECK reconstruction budget must fail");
     assert!(matches!(
@@ -114,7 +114,7 @@ fn retained_check_programs_charge_logical_descriptors_not_vector_capacity() {
     let descriptor_bytes = std::mem::size_of::<CheckProgram>();
     let exact = 3 * descriptor_bytes;
     let mut checks = Vec::new();
-    let mut exact_budget = WorkingBudget::new(exact);
+    let mut exact_budget = ByteBudget::new(exact, Resource::StorageWorkingBytes);
     for _ in 0..3 {
         reserve_check_program(&mut checks, &mut exact_budget)
             .expect("three logical CHECK descriptors fit exactly");
@@ -132,7 +132,7 @@ fn retained_check_programs_charge_logical_descriptors_not_vector_capacity() {
 
     let one_under_limit = exact - 1;
     let mut checks = Vec::new();
-    let mut one_under = WorkingBudget::new(one_under_limit);
+    let mut one_under = ByteBudget::new(one_under_limit, Resource::StorageWorkingBytes);
     for _ in 0..2 {
         reserve_check_program(&mut checks, &mut one_under)
             .expect("two descriptors fit below the three-item boundary");
@@ -204,7 +204,7 @@ fn persisted_check_numeric_fields_use_a_u32_grammar() {
                 },
                 0,
                 usize::MAX,
-                &mut WorkingBudget::new(0),
+                &mut ByteBudget::new(0, Resource::StorageWorkingBytes),
             ),
             Err(Error::CorruptStorage { offset, message })
                 if offset == OFFSET && message == expected
@@ -228,7 +228,7 @@ fn predicate_limit_is_checked_before_reconstruction_budget() {
             },
             existing,
             max_predicates,
-            &mut WorkingBudget::new(0),
+            &mut ByteBudget::new(0, Resource::StorageWorkingBytes),
         )
         .expect_err("the cumulative predicate limit is checked before reconstruction");
 
@@ -255,7 +255,7 @@ fn malformed_programs_are_rejected_before_working_budget_is_consumed() {
         },
         0,
         0,
-        &mut WorkingBudget::new(0),
+        &mut ByteBudget::new(0, Resource::StorageWorkingBytes),
     )
     .expect_err("late malformed storage must not be masked by the working limit");
 
@@ -291,7 +291,7 @@ fn earlier_noncanonical_nesting_precedes_later_structural_corruption_when_discov
             metadata(),
             0,
             usize::MAX,
-            &mut WorkingBudget::new(usize::MAX),
+            &mut ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes),
         ),
         Err(Error::CorruptStorage { offset, message })
             if offset == nested_offset
@@ -303,7 +303,7 @@ fn earlier_noncanonical_nesting_precedes_later_structural_corruption_when_discov
             metadata(),
             0,
             usize::MAX,
-            &mut WorkingBudget::new(0),
+            &mut ByteBudget::new(0, Resource::StorageWorkingBytes),
         ),
         Err(Error::CorruptStorage { offset, message })
             if offset == structural_offset && message == "unknown CHECK program opcode"
@@ -326,7 +326,7 @@ fn canonical_nesting_diagnostics_require_the_bounded_shape_stack() {
             metadata(),
             0,
             usize::MAX,
-            &mut WorkingBudget::new(0),
+            &mut ByteBudget::new(0, Resource::StorageWorkingBytes),
         ),
         Err(Error::ResourceLimit {
             resource: Resource::StorageWorkingBytes,
@@ -343,7 +343,7 @@ fn canonical_nesting_diagnostics_require_the_bounded_shape_stack() {
             metadata(),
             0,
             usize::MAX,
-            &mut WorkingBudget::new(usize::MAX),
+            &mut ByteBudget::new(usize::MAX, Resource::StorageWorkingBytes),
         ),
         Err(Error::CorruptStorage { offset, message })
             if offset == nested_offset
@@ -363,7 +363,7 @@ fn deep_check_reconstruction_uses_the_exact_logical_peak() {
     let shape_bytes = DEPTH * std::mem::size_of::<ShapeFrame>();
     let exact = retained_node_bytes + shape_bytes;
 
-    let mut exact_budget = WorkingBudget::new(exact);
+    let mut exact_budget = ByteBudget::new(exact, Resource::StorageWorkingBytes);
     let (decoded, predicates) = decode_program(
         &schema,
         CheckMetadata {
@@ -400,7 +400,7 @@ fn deep_check_reconstruction_uses_the_exact_logical_peak() {
             },
             0,
             usize::MAX,
-            &mut WorkingBudget::new(exact - 1),
+            &mut ByteBudget::new(exact - 1, Resource::StorageWorkingBytes),
         ),
         Err(Error::ResourceLimit {
             resource: Resource::StorageWorkingBytes,
@@ -418,7 +418,7 @@ fn shape_prevalidation_is_linear_and_releases_partial_budget_on_failure() {
 
     let available_frames = 3;
     let limit = available_frames * std::mem::size_of::<ShapeFrame>();
-    let mut budget = WorkingBudget::new(limit);
+    let mut budget = ByteBudget::new(limit, Resource::StorageWorkingBytes);
     let error = decode_program(
         &schema,
         CheckMetadata {

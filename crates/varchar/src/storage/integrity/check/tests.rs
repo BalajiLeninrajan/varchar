@@ -1,7 +1,7 @@
 use super::super::ValidationError;
 use super::validate;
 use crate::expression::CheckEvaluator;
-use crate::storage::budget::WorkingBudget;
+use crate::limits::ByteBudget;
 use crate::storage::validate::validate_and_catalog;
 use crate::{Error, Resource, Value};
 
@@ -15,7 +15,7 @@ fn check_rows_accept_the_exact_logical_budget_and_reject_one_under() {
         + CheckEvaluator::working_bytes(1).expect("one evaluator frame can be sized")
         + row_text_bytes;
 
-    let mut exact_budget = WorkingBudget::new(exact);
+    let mut exact_budget = ByteBudget::new(exact, Resource::StorageWorkingBytes);
     assert!(
         validate(blob, &catalog, &mut exact_budget, usize::MAX).is_ok(),
         "the exact CHECK row workspace is sufficient"
@@ -29,7 +29,7 @@ fn check_rows_accept_the_exact_logical_budget_and_reject_one_under() {
         validate(
             blob,
             &catalog,
-            &mut WorkingBudget::new(exact - 1),
+            &mut ByteBudget::new(exact - 1, Resource::StorageWorkingBytes),
             usize::MAX,
         ),
         Err(ValidationError::Storage(Error::ResourceLimit {

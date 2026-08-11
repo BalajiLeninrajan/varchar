@@ -59,7 +59,38 @@ Varchar accepts one statement at a time, with an optional trailing semicolon.
 | Join | `SELECT users.name, posts.body FROM users JOIN posts ON users.id = posts.user_id` |
 | Update | `UPDATE users SET active = FALSE WHERE id = 1` |
 | Delete | `DELETE FROM users WHERE name LIKE 'A%'` |
+| Show tables | `SHOW TABLES` |
+| Describe table | `DESCRIBE users` |
 | Explain | `EXPLAIN REGEX SELECT name FROM users WHERE active = TRUE` |
+
+### Schema metadata
+
+`SHOW TABLES` and `DESCRIBE table` are read-only statements returned as `Outcome::Rows`. They inspect the validated in-memory catalog without rewriting the authoritative database string. Metadata columns use stable virtual origins under `information_schema.tables` and `information_schema.columns`.
+
+`SHOW TABLES` returns:
+
+| Column | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `table_name` | `TEXT` | no | Normalized table name, in catalog creation order. |
+
+`DESCRIBE table` returns one row per column, in declaration order:
+
+| Column | Type | Nullable | Meaning |
+| --- | --- | --- | --- |
+| `column_name` | `TEXT` | no | Normalized column name. |
+| `data_type` | `TEXT` | no | Canonical `TEXT`, `INTEGER`, or `BOOLEAN`. |
+| `nullable` | `BOOLEAN` | no | Whether the column accepts `NULL`. |
+| `primary_key` | `BOOLEAN` | no | Whether the column is the table's primary key. |
+| `unique` | `BOOLEAN` | no | Whether the column is semantically unique; primary keys report `true`. |
+| `default_value` | `TEXT` | yes | SQL `NULL` when no default exists; otherwise the SQL literal that parses back to the default: `NULL` for an explicit `DEFAULT NULL`, a quoted TEXT literal with apostrophes doubled (`'seed'`, `'NULL'`, `'it''s'`), a decimal integer, or `TRUE`/`FALSE`. |
+| `auto_increment` | `BOOLEAN` | no | Whether the column owns the table's auto-increment sequence. |
+
+```sql
+SHOW TABLES;
+DESCRIBE users;
+```
+
+Metadata materialization is bounded by `Limits::max_query_output_bytes` and reports `Resource::QueryOutputBytes` on exhaustion. It does not consume `max_query_working_bytes` because neither statement sorts nor retains query-working state.
 
 Column types are `TEXT`, signed 64-bit `INTEGER`, and `BOOLEAN`. Columns are nullable unless declared `NOT NULL`; `NULL` is represented as its own typed value. A column may declare one literal `DEFAULT`, including an explicit `DEFAULT NULL`.
 
@@ -252,7 +283,7 @@ assert_eq!(db.as_str(), before);
 
 Match on `Error` variants for structured diagnostics; human-readable `Display` text is intended for people and may change. Parse and unsupported-syntax errors carry half-open UTF-8 byte offsets into the original SQL input. Corrupt-storage offsets refer to bytes in the encoded database blob, not decoded values. A configured limit failure includes both its typed `Resource` and limit. It returns no partial result, and a failed mutation—including one rejected by a limit—leaves the authoritative blob byte-for-byte unchanged.
 
-Query rows, projected-column metadata, provenance, and `SelectExplanation` values are immutable snapshots produced by the engine. Inspect them through their accessors; a `RowSet` can also be consumed with `into_rows` or `into_parts` when the caller needs owned values.
+Tabular rows, result-column metadata, provenance, and `SelectExplanation` values are immutable snapshots produced by the engine. `SELECT`, `SHOW TABLES`, and `DESCRIBE` all return tabular data as `Outcome::Rows`. Inspect snapshots through their accessors; a `RowSet` can also be consumed with `into_rows` or `into_parts` when the caller needs owned values.
 
 ## WebAssembly
 
@@ -267,7 +298,7 @@ The punchline is also the performance model:
 - Except for `LIMIT 0`, every executed query scans the database string once. Unordered single-table queries are **O(n)** in database size; joins then use budgeted, materialized nested loops whose work can grow to the product of participating row counts. Unordered results stream in qualifying order, apply `OFFSET` before cloning output values, and stop once `LIMIT` is full. For `r` qualifying rows and a window of `w = OFFSET + LIMIT` rows, `ORDER BY` retains `min(r, w)` projections, each plus one owned value per sort key and a tie-breaking ordinal, in a max-heap keyed by the sort order; a row that cannot beat the heap root is dropped without being cloned, and one that can evicts the root in **O(log w)**. Without a `LIMIT` the window is open-ended and every qualifying row is retained. The retained rows are then sorted with **O(min(r, w) log min(r, w))** row comparisons; each comparison may inspect multiple keys, and each TEXT-key comparison may scan a shared Unicode-scalar prefix. The sort is allocation-free and unstable internally, with the ordinal preserving input order on final ties; only then is the pagination window applied. `LIMIT 0` completes planning but skips the scan and join traversal.
 - Every mutation builds and validates a candidate string before replacing the old state. Inserts and schema changes copy the authoritative blob. Updates and deletes scan the original blob to freeze all direct targets, plan replacements, and apply sorted edits before finishing the candidate. A delete with reachable foreign-key actions, or a primary-key update with inbound foreign keys, performs one additional immutable-source scan to index the direct parent keys and cascade-reachable child schemas; mutations without inbound relationships skip that scan. They still finish a candidate when no row matches, so all mutation paths are **O(n)** in database size; a zero-match update or delete installs a separately validated but byte-identical state.
 - There are no data indexes, transactions, WALs, or concurrent-writer guarantees.
-- Inputs, generated regexes, join execution work, regex backtracking, and auxiliary storage validation state are bounded. The private storage-working bound is `max_database_bytes.saturating_mul(4)`; storage reconstruction and complete candidate validation conservatively charge catalog reconstruction, owned metadata, and validation indexes separately from the authoritative string's `DatabaseBytes` limit. `max_predicates` bounds each `WHERE` independently and, separately, the cumulative CHECK predicate units for each table: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, rows plus pointer state retained for joins, and every ordered pending-row descriptor, projected value, owned sort key, text payload, and `u64` ordinal before allocation. An ordered row evicted from a bounded pagination window refunds its charge, so the ordered charge tracks live retained rows rather than every row scanned. Ordered sorting itself uses no scratch allocation. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and only the final rows remaining after pagination, or materialized `SelectExplanation` patterns, sources, and column metadata.
+- Inputs, generated regexes, join execution work, regex backtracking, and auxiliary storage validation state are bounded. The private storage-working bound is `max_database_bytes.saturating_mul(4)`; storage reconstruction and complete candidate validation conservatively charge catalog reconstruction, owned metadata, and validation indexes separately from the authoritative string's `DatabaseBytes` limit. `max_predicates` bounds each `WHERE` independently and, separately, the cumulative CHECK predicate units for each table: ordinary predicate leaves consume one unit, `IN` consumes one unit per list member, and `AND`, `OR`, and parentheses consume none. `SELECT` working state and returned output have independent 32 MiB logical-byte defaults: the working budget conservatively charges transient decoded rows, one reusable residual-evaluation stack, rows plus pointer state retained for joins, and every ordered pending-row descriptor, projected value, owned sort key, text payload, and `u64` ordinal before allocation. An ordered row evicted from a bounded pagination window refunds its charge, so the ordered charge tracks live retained rows rather than every row scanned. Ordered sorting itself uses no scratch allocation. `max_query_output_bytes` independently bounds projection-location preflight; a fresh output budget then charges returned `RowSet` metadata and materialized rows—only the final rows remaining after `SELECT` pagination, or all rows produced by `SHOW TABLES` and `DESCRIBE`—as well as materialized `SelectExplanation` patterns, sources, and column metadata.
 - `UPDATE` and `DELETE` do not consume the `SELECT` working budget. Their frozen targets, decoded values, effective overlays, reusable expression stack, referential child and edge indexes, delete and update cascade queues, pending `SET NULL` columns, encoded replacements, and deferred sequence state use an independent accounting pass under the same private storage-working bound. Update overlays use one directly indexed optional slot per column so overlapping cascade paths coalesce without repeated insertion shifts. Database-size preflight measures every replacement using its row's validated table layout without retaining a second per-row length array; each row is then remeasured immediately before a bounded encoder rejects output that exceeds or underfills the measurement. Each row's overlays are released after its encoded replacement is installed. The dense deferred-sequence index is charged before its first allocation once direct targets exist: direct sequence edits can overlap overlays and referential traversal, while sequence edits discovered through cascades join after traversal has released its indexes and queues. The largest encoded sequence replacement is checked as a later transient peak while the frozen rows, encoded replacements, and deferred descriptors remain live. Deferred mutation state is consumed or discarded before final candidate validation begins. Exhausting this budget reports `Resource::StorageWorkingBytes`; the final authoritative candidate remains governed by `Resource::DatabaseBytes`. Mutation planning and final candidate validation use separate budget instances derived from the same bound. These logical budgets are safety rails rather than a total query or process memory cap: they exclude other planning allocations, regex-engine scratch space, the authoritative string, allocator overhead and capacity beyond conservative descriptor charges, and the candidate string itself. Logical charges include target-layout sizes, so exact boundaries can differ between 32-bit and 64-bit builds. Both `SELECT` budgets can be live at once, and a limit failure returns no partial result or mutation.
 
 Varchar is meant to be understandable, inspectable, and funny—not fast.

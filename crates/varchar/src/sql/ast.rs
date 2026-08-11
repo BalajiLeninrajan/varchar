@@ -13,7 +13,14 @@ pub(crate) enum Statement {
     Select(Select),
     Update(Update),
     Delete(Delete),
+    ShowTables,
+    DescribeTable(DescribeTable),
     ExplainRegex(Select),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DescribeTable {
+    pub(crate) table: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -9,7 +9,8 @@ mod referential;
 
 use std::ops::Range;
 
-use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
+use crate::limits::ByteBudget;
+use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, decoded_values_bytes};
 use referential::{ReferentialAction, ReferentialIndex};
 
 use crate::expression::Evaluator;
@@ -220,7 +221,7 @@ fn push_update_queue(
     queue: &mut Vec<usize>,
     frozen_index: usize,
     queue_working_bytes: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let charged =
         budget.reserve_for_push_charged(queue, "reserving the referential update queue")?;
@@ -235,7 +236,7 @@ fn push_delete_queue(
     queue: &mut Vec<RowIdentity>,
     identity: RowIdentity,
     queue_working_bytes: &mut usize,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let charged =
         budget.reserve_for_push_charged(queue, "reserving the referential delete queue")?;
@@ -277,8 +278,8 @@ fn freeze_direct_targets(
     scan: &ScanPlan<'_>,
     limits: &Limits,
     retained_working_bytes: usize,
-) -> Result<(Vec<FrozenRow>, usize, WorkingBudget)> {
-    let mut budget = WorkingBudget::for_database_limit(limits.max_database_bytes);
+) -> Result<(Vec<FrozenRow>, usize, ByteBudget)> {
+    let mut budget = ByteBudget::for_database_limit(limits.max_database_bytes);
     budget.charge(retained_working_bytes)?;
     let residual = scan.local_residual();
     let evaluator_bytes = residual
@@ -315,7 +316,7 @@ fn measure_and_check_update_database_size<'brand>(
     encoder: &ValidatedRowEncoder<'_, 'brand>,
     update: &PreparedDirectUpdate<'_>,
     sequence_edit_lengths: Option<(usize, usize)>,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<(Vec<MeasuredRowEncoding<'brand>>, usize)> {
     let mut measurements = Vec::new();
     let measurement_working_bytes = budget.reserve_exact(
@@ -345,7 +346,7 @@ fn defer_auto_increment(
     candidate: &mut Candidate<'_>,
     table: &str,
     last: i64,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let reservation_bytes = candidate.deferred_auto_increment_reservation_bytes()?;
     budget.charge(reservation_bytes)?;
@@ -360,7 +361,7 @@ fn defer_induced_auto_increments(
     candidate: &mut Candidate<'_>,
     blob: &str,
     rows: &[FrozenRow],
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     for row in rows {
         if !row.needs_update() {
@@ -386,7 +387,7 @@ fn encode_and_check_updates(
     limits: &Limits,
     rows: &mut [FrozenRow],
     sequence_edit_lengths: Option<(usize, usize)>,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
 ) -> Result<()> {
     let mut projected = blob.len();
     if let Some((original, replacement)) = sequence_edit_lengths {
@@ -455,7 +456,7 @@ fn freeze_rows(
     blob: &str,
     ranges: impl IntoIterator<Item = Result<Range<usize>>>,
     layout: RowLayout<'_>,
-    budget: &mut WorkingBudget,
+    budget: &mut ByteBudget,
     mut passes_where: impl FnMut(&[Value]) -> Result<bool>,
 ) -> Result<(Vec<FrozenRow>, usize)> {
     let mut rows = Vec::new();
