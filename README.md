@@ -1,5 +1,13 @@
 # varchar
 
+[![CI](https://github.com/BalajiLeninrajan/varchar/actions/workflows/ci.yml/badge.svg)](https://github.com/BalajiLeninrajan/varchar/actions/workflows/ci.yml)
+[![varchar on crates.io](https://img.shields.io/crates/v/varchar.svg?label=varchar)](https://crates.io/crates/varchar)
+[![varchar-cli on crates.io](https://img.shields.io/crates/v/varchar-cli.svg?label=varchar-cli)](https://crates.io/crates/varchar-cli)
+[![docs.rs](https://img.shields.io/docsrs/varchar?label=docs.rs)](https://docs.rs/varchar)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/BalajiLeninrajan/varchar/blob/main/LICENSE)
+
+Source: [github.com/BalajiLeninrajan/varchar](https://github.com/BalajiLeninrajan/varchar)
+
 `varchar` is a really dumb SQL DB: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
 
 It is a real parser, type checker, storage codec, and query engine. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
@@ -10,28 +18,49 @@ $ varchar dump ./demo.varchar
 V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~A|users|id|I1;~R|users|I1|TAda|B1;
 ```
 
+## Install
+
+The workspace publishes two crates. [`varchar`](https://crates.io/crates/varchar) is the
+embeddable engine; [`varchar-cli`](https://crates.io/crates/varchar-cli) is the native
+command-line front end and installs a `varchar` binary.
+
+```console
+cargo install varchar-cli
+```
+
+```console
+cargo add varchar
+```
+
+Or build from a clone of the repository:
+
+```console
+git clone https://github.com/BalajiLeninrajan/varchar
+cargo build --workspace
+```
+
 ## Quick start
 
 ```console
-cargo build --workspace
-
-cargo run -p varchar-cli -- init ./demo.varchar
-cargo run -p varchar-cli -- exec ./demo.varchar \
+varchar init ./demo.varchar
+varchar exec ./demo.varchar \
   "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, active BOOLEAN)"
-cargo run -p varchar-cli -- exec ./demo.varchar \
+varchar exec ./demo.varchar \
   "INSERT INTO users (name, active) VALUES ('Ada', TRUE)"
-cargo run -p varchar-cli -- exec ./demo.varchar \
+varchar exec ./demo.varchar \
   "SELECT name, active FROM users WHERE id = 1 AND name LIKE 'A%'"
-cargo run -p varchar-cli -- exec ./demo.varchar \
+varchar exec ./demo.varchar \
   "EXPLAIN REGEX SELECT name FROM users WHERE active = TRUE"
-cargo run -p varchar-cli -- dump ./demo.varchar
+varchar dump ./demo.varchar
 ```
 
 To use the REPL:
 
 ```console
-cargo run -p varchar-cli -- shell ./demo.varchar
+varchar shell ./demo.varchar
 ```
+
+From a clone, replace `varchar` with `cargo run -p varchar-cli --` in any of the commands above.
 
 SQL statements in the shell end with `;`. Use `.dump` to inspect the raw database string and `.quit` to leave.
 
@@ -63,7 +92,8 @@ See the [SQL reference](https://github.com/BalajiLeninrajan/varchar/blob/main/do
 
 ## Library use
 
-The core crate is platform-neutral and keeps persistence in the host application:
+The core [`varchar`](https://crates.io/crates/varchar) crate is platform-neutral and keeps
+persistence in the host application:
 
 ```rust
 use varchar::{Database, Outcome};
@@ -80,7 +110,7 @@ let persisted: String = db.into_string();
 # Ok::<(), varchar::Error>(())
 ```
 
-See the [library API guide](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) for errors, limits, and `EXPLAIN REGEX` output.
+See the [library API guide](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) for errors, limits, and `EXPLAIN REGEX` output, and [docs.rs/varchar](https://docs.rs/varchar) for the generated API documentation.
 
 ## Caveats
 
@@ -88,6 +118,7 @@ Varchar is meant to be understandable, inspectable, and funny—not fast. Every 
 
 ## Documentation
 
+- [docs.rs/varchar](https://docs.rs/varchar) — generated API documentation for the core crate
 - [SQL reference](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/sql-reference.md) — the complete dialect, clause by clause
 - [Library API](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) — embedding the core crate, errors, and limits
 - [Architecture](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/architecture.md) — how the workspace, regex planner, and mutation planner fit together
