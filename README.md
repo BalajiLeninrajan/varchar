@@ -1,8 +1,8 @@
 # varchar
 
-`varchar` is a deliberately absurd database: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with generated regular expressions.
+`varchar` is a deliberately absurd database: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
 
-It is a real parser, type checker, storage codec, and query engine wrapped around a joke premise. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
+It is a real parser, type checker, storage codec, and query engine. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
 
 ```console
 $ varchar exec ./demo.varchar "SELECT name FROM users WHERE active = TRUE"
@@ -11,8 +11,6 @@ V2;~S|users|id:I:!|name:T:?|active:B:?;~P|users|id;~A|users|id|I1;~R|users|I1|TA
 ```
 
 ## Quick start
-
-The repository pins its Rust version and required components in `rust-toolchain.toml`.
 
 ```console
 cargo build --workspace
