@@ -2,13 +2,14 @@
 
 use std::fmt::{self, Write};
 
+use super::subtree_sizes;
 use crate::Value;
 use crate::sql::{Expression, ExpressionNode, Predicate, PredicateOperator};
 
 impl fmt::Display for Expression {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let nodes = self.nodes();
-        let sizes = subtree_sizes(nodes)?;
+        let sizes = subtree_sizes(nodes).map_err(|_| fmt::Error)?;
         let mut events = Vec::new();
         let mut children = Vec::new();
         events
@@ -73,42 +74,6 @@ enum Event {
     Node { index: usize, parent_precedence: u8 },
     Separator(&'static str),
     CloseParen,
-}
-
-fn subtree_sizes(nodes: &[ExpressionNode]) -> Result<Vec<usize>, fmt::Error> {
-    let mut sizes = Vec::new();
-    sizes
-        .try_reserve_exact(nodes.len())
-        .map_err(|_| fmt::Error)?;
-    sizes.resize(nodes.len(), 0);
-
-    let mut pending = Vec::new();
-    pending
-        .try_reserve_exact(nodes.len())
-        .map_err(|_| fmt::Error)?;
-    for (index, node) in nodes.iter().enumerate().rev() {
-        let size = match node {
-            ExpressionNode::Predicate(_) => 1,
-            ExpressionNode::And { children } | ExpressionNode::Or { children } => {
-                if pending.len() < *children {
-                    return Err(fmt::Error);
-                }
-                let mut size = 1_usize;
-                for _ in 0..*children {
-                    size = size
-                        .checked_add(pending.pop().ok_or(fmt::Error)?)
-                        .ok_or(fmt::Error)?;
-                }
-                size
-            }
-        };
-        sizes[index] = size;
-        pending.push(size);
-    }
-    if pending.len() != 1 {
-        return Err(fmt::Error);
-    }
-    Ok(sizes)
 }
 
 fn format_predicate(formatter: &mut fmt::Formatter<'_>, predicate: &Predicate) -> fmt::Result {

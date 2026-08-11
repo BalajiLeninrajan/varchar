@@ -1,5 +1,6 @@
 //! Flat parsed Boolean-expression programs.
 
+use crate::expression::{Leaf, Node, is_well_formed};
 use crate::{Error, Result, Value};
 
 use super::ColumnRef;
@@ -12,7 +13,7 @@ pub(crate) struct Expression {
 
 impl Expression {
     pub(crate) fn new(nodes: Vec<ExpressionNode>) -> Self {
-        debug_assert!(valid_program(&nodes));
+        debug_assert!(is_well_formed(&nodes));
         Self { nodes }
     }
 
@@ -31,33 +32,25 @@ impl Expression {
                 ExpressionNode::And { .. } | ExpressionNode::Or { .. } => 0,
             };
             count.checked_add(units).ok_or(Error::Capacity {
-                operation: "counting WHERE predicates",
+                operation: "counting expression predicates",
             })
         })
     }
 }
 
 /// One node in a normalized preorder expression program.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExpressionNode {
-    And { children: usize },
-    Or { children: usize },
-    Predicate(Predicate),
-}
-
-impl ExpressionNode {
-    pub(crate) const fn child_count(&self) -> usize {
-        match self {
-            Self::And { children } | Self::Or { children } => *children,
-            Self::Predicate(_) => 0,
-        }
-    }
-}
+pub(crate) type ExpressionNode = Node<Predicate>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Predicate {
     pub(crate) column: ColumnRef,
     pub(crate) operator: PredicateOperator,
+}
+
+impl Leaf for Predicate {
+    fn is_degenerate(&self) -> bool {
+        matches!(&self.operator, PredicateOperator::In(values) if values.is_empty())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,33 +65,4 @@ pub(crate) enum PredicateOperator {
     IsNull,
     IsNotNull,
     In(Vec<Value>),
-}
-
-fn valid_program(nodes: &[ExpressionNode]) -> bool {
-    let mut pending = 1_usize;
-    for node in nodes {
-        let Some(after_node) = pending.checked_sub(1) else {
-            return false;
-        };
-        pending = after_node;
-
-        if matches!(
-            node,
-            ExpressionNode::Predicate(Predicate {
-                operator: PredicateOperator::In(values),
-                ..
-            }) if values.is_empty()
-        ) {
-            return false;
-        }
-        let children = node.child_count();
-        if matches!(node, ExpressionNode::And { .. } | ExpressionNode::Or { .. }) && children < 2 {
-            return false;
-        }
-        let Some(next) = pending.checked_add(children) else {
-            return false;
-        };
-        pending = next;
-    }
-    pending == 0
 }

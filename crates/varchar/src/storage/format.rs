@@ -159,6 +159,25 @@ pub(super) fn is_valid_identifier(identifier: &str) -> bool {
         && bytes.all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit())
 }
 
+const ENCODED_TEXT_LENGTH_OPERATION: &str = "measuring encoded text";
+
+pub(crate) fn encoded_text_len(value: &str) -> Result<usize> {
+    let mut encoded_len = 0_usize;
+    for character in value.chars() {
+        let character_len = if must_escape(character) {
+            7
+        } else {
+            character.len_utf8()
+        };
+        encoded_len = encoded_len
+            .checked_add(character_len)
+            .ok_or(Error::Capacity {
+                operation: ENCODED_TEXT_LENGTH_OPERATION,
+            })?;
+    }
+    Ok(encoded_len)
+}
+
 pub(crate) fn encode_text_into(value: &str, encoded: &mut String) {
     for character in value.chars() {
         if must_escape(character) {

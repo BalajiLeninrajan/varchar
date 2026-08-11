@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use super::encode::{encode_auto_increment_record, encode_table_metadata};
+use super::encode::{encode_auto_increment_record, encode_table_metadata, measure_table_metadata};
 use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
 use super::{RowLayout, StorageState, TableSchema, encode_row};
 use crate::{Error, Resource, Result, Value};
@@ -53,16 +53,27 @@ impl<'a> Candidate<'a> {
     ) -> Result<()> {
         let requires_v3 = schema.columns.iter().any(|column| column.default.is_some())
             || !schema.unique_columns.is_empty();
-        if requires_v3 && self.format == FormatVersion::V2 {
-            self.splice(0..V2_HEADER.len(), V3_HEADER)?;
-            self.format = FormatVersion::V3;
-        }
-        if requires_v3 && !self.format.supports_extensions() {
+        let auto_increment = auto_increment.map(|column| (column, 0));
+        let measured = measure_table_metadata(schema, auto_increment)?;
+        let upgrade_to_v3 = requires_v3 && self.format == FormatVersion::V2;
+        if requires_v3 && !upgrade_to_v3 && !self.format.supports_extensions() {
             return Err(Error::Schema(String::from(
                 "extended schema metadata requires storage format V3",
             )));
         }
-        let encoded = encode_table_metadata(schema, auto_increment.map(|column| (column, 0)))?;
+
+        let replacement_header = if upgrade_to_v3 {
+            V3_HEADER
+        } else {
+            self.format.header()
+        };
+        self.check_projected_table_insert_size(replacement_header, measured.encoded_len())?;
+        let encoded = encode_table_metadata(schema, auto_increment, measured)?;
+
+        if upgrade_to_v3 {
+            self.splice(0..V2_HEADER.len(), V3_HEADER)?;
+            self.format = FormatVersion::V3;
+        }
         let row_start = self.state.catalog().row_start;
         self.splice(row_start..row_start, &encoded)
     }
@@ -147,6 +158,26 @@ impl<'a> Candidate<'a> {
     pub(crate) fn finish(mut self) -> Result<StorageState> {
         self.push_source(self.cursor..self.state.as_str().len())?;
         StorageState::from_candidate(self.output, self.max_bytes)
+    }
+
+    fn check_projected_table_insert_size(
+        &self,
+        replacement_header: &str,
+        metadata_len: usize,
+    ) -> Result<()> {
+        let without_header = self
+            .state
+            .as_str()
+            .len()
+            .checked_sub(self.format.header().len())
+            .ok_or_else(|| limit_error(self.max_bytes))?;
+        let with_header = without_header
+            .checked_add(replacement_header.len())
+            .ok_or_else(|| limit_error(self.max_bytes))?;
+        let projected = with_header
+            .checked_add(metadata_len)
+            .ok_or_else(|| limit_error(self.max_bytes))?;
+        check_size(projected, self.max_bytes)
     }
 
     fn splice(&mut self, range: Range<usize>, replacement: &str) -> Result<()> {

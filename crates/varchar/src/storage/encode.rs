@@ -2,7 +2,9 @@
 
 mod metadata;
 
-pub(super) use metadata::{encode_auto_increment_record, encode_table_metadata};
+pub(super) use metadata::{
+    encode_auto_increment_record, encode_table_metadata, measure_table_metadata,
+};
 
 use super::format::encode_text_into;
 use super::{RowLayout, validate_row_layout};
