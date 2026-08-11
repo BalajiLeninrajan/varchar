@@ -194,6 +194,10 @@ impl<'a> Candidate<'a> {
         self.state.as_str()
     }
 
+    pub(crate) fn catalog(&self) -> &super::Catalog {
+        self.state.catalog()
+    }
+
     fn discard_deferred_auto_increment(&mut self) {
         let _ = self.deferred_auto_increment.take();
     }

@@ -4,6 +4,7 @@ use super::model::{
     FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes,
     set_value_clone_failure_after,
 };
+use super::referential::enforce_update_restrict;
 use super::{
     freeze_rows, measure_and_check_update_database_size, sequence_edit_lengths_for_targets,
     sort_and_validate_ranges,
@@ -171,12 +172,16 @@ fn direct_overlays_preserve_original_values_and_detect_conflicts() {
         .install_direct_update(&update, &mut budget)
         .expect("the direct update installs");
     assert!(matches!(
-        updated.mark_direct_delete(),
+        updated.request_delete(&mut budget),
         Err(Error::Constraint(_))
     ));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1), Value::Null]);
-    deleted.mark_direct_delete().expect("the delete installs");
+    assert!(
+        deleted
+            .request_delete(&mut budget)
+            .expect("the delete installs")
+    );
     assert!(matches!(
         deleted.install_direct_update(&update, &mut budget),
         Err(Error::Constraint(_))
@@ -291,13 +296,58 @@ fn row_mutation_states_reject_incomplete_or_conflicting_transitions() {
     assert!(matches!(row.replacement(), Err(Error::Capacity { .. })));
 
     let mut deleted = FrozenRow::new(identity, vec![Value::Integer(1)]);
-    deleted.mark_direct_delete().expect("delete installs");
+    assert!(
+        deleted
+            .request_delete(&mut budget)
+            .expect("delete installs")
+    );
     with_validated_row_encoder(layout, |encoder| {
         assert!(matches!(
             deleted.measure_direct_update(&update, &encoder),
             Err(Error::Constraint(_))
         ));
     });
+}
+
+#[test]
+fn set_null_columns_are_sorted_once_before_encoding() {
+    let columns = (0..4)
+        .map(|index| SchemaColumn {
+            name: format!("c{index}"),
+            data_type: DataType::Integer,
+            nullable: true,
+            default: None,
+        })
+        .collect::<Vec<_>>();
+    let layout = validate_row_layout(RowLayout {
+        table: "items",
+        columns: &columns,
+    })
+    .expect("valid layout");
+    let identity = RowIdentity::new(0..20).expect("valid identity");
+    let mut row = FrozenRow::new(
+        identity,
+        vec![
+            Value::Integer(0),
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3),
+        ],
+    );
+    let mut budget = WorkingBudget::with_limit(usize::MAX);
+    for column in [3, 2, 1, 0, 2] {
+        row.request_set_null(column, &mut budget)
+            .expect("SET NULL request succeeds");
+    }
+
+    with_validated_row_encoder(layout, |encoder| {
+        row.encode_set_null(&encoder, &mut budget)
+            .expect("SET NULL row encodes");
+    });
+    assert_eq!(
+        row.replacement().expect("replacement is planned"),
+        Some("~R|items|N|N|N|N;")
+    );
 }
 
 #[test]
@@ -647,4 +697,76 @@ fn governed_reservations_report_allocation_failures() {
     ));
     assert!(values.is_empty());
     assert_eq!(budget.used(), 7, "failed reservations refund their charge");
+}
+
+#[test]
+fn update_restrict_releases_only_edges_the_same_statement_retargets() {
+    let record = "~R|nodes|I3|I3;";
+    let blob = format!(
+        "V2;~S|nodes|id:I:!|parent_id:I:?;~P|nodes|id;~F|nodes|parent_id|nodes|id;{record}"
+    );
+    let start = blob.find(record).expect("the fixture holds one row record");
+    let columns = vec![
+        SchemaColumn {
+            name: String::from("id"),
+            data_type: DataType::Integer,
+            nullable: false,
+            default: None,
+        },
+        SchemaColumn {
+            name: String::from("parent_id"),
+            data_type: DataType::Integer,
+            nullable: true,
+            default: None,
+        },
+    ];
+    let state = StorageState::load(blob, usize::MAX).expect("the self-reference loads");
+    let schema = state
+        .catalog()
+        .table("nodes")
+        .expect("the fixture declares nodes");
+
+    let enforce = |assignments: &mut [(usize, Value)]| -> crate::Result<()> {
+        let layout = RowLayout {
+            table: "nodes",
+            columns: &columns,
+        };
+        let mut budget = WorkingBudget::with_limit(usize::MAX);
+        let (rows, _) = freeze_rows(
+            state.as_str(),
+            [Ok(start..start + record.len())],
+            layout,
+            &mut budget,
+            |_| Ok(true),
+        )
+        .expect("the validated record freezes");
+        let update = PreparedDirectUpdate::new(assignments, columns.len(), rows[0].identity())?;
+        enforce_update_restrict(
+            state.as_str(),
+            state.catalog(),
+            schema,
+            &rows,
+            &update,
+            &mut budget,
+        )
+    };
+
+    // Re-keying alone leaves the row's own reference behind on the old key.
+    assert!(matches!(
+        enforce(&mut [(0, Value::Integer(4))]),
+        Err(Error::Constraint(ref message))
+            if message == "foreign key \"nodes\".\"parent_id\" restricts mutation of \"nodes\""
+    ));
+    // Assigning the foreign-key column something else that still names the old
+    // key restricts for the same reason.
+    assert!(matches!(
+        enforce(&mut [(0, Value::Integer(4)), (1, Value::Integer(3))]),
+        Err(Error::Constraint(_))
+    ));
+    // Moving the reference with the key releases the edge; whether the new key
+    // resolves is left to candidate validation.
+    enforce(&mut [(0, Value::Integer(4)), (1, Value::Integer(4))])
+        .expect("a co-mutated child does not restrict its own parent");
+    enforce(&mut [(0, Value::Integer(4)), (1, Value::Null)])
+        .expect("a nulled reference does not restrict its parent");
 }

@@ -5,16 +5,18 @@
 //! replacements, and only afterward hands physical edits to storage.
 
 mod model;
+mod referential;
 
 use std::ops::Range;
 
 use model::{FrozenRow, PreparedDirectUpdate, RowIdentity, WorkingBudget, decoded_values_bytes};
+use referential::{ReferentialIndex, enforce_update_restrict};
 
 use crate::expression::Evaluator;
 use crate::limits::{Limits, check_limit};
 use crate::query::{self, ScanPlan};
 use crate::storage::{
-    self, Candidate, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
+    self, Candidate, Catalog, MeasuredRowEncoding, RowLayout, ValidatedRowEncoder,
     with_validated_row_encoder,
 };
 use crate::{Error, Resource, Result, Value};
@@ -49,6 +51,18 @@ impl MutationPlan {
         let layout = scan.validated_row_layout();
         let update =
             PreparedDirectUpdate::new(assignments, layout.column_count(), rows[0].identity())?;
+        let parent_schema = candidate
+            .catalog()
+            .table(scan.row_layout().table)
+            .expect("a compiled mutation scan names a catalog table");
+        enforce_update_restrict(
+            blob,
+            candidate.catalog(),
+            parent_schema,
+            &rows,
+            &update,
+            &mut budget,
+        )?;
         with_validated_row_encoder(layout, |encoder| -> Result<()> {
             let (measurements, measurement_working_bytes) = measure_and_check_update_database_size(
                 blob.len(),
@@ -78,12 +92,89 @@ impl MutationPlan {
         })
     }
 
-    pub(super) fn delete(blob: &str, scan: &ScanPlan<'_>, limits: &Limits) -> Result<Self> {
-        let (mut rows, direct_affected, _) = freeze_direct_targets(blob, scan, limits, 0)?;
+    pub(super) fn delete(
+        blob: &str,
+        catalog: &Catalog,
+        scan: &ScanPlan<'_>,
+        limits: &Limits,
+    ) -> Result<Self> {
+        let (mut rows, direct_affected, mut budget) = freeze_direct_targets(blob, scan, limits, 0)?;
         sort_and_validate_ranges(&mut rows)?;
-        for row in &mut rows {
-            row.mark_direct_delete()?;
+        if rows.is_empty() {
+            return Ok(Self {
+                rows,
+                direct_affected,
+            });
         }
+
+        let referential = ReferentialIndex::build(
+            blob,
+            catalog,
+            scan.row_layout().table,
+            &rows,
+            true,
+            &mut budget,
+        )?;
+        referential.initialize_direct_rows(&rows)?;
+        let mut delete_queue = Vec::new();
+        let mut queue_working_bytes = 0;
+        for row in &mut rows {
+            if row.request_delete(&mut budget)? {
+                push_delete_queue(
+                    &mut delete_queue,
+                    row.identity(),
+                    &mut queue_working_bytes,
+                    &mut budget,
+                )?;
+            }
+        }
+        referential.expand_delete_actions(
+            &mut rows,
+            &mut delete_queue,
+            &mut queue_working_bytes,
+            &mut budget,
+        )?;
+        drop(delete_queue);
+        budget.release(queue_working_bytes);
+        referential.release(&mut budget);
+
+        for row in &mut rows {
+            if !row.needs_set_null() {
+                continue;
+            }
+            let identity = row.identity();
+            let record = blob
+                .get(identity.range())
+                .ok_or_else(|| invalid_range(identity.start()))?;
+            let row_record = storage::row_record(record, identity.start())?;
+            let table = catalog.validated_table(row_record.table()).ok_or_else(|| {
+                Error::CorruptStorage {
+                    offset: identity.start(),
+                    message: String::from("planned mutation row references an unknown table"),
+                }
+            })?;
+            with_validated_row_encoder(table.validated_row_layout(), |encoder| {
+                row.encode_set_null(&encoder, &mut budget)
+            })?;
+        }
+
+        sort_and_validate_ranges(&mut rows)?;
+        let mut projected = blob.len();
+        for row in &rows {
+            let replacement = row.replacement()?;
+            projected = replace_projected_bytes(
+                projected,
+                row.identity().len(),
+                replacement.map_or(0, str::len),
+                limits.max_database_bytes,
+            )?;
+        }
+        check_limit(
+            projected,
+            limits.max_database_bytes,
+            Resource::DatabaseBytes,
+        )?;
+
         Ok(Self {
             rows,
             direct_affected,
@@ -98,6 +189,35 @@ impl MutationPlan {
         }
         Ok(direct_affected)
     }
+}
+
+fn push_delete_queue(
+    queue: &mut Vec<RowIdentity>,
+    identity: RowIdentity,
+    queue_working_bytes: &mut usize,
+    budget: &mut WorkingBudget,
+) -> Result<()> {
+    let charged =
+        budget.reserve_for_push_charged(queue, "reserving the referential delete queue")?;
+    *queue_working_bytes = queue_working_bytes
+        .checked_add(charged)
+        .ok_or_else(|| budget.limit_error())?;
+    queue.push(identity);
+    Ok(())
+}
+
+fn row_record_for_identity<'a>(
+    blob: &'a str,
+    identity: RowIdentity,
+) -> Result<storage::RowRecordRef<'a>> {
+    let record = blob
+        .get(identity.range())
+        .ok_or_else(|| invalid_range(identity.start()))?;
+    let row_record = storage::row_record(record, identity.start())?;
+    if row_record.range() != identity.range() {
+        return Err(invalid_range(identity.start()));
+    }
+    Ok(row_record)
 }
 
 fn sequence_edit_lengths_for_targets(

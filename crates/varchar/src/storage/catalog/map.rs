@@ -40,6 +40,11 @@ impl<V> CatalogMap<V> {
         self.find(key).map(|index| &self.nodes[index].value)
     }
 
+    pub(in crate::storage) fn get_with_order(&self, key: &str) -> Option<(usize, &V)> {
+        self.find(key)
+            .map(|index| (index, &self.nodes[index].value))
+    }
+
     pub(in crate::storage) fn get_mut(&mut self, key: &str) -> Option<&mut V> {
         let index = self.find(key)?;
         Some(&mut self.nodes[index].value)
@@ -47,6 +52,10 @@ impl<V> CatalogMap<V> {
 
     pub(in crate::storage) fn contains_key(&self, key: &str) -> bool {
         self.find(key).is_some()
+    }
+
+    pub(in crate::storage) fn len(&self) -> usize {
+        self.nodes.len()
     }
 
     pub(in crate::storage) fn values(&self) -> impl Iterator<Item = &V> {

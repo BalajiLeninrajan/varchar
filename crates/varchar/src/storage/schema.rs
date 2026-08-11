@@ -41,6 +41,12 @@ impl<'a> ValidatedTableSchema<'a> {
         self.schema
     }
 
+    pub(crate) fn validated_row_layout(self) -> ValidatedRowLayout<'a> {
+        ValidatedRowLayout {
+            layout: self.schema.row_layout(),
+        }
+    }
+
     pub(crate) fn try_clone_row_layout(self) -> Result<OwnedValidatedRowLayout> {
         const OPERATION: &str = "cloning a validated row layout";
 

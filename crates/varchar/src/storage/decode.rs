@@ -38,7 +38,11 @@ impl<'a> RowRecordRef<'a> {
         self.table
     }
 
-    pub(super) fn cells(&self) -> std::str::Split<'a, char> {
+    pub(crate) fn cell(&self, index: usize) -> Option<&'a str> {
+        self.cells().nth(index)
+    }
+
+    pub(crate) fn cells(&self) -> std::str::Split<'a, char> {
         self.cells.split('|')
     }
 }

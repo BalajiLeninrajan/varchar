@@ -777,3 +777,81 @@ fn escaped_check_create_honors_exact_and_one_under_database_limits_in_wasm() {
     lower.execute("CREATE TABLE ok (id INTEGER)").unwrap();
     assert_eq!(lower.as_str(), "V2;~S|ok|id:I:?;");
 }
+
+#[wasm_bindgen_test]
+fn referential_actions_execute_rollback_and_reload_inside_wasm() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE parents (id INTEGER PRIMARY KEY)")
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE cascade_children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE)",
+        )
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE nullable_children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON DELETE SET NULL ON UPDATE RESTRICT)",
+        )
+        .unwrap();
+    database
+        .execute(
+            "CREATE TABLE restricted_children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id) ON DELETE RESTRICT ON UPDATE RESTRICT)",
+        )
+        .unwrap();
+    for sql in [
+        "INSERT INTO parents VALUES (1)",
+        "INSERT INTO parents VALUES (2)",
+        "INSERT INTO parents VALUES (3)",
+        "INSERT INTO cascade_children VALUES (10, 1)",
+        "INSERT INTO nullable_children VALUES (20, 2)",
+        "INSERT INTO restricted_children VALUES (30, 3)",
+    ] {
+        database.execute(sql).unwrap();
+    }
+
+    let blob = database.into_string();
+    let mut database = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(database.as_str(), blob);
+    assert_eq!(
+        database
+            .execute("DELETE FROM parents WHERE id = 1")
+            .unwrap(),
+        Outcome::Affected { rows: 1 }
+    );
+    assert!(rows(database.execute("SELECT * FROM cascade_children").unwrap()).is_empty());
+    assert_eq!(
+        database
+            .execute("DELETE FROM parents WHERE id = 2")
+            .unwrap(),
+        Outcome::Affected { rows: 1 }
+    );
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT parent_id FROM nullable_children")
+                .unwrap()
+        ),
+        vec![vec![Value::Null]]
+    );
+
+    let before_restrict = database.as_str().to_owned();
+    assert!(matches!(
+        database.execute("DELETE FROM parents WHERE id = 3"),
+        Err(Error::Constraint(_))
+    ));
+    assert_eq!(database.as_str(), before_restrict);
+    assert!(matches!(
+        database.execute(
+            "CREATE TABLE unsupported (parent_id INTEGER REFERENCES parents(id) ON UPDATE CASCADE)",
+        ),
+        Err(Error::Unsupported { ref feature, .. }) if feature == "ON UPDATE CASCADE"
+    ));
+    assert_eq!(database.as_str(), before_restrict);
+
+    let mut reloaded = Database::from_string(database.into_string()).unwrap();
+    assert_eq!(
+        rows(reloaded.execute("SELECT id FROM parents").unwrap()),
+        vec![vec![Value::Integer(3)]]
+    );
+}

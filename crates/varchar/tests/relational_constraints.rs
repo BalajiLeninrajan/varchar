@@ -359,7 +359,7 @@ fn self_referential_foreign_keys_are_checked_against_the_candidate_database() {
 }
 
 #[test]
-fn self_referential_cycles_require_a_coordinated_delete() {
+fn self_referential_restrict_cycles_only_yield_to_a_complete_delete() {
     let mut database = Database::new();
     execute(
         &mut database,
@@ -377,9 +377,16 @@ fn self_referential_cycles_require_a_coordinated_delete() {
         expect_atomic_error(&mut database, "DELETE FROM nodes WHERE id = 2"),
         Error::Constraint(_)
     ));
+    // Deleting the whole cycle in one statement leaves nothing to dangle, so
+    // RESTRICT has nothing to reject.
     assert_eq!(
         execute(&mut database, "DELETE FROM nodes"),
         Outcome::Affected { rows: 2 }
+    );
+    assert!(
+        rows(execute(&mut database, "SELECT * FROM nodes"))
+            .rows()
+            .is_empty()
     );
 }
 
