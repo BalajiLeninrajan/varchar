@@ -88,13 +88,7 @@ pub(super) fn alternate_source_patterns(
 }
 
 const fn predicate_column(predicate: &ResolvedPredicate<'_>) -> usize {
-    match predicate {
-        ResolvedPredicate::Equal { column, .. }
-        | ResolvedPredicate::NotEqual { column, .. }
-        | ResolvedPredicate::Like { column, .. }
-        | ResolvedPredicate::IsNull { column }
-        | ResolvedPredicate::IsNotNull { column } => *column,
-    }
+    predicate.column().column
 }
 
 fn push_like_pattern(pattern: &mut PatternBuilder, atoms: &[LikeAtom]) -> Result<()> {

@@ -1,7 +1,7 @@
 use fancy_regex::Regex;
 
 use super::{alternate_source_patterns, row_scan_pattern};
-use crate::resolve::{LikeAtom, ResolvedPredicate};
+use crate::resolve::{ColumnLocation, LikeAtom, ResolvedPredicate};
 use crate::{DataType, SchemaColumn, Value};
 
 const MAX_PATTERN_BYTES: usize = 16 * 1024;
@@ -11,6 +11,10 @@ fn matches(pattern: &str, row: &str) -> bool {
         .expect("test pattern compiles")
         .is_match(row)
         .expect("test pattern executes")
+}
+
+const fn location(column: usize) -> ColumnLocation {
+    ColumnLocation { source: 0, column }
 }
 
 fn integer_column(name: &str) -> SchemaColumn {
@@ -39,7 +43,7 @@ fn resolved_like_atoms_match_canonical_encoded_text() {
         nullable: true,
     }];
     let predicates = [ResolvedPredicate::Like {
-        column: 0,
+        column: location(0),
         atoms: vec![
             LikeAtom::Literal('|'),
             LikeAtom::AnySequence,
@@ -67,17 +71,21 @@ fn null_and_typed_value_predicates_use_complete_cell_boundaries() {
     let id = Value::Integer(7);
     let predicates = [
         ResolvedPredicate::Equal {
-            column: 0,
+            column: location(0),
             value: &id,
         },
-        ResolvedPredicate::IsNotNull { column: 1 },
+        ResolvedPredicate::IsNotNull {
+            column: location(1),
+        },
     ];
     let value_pattern =
         row_scan_pattern("items", &columns, &predicates, MAX_PATTERN_BYTES).expect("value pattern");
     let null_pattern = row_scan_pattern(
         "items",
         &columns,
-        &[ResolvedPredicate::IsNull { column: 1 }],
+        &[ResolvedPredicate::IsNull {
+            column: location(1),
+        }],
         MAX_PATTERN_BYTES,
     )
     .expect("NULL pattern");
@@ -112,7 +120,9 @@ fn invalid_predicate_column_indices_return_an_error() {
     let error = row_scan_pattern(
         "items",
         &columns,
-        &[ResolvedPredicate::IsNull { column: 1 }],
+        &[ResolvedPredicate::IsNull {
+            column: location(1),
+        }],
         MAX_PATTERN_BYTES,
     )
     .expect_err("an out-of-range predicate is rejected");
