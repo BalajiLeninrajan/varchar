@@ -591,7 +591,7 @@ fn unsupported_and_malformed_sql_are_rejected_with_spans() {
         "SELECT",
         "SELECT * FROM t WHERE id =",
         "SELECT * FROM t; SELECT * FROM t",
-        "SELECT * FROM t WHERE id = 1 OR id = 2",
+        "SELECT * FROM t WHERE NOT id = 1",
         "SELECT * FROM t ORDER BY id",
         "SELECT * FROM t JOIN t AS other ON t.id = other.id",
         "SELECT \"id\" FROM t",
@@ -642,7 +642,7 @@ fn every_failed_mutation_is_byte_for_byte_atomic() {
         "UPDATE t SET id = 'wrong' WHERE id = 1",
         "UPDATE t SET missing = 1 WHERE id = 1",
         "DELETE FROM t WHERE id = NULL",
-        "DELETE FROM t WHERE id = 1 OR id = 2",
+        "DELETE FROM t WHERE id = 1 OR",
     ];
 
     for sql in invalid {

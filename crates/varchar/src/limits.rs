@@ -26,7 +26,8 @@ pub enum Resource {
     QueryOutputBytes,
     /// Value-comparison work performed by a join.
     JoinSteps,
-    /// Backtracking performed by one regex search.
+    /// Backtracking performed by one regex search, and wildcard backtracking
+    /// performed by the `LIKE` matcher across one statement.
     RegexBacktracking,
 }
 
@@ -72,10 +73,12 @@ pub struct Limits {
     ///
     /// A single-table query retains one decoded row at a time, so its charge is
     /// a peak-per-row budget rather than a cumulative scan budget. A joined
-    /// query cumulatively charges decoded source rows and its chosen-row pointer
-    /// stack. This does not govern `UPDATE` or `DELETE`; returned rows have a
-    /// separate limit. Charges include target-layout sizes, so an exact boundary
-    /// can differ between 32-bit and 64-bit builds.
+    /// query checks each decoded row transiently, then cumulatively charges rows
+    /// retained after source-local residuals, its chosen-row pointer stack, and
+    /// one reusable residual-evaluation stack. This does not govern `UPDATE` or
+    /// `DELETE`; returned rows have a separate limit. Charges include
+    /// target-layout sizes, so an exact boundary can differ between 32-bit and
+    /// 64-bit builds.
     pub max_query_working_bytes: usize,
     /// Maximum conservatively accounted bytes for one materialized `SELECT`
     /// result or `SELECT` explanation.
@@ -88,7 +91,14 @@ pub struct Limits {
     pub max_query_output_bytes: usize,
     /// Maximum amount of value-comparison work performed while joining rows.
     pub max_join_steps: usize,
-    /// Per-search backtracking limit passed to the regex engine.
+    /// Per-search backtracking limit passed to the regex engine, and the
+    /// wildcard backtracking budget one statement shares across every `LIKE` it
+    /// evaluates outside a scan pattern.
+    ///
+    /// A residual `LIKE` matches segment by segment and scans forward without
+    /// charge, so ordinary matching is bounded by the text rather than by this
+    /// limit. Only re-comparison beyond a forward scan is charged, and it is
+    /// charged once for the statement rather than once per row or predicate.
     pub regex_backtrack_limit: usize,
 }
 

@@ -9,29 +9,46 @@ use super::like::LikeAtom;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Program<'statement> {
     nodes: Vec<ProgramNode<'statement>>,
+    logical_nodes: usize,
 }
 
 impl<'statement> Program<'statement> {
     pub(crate) fn new(nodes: Vec<ProgramNode<'statement>>) -> Self {
         debug_assert!(valid_program(&nodes));
-        Self { nodes }
+        let logical_nodes = nodes
+            .iter()
+            .filter(|node| !matches!(node, ProgramNode::Predicate(_)))
+            .count();
+        Self {
+            nodes,
+            logical_nodes,
+        }
+    }
+
+    pub(crate) fn nodes(&self) -> &[ProgramNode<'statement>] {
+        &self.nodes
     }
 
     pub(crate) fn into_nodes(self) -> Vec<ProgramNode<'statement>> {
         self.nodes
+    }
+
+    pub(super) const fn logical_node_count(&self) -> usize {
+        self.logical_nodes
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ProgramNode<'statement> {
     And { children: usize },
+    Or { children: usize },
     Predicate(Predicate<'statement>),
 }
 
 impl ProgramNode<'_> {
     pub(crate) const fn child_count(&self) -> usize {
         match self {
-            Self::And { children } => *children,
+            Self::And { children } | Self::Or { children } => *children,
             Self::Predicate(_) => 0,
         }
     }
@@ -80,7 +97,7 @@ fn valid_program(nodes: &[ProgramNode<'_>]) -> bool {
         pending = after_node;
 
         let children = node.child_count();
-        if matches!(node, ProgramNode::And { .. }) && children < 2 {
+        if matches!(node, ProgramNode::And { .. } | ProgramNode::Or { .. }) && children < 2 {
             return false;
         }
         let Some(next) = pending.checked_add(children) else {

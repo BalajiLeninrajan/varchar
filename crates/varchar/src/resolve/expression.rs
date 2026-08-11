@@ -68,6 +68,9 @@ fn resolve_program<'statement>(
             ExpressionNode::And { children } => ProgramNode::And {
                 children: *children,
             },
+            ExpressionNode::Or { children } => ProgramNode::Or {
+                children: *children,
+            },
             ExpressionNode::Predicate(predicate) => {
                 let location = if local {
                     super::ColumnLocation {

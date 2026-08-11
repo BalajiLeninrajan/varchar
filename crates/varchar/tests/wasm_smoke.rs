@@ -65,6 +65,53 @@ fn typed_crud_and_regex_planning_execute_inside_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn boolean_residuals_execute_after_reload_in_wasm() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE residuals (id INTEGER NOT NULL, value TEXT, active BOOLEAN NOT NULL)",
+        )
+        .unwrap();
+    for sql in [
+        "INSERT INTO residuals VALUES (1, 'alpha', TRUE)",
+        "INSERT INTO residuals VALUES (2, NULL, FALSE)",
+        "INSERT INTO residuals VALUES (3, 'gamma', FALSE)",
+    ] {
+        database.execute(sql).unwrap();
+    }
+    let mut database = Database::from_string(database.into_string()).unwrap();
+
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT id FROM residuals WHERE (active = TRUE OR value IS NULL)",)
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]
+    );
+    assert_eq!(
+        database
+            .execute("UPDATE residuals SET active = TRUE WHERE id = 1 OR id = 2")
+            .unwrap(),
+        Outcome::Affected { rows: 2 }
+    );
+    assert_eq!(
+        database
+            .execute("DELETE FROM residuals WHERE id = 2 OR id = 3")
+            .unwrap(),
+        Outcome::Affected { rows: 2 }
+    );
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT id, active FROM residuals")
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(1), Value::Boolean(true)]]
+    );
+}
+
+#[wasm_bindgen_test]
 fn malformed_storage_and_resource_limits_are_typed_in_wasm() {
     assert!(matches!(
         Database::from_string("not a database".to_owned()),
