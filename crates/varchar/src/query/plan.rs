@@ -2,18 +2,30 @@
 
 use fancy_regex::Regex;
 
+use crate::Result;
 use crate::expression::Program;
 use crate::output::SelectExplanation;
 use crate::resolve::{ColumnLocation, ResolvedJoin, ResolvedOrderTerm};
-use crate::storage::TableSchema;
-use crate::{Result, SchemaColumn};
+#[cfg(test)]
+use crate::storage::ValidatedRowLayout;
+use crate::storage::{OwnedValidatedRowLayout, RowLayout, TableSchema};
 
 /// An owned mutation scan that remains valid while a candidate is assembled.
 pub(crate) struct ScanPlan<'statement> {
     pub(super) regex: Regex,
-    pub(super) table: String,
-    pub(super) schema: Vec<SchemaColumn>,
+    pub(super) layout: OwnedValidatedRowLayout,
     pub(super) local_residual: Option<Program<'statement>>,
+}
+
+impl ScanPlan<'_> {
+    pub(crate) fn row_layout(&self) -> RowLayout<'_> {
+        self.layout.row_layout()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn validated_row_layout(&self) -> ValidatedRowLayout<'_> {
+        self.layout.validated_row_layout()
+    }
 }
 
 /// A read-only plan borrowing the catalog schemas used by one `SELECT`.

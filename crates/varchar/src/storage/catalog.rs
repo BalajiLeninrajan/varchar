@@ -6,7 +6,7 @@ use std::ops::Range;
 
 pub(super) use map::CatalogMap;
 
-use super::{EMPTY_BLOB, TableSchema};
+use super::{EMPTY_BLOB, TableSchema, ValidatedTableSchema};
 
 /// The derived schema index reconstructed from the authoritative string.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +28,12 @@ impl Catalog {
 
     pub(crate) fn table(&self, name: &str) -> Option<&TableSchema> {
         self.tables.get(name)
+    }
+
+    pub(crate) fn validated_table(&self, name: &str) -> Option<ValidatedTableSchema<'_>> {
+        self.tables
+            .get(name)
+            .map(ValidatedTableSchema::from_catalog)
     }
 
     pub(super) fn schemas(&self) -> impl Iterator<Item = &TableSchema> {

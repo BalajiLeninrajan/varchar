@@ -7,11 +7,11 @@ mod tests;
 
 use std::fmt::Write as _;
 
+use super::super::TableSchema;
 use super::super::format::{
     AUTO_INCREMENT_PREFIX, CHECK_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX,
     SCHEMA_PREFIX, UNIQUE_PREFIX, encode_text_into, encoded_text_len, type_tag,
 };
-use super::super::{TableSchema, validate_schema_for_write};
 use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::{DataType, Error, Result, Value};
 
@@ -63,17 +63,52 @@ pub(in crate::storage) fn encode_table_metadata(
     Ok(encoded)
 }
 
+#[cfg(test)]
+pub(crate) fn encoded_auto_increment_record_len(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<usize> {
+    validate_table_metadata(schema, Some((column, last)))?;
+    Ok(measure_validated_auto_increment_record(schema, column, last)?.encoded_len)
+}
+
+#[cfg(test)]
+pub(crate) fn encoded_auto_increment_record_len_prevalidated(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<usize> {
+    validate_auto_increment_record(schema, column, last)?;
+    Ok(measure_validated_auto_increment_record(schema, column, last)?.encoded_len)
+}
+
 /// Encode one persisted auto-increment high-water record.
+#[cfg(test)]
 pub(crate) fn encode_auto_increment_record(
     schema: &TableSchema,
     column: usize,
     last: i64,
 ) -> Result<String> {
-    validate_schema_for_write(schema)?;
-    validate_auto_increment_record(schema, column, last)?;
+    validate_table_metadata(schema, Some((column, last)))?;
+    encode_validated_auto_increment_record(schema, column, last)
+}
 
-    let mut measured = EncodedLength::default();
-    stream_auto_increment_record(schema, column, last, &mut measured)?;
+pub(crate) fn encode_auto_increment_record_prevalidated(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<String> {
+    validate_auto_increment_record(schema, column, last)?;
+    encode_validated_auto_increment_record(schema, column, last)
+}
+
+fn encode_validated_auto_increment_record(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<String> {
+    let measured = measure_validated_auto_increment_record(schema, column, last)?;
     let mut encoded = String::new();
     encoded
         .try_reserve_exact(measured.encoded_len)
@@ -83,6 +118,16 @@ pub(crate) fn encode_auto_increment_record(
     stream_auto_increment_record(schema, column, last, &mut EncodedString(&mut encoded))?;
     debug_assert_eq!(encoded.len(), measured.encoded_len);
     Ok(encoded)
+}
+
+fn measure_validated_auto_increment_record(
+    schema: &TableSchema,
+    column: usize,
+    last: i64,
+) -> Result<EncodedLength> {
+    let mut measured = EncodedLength::default();
+    stream_auto_increment_record(schema, column, last, &mut measured)?;
+    Ok(measured)
 }
 
 trait MetadataSink {

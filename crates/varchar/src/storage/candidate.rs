@@ -6,7 +6,9 @@
 
 use std::ops::Range;
 
-use super::encode::{encode_auto_increment_record, encode_table_metadata, measure_table_metadata};
+use super::encode::{
+    encode_auto_increment_record_prevalidated, encode_table_metadata, measure_table_metadata,
+};
 use super::format::{FormatVersion, V2_HEADER, V3_HEADER};
 use super::{RowLayout, StorageState, TableSchema, encode_row};
 use crate::{Error, Resource, Result, Value};
@@ -131,7 +133,7 @@ impl<'a> Candidate<'a> {
             .catalog()
             .table(edit.table)
             .expect("a deferred auto-increment edit names a catalog table");
-        encode_auto_increment_record(schema, edit.column, edit.last)
+        encode_auto_increment_record_prevalidated(schema, edit.column, edit.last)
     }
 
     fn apply_deferred_auto_increment(&mut self) -> Result<()> {

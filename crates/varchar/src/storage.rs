@@ -17,8 +17,11 @@ pub(crate) use decode::{RowRecordRef, decode_row, row_record};
 pub(crate) use encode::{encode_cell, encode_row};
 pub(crate) use format::{ROW_PREFIX, encode_text_into};
 pub(crate) use schema::{
-    ForeignKey, RowLayout, TableSchema, validate_row_layout, validate_schema_for_write,
+    ForeignKey, OwnedValidatedRowLayout, RowLayout, TableSchema, ValidatedRowLayout,
+    ValidatedTableSchema, validate_row_layout,
 };
+#[cfg(test)]
+pub(crate) use schema::{reset_row_layout_validations, row_layout_validations};
 pub(crate) use state::{EMPTY_BLOB, StorageState};
 
 #[cfg(test)]

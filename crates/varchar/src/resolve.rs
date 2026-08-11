@@ -28,7 +28,7 @@ pub(crate) use insert::insert_values;
 pub(crate) use join::{ResolvedJoin, ResolvedJoinCondition};
 pub(crate) use order::ResolvedOrderTerm;
 pub(crate) use select::{ResolvedSelect, select};
-pub(crate) use table::require_table;
+pub(crate) use table::{require_table, require_validated_table};
 pub(crate) use update::assignments;
 
 #[cfg(test)]
