@@ -16,6 +16,7 @@ impl Database {
         let mut candidate = self.storage.candidate_with_validation_limits(
             self.limits.max_database_bytes,
             self.limits.max_predicates,
+            self.limits.regex_backtrack_limit,
         )?;
         candidate.insert_schema_with_auto_increment(&resolved.schema, resolved.auto_increment)?;
         self.storage = candidate.finish()?;

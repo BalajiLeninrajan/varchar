@@ -119,16 +119,28 @@ impl Predicate<'_> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CheckProgram {
     nodes: Vec<CheckProgramNode>,
+    logical_nodes: usize,
 }
 
 impl CheckProgram {
     pub(crate) fn new(nodes: Vec<CheckProgramNode>) -> Self {
         debug_assert!(is_well_formed(&nodes, ShapeRules::COMPLETE));
-        Self { nodes }
+        let logical_nodes = nodes
+            .iter()
+            .filter(|node| !matches!(node, CheckProgramNode::Predicate(_)))
+            .count();
+        Self {
+            nodes,
+            logical_nodes,
+        }
     }
 
     pub(crate) fn nodes(&self) -> &[CheckProgramNode] {
         &self.nodes
+    }
+
+    pub(crate) const fn logical_node_count(&self) -> usize {
+        self.logical_nodes
     }
 
     /// Reject any program that is not the canonical encoding of its tree.

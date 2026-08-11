@@ -2,8 +2,8 @@ use super::like;
 use super::program::LogicalFrameBudget;
 use super::truth::Truth;
 use super::{
-    CheckPredicate, CheckProgram, CheckProgramNode, Evaluator, LikeAtom, Predicate, Program,
-    ProgramNode, ShapeRules, compile_pattern, is_well_formed,
+    CheckEvaluator, CheckPredicate, CheckProgram, CheckProgramNode, Evaluator, LikeAtom, Predicate,
+    Program, ProgramNode, ShapeRules, compile_pattern, is_well_formed,
 };
 use crate::resolve::ColumnLocation;
 use crate::sql::{ColumnRef, ExpressionNode, Predicate as ParsedPredicate, PredicateOperator};
@@ -289,6 +289,88 @@ fn residual_like_evaluation_surfaces_the_regex_backtracking_limit() {
         assert!(visited < 10_000, "a scan never exhausted its shared budget");
     }
     assert!(visited > 0, "one row alone must fit inside the budget");
+}
+
+#[test]
+fn check_like_matching_limits_every_state_transition() {
+    // An interior literal run is retried at every candidate start, so it is the
+    // shape a CHECK must refuse rather than run to completion.
+    let value = "a".repeat(4_096);
+    let atoms = compile_pattern("%aaaaaaaaaab%").expect("adversarial pattern resolves");
+
+    assert!(matches!(
+        like::matches_charged(&value, &atoms, &mut like::LikeWork::new(10)),
+        Err(Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: 10,
+        })
+    ));
+    // A generous budget must leave `LIKE` semantics untouched.
+    assert!(
+        !like::matches_charged(&value, &atoms, &mut like::LikeWork::new(usize::MAX))
+            .expect("an unbounded work limit preserves LIKE semantics")
+    );
+
+    let program = CheckProgram::new(vec![CheckProgramNode::Predicate(CheckPredicate::Like {
+        column: 0,
+        atoms,
+    })]);
+    let row = [Value::Text(value)];
+    let mut evaluator = CheckEvaluator::new_with_like_work_limit(0, 10)
+        .expect("leaf CHECK does not need stack frames");
+    assert!(matches!(
+        evaluator.evaluate(&program, &row),
+        Err(Error::ResourceLimit {
+            resource: Resource::RegexBacktracking,
+            limit: 10,
+        })
+    ));
+
+    // One budget covers every row a CHECK validates. A budget reset per row
+    // would let a whole-table validation spend it once for each row it visits.
+    const SHARED_BUDGET: usize = 100_000;
+    let mut shared = CheckEvaluator::new_with_like_work_limit(0, SHARED_BUDGET)
+        .expect("leaf CHECK does not need stack frames");
+    let mut validated = 0_usize;
+    loop {
+        match shared.evaluate(&program, &row) {
+            Ok(passed) => {
+                assert!(!passed);
+                validated += 1;
+            }
+            Err(Error::ResourceLimit {
+                resource: Resource::RegexBacktracking,
+                limit: SHARED_BUDGET,
+            }) => break,
+            other => panic!("unexpected CHECK LIKE outcome: {other:?}"),
+        }
+        assert!(
+            validated < 10_000,
+            "a CHECK never exhausted its shared budget"
+        );
+    }
+    assert!(validated > 0, "one row alone must fit inside the budget");
+}
+
+#[test]
+fn limited_check_like_preserves_unicode_scalar_matching() {
+    let program = CheckProgram::new(vec![CheckProgramNode::Predicate(CheckPredicate::Like {
+        column: 0,
+        atoms: compile_pattern("_").expect("one-scalar LIKE pattern resolves"),
+    })]);
+    let mut evaluator = CheckEvaluator::new_with_like_work_limit(0, 1)
+        .expect("leaf CHECK does not need stack frames");
+
+    assert!(
+        evaluator
+            .evaluate(&program, &[Value::Text("é".to_owned())])
+            .expect("one accented scalar fits within the work limit")
+    );
+    assert!(
+        evaluator
+            .evaluate(&program, &[Value::Text("😀".to_owned())])
+            .expect("one emoji scalar fits within the work limit")
+    );
 }
 
 #[test]

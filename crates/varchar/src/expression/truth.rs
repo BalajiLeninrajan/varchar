@@ -27,4 +27,8 @@ impl Truth {
     pub(super) const fn passes_where(self) -> bool {
         matches!(self, Self::True)
     }
+
+    pub(super) const fn passes_check(self) -> bool {
+        !matches!(self, Self::False)
+    }
 }

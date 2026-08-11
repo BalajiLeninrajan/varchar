@@ -7,7 +7,7 @@ mod program;
 mod tree;
 mod truth;
 
-pub(crate) use evaluate::Evaluator;
+pub(crate) use evaluate::{CheckEvaluator, Evaluator};
 pub(crate) use like::{LikeAtom, compile_pattern};
 pub(crate) use program::{
     CheckPredicate, CheckProgram, CheckProgramNode, Predicate, Program, ProgramNode,

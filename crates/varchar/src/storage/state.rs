@@ -28,18 +28,20 @@ impl StorageState {
 
     #[cfg(test)]
     pub(crate) fn load(blob: String, max_database_bytes: usize) -> Result<Self> {
-        Self::load_with_validation_limits(blob, max_database_bytes, usize::MAX)
+        Self::load_with_validation_limits(blob, max_database_bytes, usize::MAX, usize::MAX)
     }
 
     pub(crate) fn load_with_validation_limits(
         blob: String,
         max_database_bytes: usize,
         max_predicates: usize,
+        check_like_work_limit: usize,
     ) -> Result<Self> {
         let (format, catalog) = validate_and_catalog_with_limits(
             &blob,
             working_limit(max_database_bytes),
             max_predicates,
+            check_like_work_limit,
         )?;
         Ok(Self {
             blob,
@@ -52,9 +54,14 @@ impl StorageState {
         blob: String,
         max_database_bytes: usize,
         max_predicates: usize,
+        check_like_work_limit: usize,
     ) -> Result<Self> {
-        let (format, catalog) =
-            validate_candidate(&blob, working_limit(max_database_bytes), max_predicates)?;
+        let (format, catalog) = validate_candidate(
+            &blob,
+            working_limit(max_database_bytes),
+            max_predicates,
+            check_like_work_limit,
+        )?;
         Ok(Self {
             blob,
             catalog,
@@ -80,14 +87,15 @@ impl StorageState {
 
     #[cfg(test)]
     pub(crate) fn candidate(&self, max_bytes: usize) -> Result<Candidate<'_>> {
-        self.candidate_with_validation_limits(max_bytes, usize::MAX)
+        self.candidate_with_validation_limits(max_bytes, usize::MAX, usize::MAX)
     }
 
     pub(crate) fn candidate_with_validation_limits(
         &self,
         max_bytes: usize,
         max_predicates: usize,
+        check_like_work_limit: usize,
     ) -> Result<Candidate<'_>> {
-        Candidate::new(self, max_bytes, max_predicates)
+        Candidate::new(self, max_bytes, max_predicates, check_like_work_limit)
     }
 }

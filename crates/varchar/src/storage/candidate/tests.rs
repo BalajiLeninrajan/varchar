@@ -1,8 +1,9 @@
 use super::StorageState;
+use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode, LikeAtom};
 use crate::storage::TableSchema;
 use crate::storage::encode::measure_table_metadata;
 use crate::storage::format::{FormatVersion, V2_HEADER, V3_HEADER};
-use crate::{DataType, Error, Resource, SchemaColumn, Value};
+use crate::{DataType, Error, Resource, SchemaColumn};
 
 #[test]
 fn failed_splice_leaves_the_candidate_reusable() {
@@ -38,26 +39,42 @@ fn finish_rejects_an_invalid_replacement_state() {
     assert_eq!(state.as_str(), "V2;");
 }
 
-fn defaulted_text_schema(name: &str) -> TableSchema {
+fn checked_text_schema(name: &str) -> TableSchema {
     TableSchema {
         name: String::from(name),
         columns: vec![SchemaColumn {
             name: String::from("value"),
             data_type: DataType::Text,
             nullable: true,
-            default: Some(Value::Text(String::from("%|;~\0\u{2028}\u{2029}é"))),
+            default: None,
         }],
         primary_key: None,
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
-        checks: Vec::new(),
+        checks: vec![CheckProgram::new(vec![CheckProgramNode::Predicate(
+            CheckPredicate::Like {
+                column: 0,
+                atoms: vec![
+                    LikeAtom::AnySequence,
+                    LikeAtom::AnyScalar,
+                    LikeAtom::Literal('%'),
+                    LikeAtom::Literal('|'),
+                    LikeAtom::Literal(';'),
+                    LikeAtom::Literal('~'),
+                    LikeAtom::Literal('\0'),
+                    LikeAtom::Literal('\u{2028}'),
+                    LikeAtom::Literal('\u{2029}'),
+                    LikeAtom::Literal('é'),
+                ],
+            },
+        )])],
     }
 }
 
 #[test]
 fn table_metadata_create_checks_the_complete_boundary_before_v3_mutation() {
     let state = StorageState::empty();
-    let schema = defaulted_text_schema("bounded");
+    let schema = checked_text_schema("bounded");
     let measured = measure_table_metadata(&schema, None).expect("schema metadata measures");
     let exact = state
         .as_str()

@@ -26,6 +26,38 @@ fn assert_corrupt(blob: &str) {
 }
 
 #[test]
+fn check_metadata_uses_canonical_flat_programs_in_declaration_order() {
+    let mut database = Database::new();
+    database
+        .execute(
+            "CREATE TABLE encoded_checks (number INTEGER, text_value TEXT, flag BOOLEAN, \
+             CHECK (number = 1), CHECK (number != 2), CHECK (number < 3), \
+             CHECK (number <= 4), CHECK (number > -1), CHECK (number >= 0), \
+             CHECK (text_value LIKE 'a_%'), CHECK (number IS NULL), \
+             CHECK (number IS NOT NULL), CHECK (number IN (1, NULL, 2)), \
+             CHECK (flag >= FALSE))",
+        )
+        .expect("all CHECK forms resolve");
+
+    let expected = "V3;~S|encoded_checks|number:I:?|text_value:T:?|flag:B:?;\
+~C|encoded_checks|EQ|0|I1;\
+~C|encoded_checks|NE|0|I2;\
+~C|encoded_checks|LT|0|I3;\
+~C|encoded_checks|LE|0|I4;\
+~C|encoded_checks|GT|0|I-1;\
+~C|encoded_checks|GE|0|I0;\
+~C|encoded_checks|LIKE|1|3|La|S|M;\
+~C|encoded_checks|ISNULL|0;\
+~C|encoded_checks|NOTNULL|0;\
+~C|encoded_checks|IN|0|3|I1|N|I2;\
+~C|encoded_checks|GE|2|B0;";
+    assert_eq!(database.as_str(), expected);
+
+    let reloaded = Database::from_string(database.into_string()).expect("CHECK programs reload");
+    assert_eq!(reloaded.as_str(), expected);
+}
+
+#[test]
 fn v2_and_metadata_phase_violations_anchor_at_the_offending_record() {
     let v2 = "V2;~S|t|value:I:?;~C|t|GT|0|I0;";
     assert_corrupt_at(v2, "~C|", "V3 metadata is invalid under a V2 header");
@@ -210,6 +242,78 @@ fn malformed_counts_are_corruption_before_storage_working_limits() {
 }
 
 #[test]
+fn incomplete_trailing_and_noncanonical_trees_are_rejected() {
+    let incomplete = "V3;~S|t|value:I:?;~C|t|AND|2|EQ|0|I1;";
+    let (offset, message) = corruption(incomplete);
+    assert_eq!(
+        offset,
+        incomplete.find(';').unwrap_or(0).max(incomplete.len() - 1)
+    );
+    assert_eq!(
+        message,
+        "CHECK program ends before all children are encoded"
+    );
+
+    let trailing = "V3;~S|t|value:I:?;~C|t|EQ|0|I1|EQ|0|I2;";
+    assert_eq!(
+        corruption(trailing),
+        (
+            trailing.rfind("EQ|").expect("second root exists"),
+            "CHECK program contains trailing nodes or fields".to_owned(),
+        )
+    );
+
+    let nested = "V3;~S|t|value:I:?;~C|t|AND|2|AND|2|EQ|0|I1|EQ|0|I2|EQ|0|I3;";
+    assert_eq!(
+        corruption(nested),
+        (
+            nested.rfind("AND|2").expect("nested AND exists"),
+            "CHECK program contains a noncanonical nested associative node".to_owned(),
+        )
+    );
+
+    for blob in [
+        "V3;~S|t|value:I:?;~C|t;",
+        "V3;~S|t|value:I:?;~C|t|;",
+        "V3;~S|t|value:I:?;~C|t|OR|0;",
+        "V3;~S|t|value:I:?;~C|t|OR|2;",
+        "V3;~S|t|value:I:?;~C|t|EQ|0;",
+    ] {
+        assert_corrupt(blob);
+    }
+}
+
+#[test]
+fn persisted_check_violations_are_corruption_at_the_row() {
+    let blob = "V3;~S|t|value:I:?;~C|t|GT|0|I0;~R|t|I1;~R|t|I0;";
+    let bad_row = blob.rfind("~R|").expect("failing row exists");
+    assert_eq!(
+        corruption(blob),
+        (
+            bad_row,
+            "CHECK constraint 1 failed for table \"t\"".to_owned(),
+        )
+    );
+}
+
+#[test]
+fn combined_unique_and_check_state_loads_at_the_exact_database_limit() {
+    const ROW_COUNT: usize = 1_000;
+
+    let mut blob = String::from("V3;~S|t|value:I:?;~U|t|value;~C|t|GE|0|I0;");
+    for value in 0..ROW_COUNT {
+        blob.push_str(&format!("~R|t|I{value};"));
+    }
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits)
+        .expect("combined UNIQUE and CHECK validation fits the exact database limit");
+    assert_eq!(database.as_str(), blob);
+}
+
+#[test]
 fn many_check_records_load_with_linear_metadata_growth() {
     const CHECK_COUNT: usize = 4_096;
 
@@ -225,4 +329,31 @@ fn many_check_records_load_with_linear_metadata_growth() {
     let database = Database::from_string_with_limits(blob.clone(), limits)
         .expect("many CHECK records grow retained metadata geometrically");
     assert_eq!(database.as_str(), blob);
+}
+
+#[test]
+fn unique_precedes_check_and_check_precedes_foreign_key_validation() {
+    let unique_and_check = "V3;~S|t|value:I:?;~U|t|value;~C|t|GT|0|I0;~R|t|I-1;~R|t|I-1;";
+    assert_eq!(
+        corruption(unique_and_check),
+        (
+            unique_and_check.rfind("~R|").expect("duplicate row exists"),
+            "duplicate UNIQUE value for table \"t\" column \"value\"".to_owned(),
+        )
+    );
+
+    let check_and_foreign_key = "V3;\
+~S|parents|id:I:!;~P|parents|id;\
+~S|children|parent_id:I:?;~F|children|parent_id|parents|id;\
+~C|children|GT|0|I0;\
+~R|parents|I1;~R|children|I-1;";
+    assert_eq!(
+        corruption(check_and_foreign_key),
+        (
+            check_and_foreign_key
+                .rfind("~R|children")
+                .expect("invalid child row exists"),
+            "CHECK constraint 1 failed for table \"children\"".to_owned(),
+        )
+    );
 }

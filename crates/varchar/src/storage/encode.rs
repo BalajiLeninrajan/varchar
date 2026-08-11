@@ -36,7 +36,11 @@ pub(crate) fn encode_row(values: &[Value], layout: RowLayout<'_>) -> Result<Stri
 /// Encode one typed cell in its canonical storage representation.
 pub(crate) fn encode_cell(value: &Value, column: &SchemaColumn) -> Result<String> {
     validate_value(value, column)?;
-    match (value, column.data_type) {
+    encode_typed_value(value, column.data_type)
+}
+
+pub(super) fn encode_typed_value(value: &Value, data_type: DataType) -> Result<String> {
+    match (value, data_type) {
         (Value::Null, _) => Ok(String::from("N")),
         (Value::Text(value), DataType::Text) => {
             let mut encoded = String::from("T");
@@ -47,6 +51,8 @@ pub(crate) fn encode_cell(value: &Value, column: &SchemaColumn) -> Result<String
         (Value::Boolean(value), DataType::Boolean) => {
             Ok(String::from(if *value { "B1" } else { "B0" }))
         }
-        _ => unreachable!("value validation guarantees the encoded type"),
+        _ => Err(Error::Schema(String::from(
+            "CHECK operand type does not match its resolved column",
+        ))),
     }
 }

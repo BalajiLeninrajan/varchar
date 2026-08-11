@@ -63,6 +63,7 @@ impl Database {
             blob,
             limits.max_database_bytes,
             limits.max_predicates,
+            limits.regex_backtrack_limit,
         )?;
         Ok(Self { storage, limits })
     }
