@@ -47,6 +47,31 @@ fn tokens_retain_exact_utf8_byte_spans() {
 }
 
 #[test]
+fn quoted_identifiers_retain_content_and_spans() {
+    assert_eq!(
+        lex_for_parser("\"SELECT\".\"from\"").expect("quoted identifiers lex"),
+        vec![
+            Token {
+                kind: TokenKind::QuotedIdentifier(String::from("SELECT")),
+                span: Span::new(0, 8),
+            },
+            Token {
+                kind: TokenKind::Dot,
+                span: Span::new(8, 9),
+            },
+            Token {
+                kind: TokenKind::QuotedIdentifier(String::from("from")),
+                span: Span::new(9, 15),
+            },
+            Token {
+                kind: TokenKind::End,
+                span: Span::new(15, 15),
+            },
+        ]
+    );
+}
+
+#[test]
 fn qualified_names_and_stars_retain_dot_spans() {
     assert_eq!(
         lex_for_parser("users.id, posts.*").expect("qualified SQL lexes"),
@@ -102,8 +127,8 @@ fn deferred_lexical_errors_point_at_the_offending_bytes() {
         ),
         (
             "\"open",
-            LexicalErrorKind::QuotedIdentifier,
-            Span::new(0, 1),
+            LexicalErrorKind::UnterminatedQuotedIdentifier,
+            Span::new(0, 5),
         ),
         (
             "-- trailing",
@@ -139,12 +164,12 @@ fn deferred_lexical_errors_regenerate_the_public_diagnostics() {
         } if message == "unterminated string literal"
     ));
     assert!(matches!(
-        LexicalErrorKind::QuotedIdentifier.error(Span::new(0, 1)),
-        Error::Unsupported {
-            ref feature,
+        LexicalErrorKind::UnterminatedQuotedIdentifier.error(Span::new(0, 5)),
+        Error::Parse {
+            ref message,
             span_start: 0,
-            span_end: 1,
-        } if feature == "quoted identifiers"
+            span_end: 5,
+        } if message == "unterminated quoted identifier"
     ));
     assert!(matches!(
         LexicalErrorKind::SqlComment.error(Span::new(0, 11)),

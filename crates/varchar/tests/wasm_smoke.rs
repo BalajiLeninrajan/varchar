@@ -973,6 +973,16 @@ fn schema_metadata_results_are_bounded_and_reload_inside_wasm() {
     assert_eq!(description[0][3], Value::Boolean(true));
     assert_eq!(description[0][6], Value::Boolean(true));
     assert_eq!(description[1][5], Value::Text(String::from("'seed'")));
+    assert_eq!(
+        rows(reloaded.execute("SHOW CREATE TABLE accounts").unwrap()),
+        vec![vec![
+            Value::Text(String::from("accounts")),
+            Value::Text(String::from(
+                "CREATE TABLE accounts (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \
+                 name TEXT DEFAULT 'seed')",
+            )),
+        ]]
+    );
     assert_eq!(reloaded.as_str(), source);
 
     // `default_value` must round-trip as the SQL literal that reproduces the
@@ -1006,20 +1016,95 @@ fn schema_metadata_results_are_bounded_and_reload_inside_wasm() {
     );
 
     let limit = std::mem::size_of::<RowSet>() - 1;
+    for sql in [
+        "SHOW TABLES",
+        "DESCRIBE accounts",
+        "SHOW CREATE TABLE accounts",
+    ] {
+        let mut limited = Database::from_string_with_limits(
+            source.clone(),
+            Limits {
+                max_query_output_bytes: limit,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            limited.execute(sql),
+            Err(Error::ResourceLimit {
+                resource: Resource::QueryOutputBytes,
+                limit: actual,
+            }) if actual == limit
+        ));
+        assert_eq!(limited.as_str(), source);
+    }
+
+    let sql = "SHOW CREATE TABLE accounts";
+    let exact = minimum_output_limit(&source, sql);
+    let mut exact_database = Database::from_string_with_limits(
+        source.clone(),
+        Limits {
+            max_query_output_bytes: exact,
+            max_query_working_bytes: 0,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    assert!(matches!(exact_database.execute(sql), Ok(Outcome::Rows(_))));
+
+    let one_under = exact - 1;
     let mut limited = Database::from_string_with_limits(
         source.clone(),
         Limits {
-            max_query_output_bytes: limit,
+            max_query_output_bytes: one_under,
+            max_query_working_bytes: 0,
             ..Limits::default()
         },
     )
     .unwrap();
     assert!(matches!(
-        limited.execute("SHOW TABLES"),
+        limited.execute(sql),
         Err(Error::ResourceLimit {
             resource: Resource::QueryOutputBytes,
             limit: actual,
-        }) if actual == limit
+        }) if actual == one_under
     ));
     assert_eq!(limited.as_str(), source);
+}
+
+fn minimum_output_limit(source: &str, sql: &str) -> usize {
+    let mut upper = 1_usize;
+    loop {
+        let mut database = Database::from_string_with_limits(
+            source.to_owned(),
+            Limits {
+                max_query_output_bytes: upper,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        if database.execute(sql).is_ok() {
+            break;
+        }
+        upper = upper.checked_mul(2).expect("metadata output fits usize");
+    }
+
+    let mut lower = 0;
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        let mut database = Database::from_string_with_limits(
+            source.to_owned(),
+            Limits {
+                max_query_output_bytes: middle,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        if database.execute(sql).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    lower
 }

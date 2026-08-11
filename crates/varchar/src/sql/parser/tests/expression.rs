@@ -269,6 +269,11 @@ fn empty_in_is_excluded_while_all_null_lists_are_valid() {
         "expressions in IN lists",
         "+",
     );
+    assert_unsupported(
+        "SELECT * FROM t WHERE value IN (\"other\")",
+        "expressions in IN lists",
+        "\"other\"",
+    );
 }
 
 #[test]
@@ -337,7 +342,13 @@ fn deferred_lexical_errors_surface_with_their_original_diagnostics() {
         "unexpected character '\u{1f4a5}'",
         "\u{1f4a5}",
     );
-    assert_unsupported("SELECT \"a\" FROM t", "quoted identifiers", "\"");
+    // Quoted identifiers are a supported token now; only an unterminated one
+    // still reaches the parser as a deferred lexical error.
+    assert_parse_error(
+        "SELECT \"a FROM t",
+        "unterminated quoted identifier",
+        "\"a FROM t",
+    );
     assert_unsupported("SELECT a FROM t -- tail", "SQL comments", "-- tail");
     assert_unsupported("SELECT a FROM t /* tail", "SQL comments", "/* tail");
 }

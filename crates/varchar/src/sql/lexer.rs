@@ -5,6 +5,7 @@ use crate::{Error, Result, Span};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum TokenKind {
     Word(String),
+    QuotedIdentifier(String),
     String(String),
     Number(String),
     LeftParen,
@@ -27,7 +28,7 @@ pub(super) enum TokenKind {
 pub(super) enum LexicalErrorKind {
     UnexpectedCharacter(char),
     UnterminatedString,
-    QuotedIdentifier,
+    UnterminatedQuotedIdentifier,
     SqlComment,
     MalformedNumericToken,
 }
@@ -37,7 +38,9 @@ impl LexicalErrorKind {
         match self {
             Self::UnexpectedCharacter(character) => unexpected_character_error(*character, span),
             Self::UnterminatedString => Error::parse("unterminated string literal", span),
-            Self::QuotedIdentifier => Error::unsupported("quoted identifiers", span),
+            Self::UnterminatedQuotedIdentifier => {
+                Error::parse("unterminated quoted identifier", span)
+            }
             Self::SqlComment => Error::unsupported("SQL comments", span),
             Self::MalformedNumericToken => malformed_numeric_error(span),
         }
@@ -149,7 +152,32 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
             }
             '"' => {
                 cursor += 1;
-                TokenKind::LexicalError(LexicalErrorKind::QuotedIdentifier)
+                let mut identifier = String::new();
+                let mut closed = false;
+                while cursor < bytes.len() {
+                    let next = input[cursor..]
+                        .chars()
+                        .next()
+                        .expect("cursor is inside the input");
+                    if next == '"' {
+                        if bytes.get(cursor + 1) == Some(&b'"') {
+                            identifier.push('"');
+                            cursor += 2;
+                        } else {
+                            cursor += 1;
+                            closed = true;
+                            break;
+                        }
+                    } else {
+                        identifier.push(next);
+                        cursor += next.len_utf8();
+                    }
+                }
+                if closed {
+                    TokenKind::QuotedIdentifier(identifier)
+                } else {
+                    TokenKind::LexicalError(LexicalErrorKind::UnterminatedQuotedIdentifier)
+                }
             }
             '-' if bytes.get(cursor + 1) == Some(&b'-') => {
                 cursor = bytes.len();

@@ -389,7 +389,9 @@ impl Parser {
             TokenKind::Word(word) if !matches!(word.as_str(), "TRUE" | "FALSE" | "NULL")
         ) || matches!(
             self.current().kind,
-            TokenKind::LeftParen | TokenKind::ExpressionOperator(_)
+            TokenKind::QuotedIdentifier(_)
+                | TokenKind::LeftParen
+                | TokenKind::ExpressionOperator(_)
         ) {
             return Err(self.unsupported_in_list_expression());
         }
@@ -427,7 +429,9 @@ impl Parser {
     }
 
     fn parse_predicate_value(&mut self, context: ExpressionContext) -> Result<Value> {
-        if matches!(self.current().kind, TokenKind::Word(ref word) if !super::is_reserved(word)) {
+        if matches!(self.current().kind, TokenKind::QuotedIdentifier(_))
+            || matches!(self.current().kind, TokenKind::Word(ref word) if !super::is_reserved_identifier(word))
+        {
             return Err(Error::unsupported(
                 format!("column-to-column {} predicates", context.noun()),
                 self.current().span,

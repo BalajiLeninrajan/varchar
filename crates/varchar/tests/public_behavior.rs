@@ -584,6 +584,9 @@ fn regex_matching_stays_within_exact_table_and_row_boundaries() {
 fn unsupported_and_malformed_sql_are_rejected_with_spans() {
     let mut database = Database::new();
     execute(&mut database, "CREATE TABLE t (id INTEGER)");
+    database
+        .execute("SELECT \"id\" FROM t")
+        .expect("quoted identifiers are accepted");
 
     let rejected = [
         "",
@@ -593,7 +596,6 @@ fn unsupported_and_malformed_sql_are_rejected_with_spans() {
         "SELECT * FROM t; SELECT * FROM t",
         "SELECT * FROM t WHERE NOT id = 1",
         "SELECT * FROM t JOIN t AS other ON t.id = other.id",
-        "SELECT \"id\" FROM t",
         "SELECT * FROM t -- comment",
         "ALTER TABLE t ADD COLUMN name TEXT",
         "SELECT * FROM t AS alias",

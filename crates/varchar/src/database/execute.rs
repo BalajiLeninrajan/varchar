@@ -31,6 +31,12 @@ impl Database {
                 metadata::show_tables(self.storage.catalog(), self.limits.max_query_output_bytes)
                     .map(Outcome::Rows)
             }
+            Statement::ShowCreateTable(statement) => metadata::show_create_table(
+                self.storage.catalog(),
+                &statement,
+                self.limits.max_query_output_bytes,
+            )
+            .map(Outcome::Rows),
             Statement::DescribeTable(statement) => metadata::describe_table(
                 self.storage.catalog(),
                 &statement,

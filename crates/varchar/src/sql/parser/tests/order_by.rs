@@ -255,15 +255,15 @@ fn lexical_errors_after_order_terms_keep_their_original_diagnostics() {
     let sql = "SELECT id FROM t ORDER BY id \"x\"";
     let span_start = sql.find('"').expect("fixture contains quoted identifier");
     match parse(sql) {
-        Err(Error::Unsupported {
-            feature,
+        Err(Error::Parse {
+            message,
             span_start: actual_start,
             span_end: actual_end,
         }) => {
-            assert_eq!(feature, "quoted identifiers");
-            assert_eq!((actual_start, actual_end), (span_start, span_start + 1));
+            assert_eq!(message, "expected `,` between ORDER BY terms");
+            assert_eq!((actual_start, actual_end), (span_start, sql.len()));
         }
-        other => panic!("expected quoted-identifier diagnostic, got {other:?}"),
+        other => panic!("expected missing-comma diagnostic, got {other:?}"),
     }
 
     let sql = "SELECT id FROM t ORDER BY id @";

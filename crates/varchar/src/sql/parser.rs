@@ -10,6 +10,7 @@ mod select;
 use std::ops::Range;
 
 use super::ast::{ColumnRef, Statement};
+use super::is_reserved_identifier;
 use super::lexer::{
     Token, TokenKind, comparison_error, lex_for_parser, unexpected_character_error,
 };
@@ -249,7 +250,7 @@ impl Parser {
     fn expect_identifier(&mut self) -> Result<String> {
         let span = self.current().span;
         match self.current().kind.clone() {
-            TokenKind::Word(word) if !is_reserved(&word) => {
+            TokenKind::Word(word) if !is_reserved_identifier(&word) => {
                 self.advance();
                 Ok(word.to_ascii_lowercase())
             }
@@ -257,7 +258,15 @@ impl Parser {
                 format!("reserved keyword `{word}` cannot be used as an identifier"),
                 span,
             )),
-            _ => Err(Error::parse("expected an unquoted identifier", span)),
+            TokenKind::QuotedIdentifier(identifier) if is_identifier(&identifier) => {
+                self.advance();
+                Ok(identifier.to_ascii_lowercase())
+            }
+            TokenKind::QuotedIdentifier(_) => Err(Error::parse(
+                "quoted identifiers must use the unquoted ASCII identifier grammar",
+                span,
+            )),
+            _ => Err(Error::parse("expected an identifier", span)),
         }
     }
 
@@ -371,54 +380,13 @@ fn trailing_feature(word: &str) -> Option<&'static str> {
     }
 }
 
-fn is_reserved(word: &str) -> bool {
-    matches!(
-        word,
-        "CREATE"
-            | "TABLE"
-            | "INSERT"
-            | "INTO"
-            | "VALUES"
-            | "SELECT"
-            | "FROM"
-            | "WHERE"
-            | "UPDATE"
-            | "SET"
-            | "DELETE"
-            | "EXPLAIN"
-            | "REGEX"
-            | "AND"
-            | "OR"
-            | "IS"
-            | "IN"
-            | "NOT"
-            | "NULL"
-            | "LIKE"
-            | "TEXT"
-            | "INTEGER"
-            | "BOOLEAN"
-            | "TRUE"
-            | "FALSE"
-            | "AS"
-            | "JOIN"
-            | "ORDER"
-            | "BY"
-            | "ASC"
-            | "DESC"
-            | "GROUP"
-            | "LIMIT"
-            | "OFFSET"
-            | "ALTER"
-            | "DROP"
-            | "DEFAULT"
-            | "UNIQUE"
-            | "CHECK"
-            | "CASCADE"
-            | "RESTRICT"
-            | "SHOW"
-            | "DESCRIBE"
-            | "TABLES"
-    )
+fn is_identifier(identifier: &str) -> bool {
+    let mut bytes = identifier.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]
