@@ -3,11 +3,12 @@
 use fancy_regex::{Regex, RegexBuilder};
 
 use super::{ScanPlan, SelectPlan, pattern};
-use crate::limits::{Limits, check_limit};
+use crate::expression::{Predicate, Program, ProgramNode};
+use crate::limits::Limits;
 use crate::resolve::{self, ResolvedSelect};
-use crate::sql::{Predicate, Select};
+use crate::sql::{Expression, Select};
 use crate::storage::{Catalog, TableSchema};
-use crate::{Error, Resource, Result};
+use crate::{Error, Result};
 
 pub(crate) fn compile_select<'catalog>(
     catalog: &'catalog Catalog,
@@ -18,7 +19,7 @@ pub(crate) fn compile_select<'catalog>(
         sources,
         projection,
         joins,
-        predicates,
+        where_clause,
     } = resolve::select(
         catalog,
         statement,
@@ -34,8 +35,9 @@ pub(crate) fn compile_select<'catalog>(
             operation: "reserving query predicate buckets",
         })?;
     predicates_by_source.resize_with(sources.len(), Vec::new);
-    for resolved in predicates {
-        predicates_by_source[resolved.column().source].push(resolved);
+    for predicate in leaves(where_clause) {
+        let location = predicate.column();
+        predicates_by_source[location.source].push(predicate);
     }
 
     let pattern = if sources.len() == 1 {
@@ -74,18 +76,11 @@ pub(crate) fn compile_select<'catalog>(
 
 pub(crate) fn compile_scan(
     schema: &TableSchema,
-    predicates: &[Predicate],
+    where_clause: Option<&Expression>,
     limits: &Limits,
 ) -> Result<ScanPlan> {
-    check_limit(
-        predicates.len(),
-        limits.max_predicates,
-        Resource::WherePredicates,
-    )?;
-    let predicates = predicates
-        .iter()
-        .map(|predicate| resolve::predicate(schema, predicate))
-        .collect::<Result<Vec<_>>>()?;
+    let where_clause = resolve::local_expression(schema, where_clause, limits.max_predicates)?;
+    let predicates = leaves(where_clause);
     let pattern = pattern::row_scan_pattern(
         &schema.name,
         &schema.columns,
@@ -99,6 +94,24 @@ pub(crate) fn compile_scan(
         table: schema.name.clone(),
         schema: schema.columns.clone(),
     })
+}
+
+/// Collect the predicate leaves of a resolved `WHERE` program.
+///
+/// Every expression a `WHERE` can currently hold is a conjunction, so dropping
+/// the `And` nodes loses nothing: each leaf must hold for the row to match.
+fn leaves(program: Option<Program<'_>>) -> Vec<Predicate<'_>> {
+    let Some(program) = program else {
+        return Vec::new();
+    };
+    let mut predicates = Vec::new();
+    for node in program.into_nodes() {
+        match node {
+            ProgramNode::And { .. } => {}
+            ProgramNode::Predicate(predicate) => predicates.push(predicate),
+        }
+    }
+    predicates
 }
 
 fn build_regex(pattern: &str, limits: &Limits) -> Result<Regex> {

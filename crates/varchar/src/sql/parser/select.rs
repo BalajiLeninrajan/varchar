@@ -11,12 +11,12 @@ impl Parser {
         self.expect_keyword("FROM")?;
         let table = self.expect_identifier()?;
         let joins = self.parse_joins()?;
-        let predicates = self.parse_optional_where()?;
+        let where_clause = self.parse_optional_where()?;
         Ok(Select {
             table,
             joins,
             projection,
-            predicates,
+            where_clause,
         })
     }
 

@@ -14,7 +14,7 @@ pub enum Resource {
     DatabaseBytes,
     /// One SQL statement.
     SqlBytes,
-    /// `WHERE` predicates joined by `AND`.
+    /// Predicate units in one `WHERE` expression.
     WherePredicates,
     /// Source tables participating in one `SELECT`.
     JoinSources,
@@ -53,7 +53,10 @@ pub struct Limits {
     pub max_database_bytes: usize,
     /// Maximum size of one SQL statement, in UTF-8 bytes.
     pub max_sql_bytes: usize,
-    /// Maximum number of `WHERE` terms joined by `AND`.
+    /// Maximum predicate units in one `WHERE` expression.
+    ///
+    /// Each currently supported predicate leaf consumes one unit. Logical
+    /// operators and parentheses consume none.
     pub max_predicates: usize,
     /// Maximum number of source tables participating in one `SELECT`.
     pub max_join_sources: usize,

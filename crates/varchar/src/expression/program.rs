@@ -5,6 +5,38 @@ use crate::resolve::ColumnLocation;
 
 use super::like::LikeAtom;
 
+/// A semantically validated expression stored in preorder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Program<'statement> {
+    nodes: Vec<ProgramNode<'statement>>,
+}
+
+impl<'statement> Program<'statement> {
+    pub(crate) fn new(nodes: Vec<ProgramNode<'statement>>) -> Self {
+        debug_assert!(valid_program(&nodes));
+        Self { nodes }
+    }
+
+    pub(crate) fn into_nodes(self) -> Vec<ProgramNode<'statement>> {
+        self.nodes
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProgramNode<'statement> {
+    And { children: usize },
+    Predicate(Predicate<'statement>),
+}
+
+impl ProgramNode<'_> {
+    pub(crate) const fn child_count(&self) -> usize {
+        match self {
+            Self::And { children } => *children,
+            Self::Predicate(_) => 0,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Predicate<'statement> {
     Equal {
@@ -37,4 +69,24 @@ impl Predicate<'_> {
             | Self::IsNotNull { column } => *column,
         }
     }
+}
+
+fn valid_program(nodes: &[ProgramNode<'_>]) -> bool {
+    let mut pending = 1_usize;
+    for node in nodes {
+        let Some(after_node) = pending.checked_sub(1) else {
+            return false;
+        };
+        pending = after_node;
+
+        let children = node.child_count();
+        if matches!(node, ProgramNode::And { .. }) && children < 2 {
+            return false;
+        }
+        let Some(next) = pending.checked_add(children) else {
+            return false;
+        };
+        pending = next;
+    }
+    pending == 0
 }

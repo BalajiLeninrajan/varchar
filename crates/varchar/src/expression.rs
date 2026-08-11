@@ -4,4 +4,4 @@ mod like;
 mod program;
 
 pub(crate) use like::{LikeAtom, compile_pattern};
-pub(crate) use program::Predicate;
+pub(crate) use program::{Predicate, Program, ProgramNode};

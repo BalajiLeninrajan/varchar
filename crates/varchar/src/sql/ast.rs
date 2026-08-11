@@ -1,5 +1,9 @@
 //! Parsed SQL syntax owned by the parser and consumed by semantic resolution.
 
+mod expression;
+
+pub(crate) use expression::{Expression, ExpressionNode, Predicate, PredicateOperator};
+
 use crate::{DataType, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,7 +70,7 @@ pub(crate) struct Select {
     pub(crate) table: String,
     pub(crate) joins: Vec<Join>,
     pub(crate) projection: Projection,
-    pub(crate) predicates: Vec<Predicate>,
+    pub(crate) where_clause: Option<Expression>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +107,7 @@ pub(crate) struct JoinCondition {
 pub(crate) struct Update {
     pub(crate) table: String,
     pub(crate) assignments: Vec<Assignment>,
-    pub(crate) predicates: Vec<Predicate>,
+    pub(crate) where_clause: Option<Expression>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,20 +119,5 @@ pub(crate) struct Assignment {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Delete {
     pub(crate) table: String,
-    pub(crate) predicates: Vec<Predicate>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Predicate {
-    pub(crate) column: ColumnRef,
-    pub(crate) operator: PredicateOperator,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PredicateOperator {
-    Equal(Value),
-    NotEqual(Value),
-    Like(String),
-    IsNull,
-    IsNotNull,
+    pub(crate) where_clause: Option<Expression>,
 }
