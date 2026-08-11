@@ -72,6 +72,8 @@ pub(crate) struct Select {
     pub(crate) projection: Projection,
     pub(crate) where_clause: Option<Expression>,
     pub(crate) order_by: Vec<OrderTerm>,
+    pub(crate) limit: Option<u64>,
+    pub(crate) offset: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

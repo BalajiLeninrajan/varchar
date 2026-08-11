@@ -350,6 +350,59 @@ fn ordered_collection_and_target_specific_working_boundaries_run_in_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn pagination_keeps_u64_bounds_above_the_wasm_usize_range() {
+    let mut database = Database::new();
+    database
+        .execute("CREATE TABLE pages (id INTEGER NOT NULL)")
+        .unwrap();
+    database.execute("INSERT INTO pages VALUES (1)").unwrap();
+    database.execute("INSERT INTO pages VALUES (2)").unwrap();
+
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT id FROM pages LIMIT 4294967296 OFFSET 1")
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(2)]]
+    );
+    assert!(
+        rows(
+            database
+                .execute("SELECT id FROM pages ORDER BY id OFFSET 4294967296")
+                .unwrap()
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        rows(
+            database
+                .execute("SELECT id FROM pages LIMIT 18446744073709551615")
+                .unwrap()
+        ),
+        vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]
+    );
+
+    let blob = database.into_string();
+    let limits = Limits {
+        max_query_working_bytes: 0,
+        ..Limits::default()
+    };
+    let mut database = Database::from_string_with_limits(blob, limits).unwrap();
+    assert!(
+        rows(
+            database
+                .execute(
+                    "SELECT id FROM pages ORDER BY id \
+                     LIMIT 0 OFFSET 18446744073709551615",
+                )
+                .unwrap()
+        )
+        .is_empty()
+    );
+}
+
+#[wasm_bindgen_test]
 fn primary_and_foreign_keys_survive_reload_in_wasm() {
     let mut database = Database::new();
     database

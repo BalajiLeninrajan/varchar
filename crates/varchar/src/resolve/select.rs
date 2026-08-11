@@ -17,6 +17,8 @@ pub(crate) struct ResolvedSelect<'catalog, 'statement> {
     pub(crate) joins: Vec<ResolvedJoin>,
     pub(crate) where_clause: Option<Program<'statement>>,
     pub(crate) order_by: Vec<ResolvedOrderTerm>,
+    pub(crate) limit: Option<u64>,
+    pub(crate) offset: Option<u64>,
 }
 
 pub(crate) fn select<'catalog, 'statement>(
@@ -49,5 +51,7 @@ pub(crate) fn select<'catalog, 'statement>(
         joins,
         where_clause,
         order_by,
+        limit: statement.limit,
+        offset: statement.offset,
     })
 }

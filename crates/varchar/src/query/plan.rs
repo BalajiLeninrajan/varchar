@@ -26,6 +26,8 @@ pub(crate) struct SelectPlan<'catalog, 'statement> {
     pub(super) local_residuals: Vec<Option<Program<'statement>>>,
     pub(super) cross_source_residual: Option<Program<'statement>>,
     pub(super) order_by: Vec<ResolvedOrderTerm>,
+    pub(super) limit: Option<u64>,
+    pub(super) offset: Option<u64>,
 }
 
 impl SelectPlan<'_, '_> {

@@ -211,3 +211,45 @@ fn adjacency_is_recoverable_from_spans_alone() {
     assert_eq!(spaced[2].kind, TokenKind::Equal);
     assert_ne!(spaced[1].span.end, spaced[2].span.start);
 }
+
+#[test]
+fn malformed_numeric_runs_are_rejected_as_one_token() {
+    for value in ["1foo", "-0bar_2", "1.25tail"] {
+        let (kind, span) = lexical_error(value);
+        assert_eq!(
+            (kind.clone(), span),
+            (
+                LexicalErrorKind::MalformedNumericToken,
+                Span::new(0, value.len())
+            ),
+            "expected a complete malformed span for {value:?}"
+        );
+        assert!(
+            matches!(
+                kind.error(span),
+                Error::Parse {
+                    ref message,
+                    span_start: 0,
+                    span_end,
+                } if message == "malformed numeric token" && span_end == value.len()
+            ),
+            "expected a malformed numeric diagnostic for {value:?}"
+        );
+    }
+
+    // A leading `+` is an operator character, never part of the number. The
+    // parser reports it as an unexpected character, so the lexer emits no
+    // malformed-numeric token here.
+    assert_eq!(
+        lex_for_parser("+123")
+            .expect("an operator followed by digits lexes")
+            .into_iter()
+            .map(|token| (token.kind, token.span))
+            .collect::<Vec<_>>(),
+        vec![
+            (TokenKind::ExpressionOperator('+'), Span::new(0, 1)),
+            (TokenKind::Number(String::from("123")), Span::new(1, 4)),
+            (TokenKind::End, Span::new(4, 4)),
+        ]
+    );
+}

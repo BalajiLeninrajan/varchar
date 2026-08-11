@@ -12,13 +12,29 @@ use crate::{Error, Result};
 pub(super) struct RowCollector<'plan> {
     projection: &'plan [ColumnLocation],
     order_by: &'plan [ResolvedOrderTerm],
+    limit: Option<u64>,
+    offset: u64,
+    retained: Option<usize>,
     output_budget: ByteBudget,
     row_structure: usize,
     state: CollectionState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CollectionStatus {
+    Continue,
+    Complete,
+}
+
 enum CollectionState {
-    Streaming(Vec<Vec<Value>>),
+    Complete,
+    Streaming {
+        rows: Vec<Vec<Value>>,
+        skipped: u64,
+        emitted: u64,
+    },
+    /// `rows` is a max-heap ordered by [`compare_pending`], so its root is the
+    /// worst row still inside the retained pagination window.
     Ordered {
         rows: Vec<PendingRow>,
         next_ordinal: u64,
@@ -33,9 +49,24 @@ struct PendingRow {
 
 impl<'plan> RowCollector<'plan> {
     pub(super) fn new(plan: &'plan SelectPlan<'_, '_>, output_budget: ByteBudget) -> Result<Self> {
-        let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
-        let state = if plan.order_by.is_empty() {
-            CollectionState::Streaming(Vec::new())
+        let offset = plan.offset.unwrap_or(0);
+        let retained = ordered_retention(offset, plan.limit);
+        // `LIMIT 0` is the only window that can never gain a row, so it is also
+        // the only one that skips every scan, join, and materialization step.
+        let empty_window = retained == Some(0);
+        let row_structure = if empty_window {
+            0
+        } else {
+            row_structure_charge(plan.projection.len(), &output_budget)?
+        };
+        let state = if empty_window {
+            CollectionState::Complete
+        } else if plan.order_by.is_empty() {
+            CollectionState::Streaming {
+                rows: Vec::new(),
+                skipped: 0,
+                emitted: 0,
+            }
         } else {
             CollectionState::Ordered {
                 rows: Vec::new(),
@@ -45,10 +76,17 @@ impl<'plan> RowCollector<'plan> {
         Ok(Self {
             projection: &plan.projection,
             order_by: &plan.order_by,
+            limit: plan.limit,
+            offset,
+            retained,
             output_budget,
             row_structure,
             state,
         })
+    }
+
+    pub(super) fn should_scan(&self) -> bool {
+        !matches!(self.state, CollectionState::Complete)
     }
 
     pub(super) fn collect(
@@ -56,10 +94,19 @@ impl<'plan> RowCollector<'plan> {
         sources: &[&[Value]],
         working_budget: &mut ByteBudget,
         transient_working_bytes: usize,
-    ) -> Result<()> {
+    ) -> Result<CollectionStatus> {
         match &mut self.state {
-            CollectionState::Streaming(rows) => collect_streaming(
+            CollectionState::Complete => Ok(CollectionStatus::Complete),
+            CollectionState::Streaming {
                 rows,
+                skipped,
+                emitted,
+            } => collect_streaming(
+                rows,
+                skipped,
+                emitted,
+                self.limit,
+                self.offset,
                 self.projection,
                 sources,
                 self.row_structure,
@@ -70,6 +117,7 @@ impl<'plan> RowCollector<'plan> {
                 next_ordinal,
                 self.projection,
                 self.order_by,
+                self.retained,
                 sources,
                 working_budget,
                 transient_working_bytes,
@@ -80,18 +128,23 @@ impl<'plan> RowCollector<'plan> {
     pub(super) fn finish(self, columns: Vec<ResultColumn>) -> Result<RowSet> {
         let Self {
             order_by,
+            limit,
+            offset,
             mut output_budget,
             row_structure,
             state,
             ..
         } = self;
         let rows = match state {
-            CollectionState::Streaming(rows) => rows,
+            CollectionState::Complete => Vec::new(),
+            CollectionState::Streaming { rows, .. } => rows,
             CollectionState::Ordered { mut rows, .. } => {
                 // `sort_unstable_by` is allocation-free. The monotonic ordinal is
                 // the final key, so physical/nested-loop order wins every tie.
+                // Bounded collection already dropped everything after the
+                // window, so sorting the heap yields the window's own prefix.
                 rows.sort_unstable_by(|left, right| compare_pending(left, right, order_by));
-                materialize_ordered(rows, row_structure, &mut output_budget)?
+                materialize_ordered(rows, offset, limit, row_structure, &mut output_budget)?
             }
         };
         Ok(RowSet::new(columns, rows))
@@ -132,13 +185,31 @@ pub(super) fn materialize_result_columns(
     Ok(columns)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_streaming(
     rows: &mut Vec<Vec<Value>>,
+    skipped: &mut u64,
+    emitted: &mut u64,
+    limit: Option<u64>,
+    offset: u64,
     projection: &[ColumnLocation],
     sources: &[&[Value]],
     row_structure: usize,
     output_budget: &mut ByteBudget,
-) -> Result<()> {
+) -> Result<CollectionStatus> {
+    if *skipped < offset {
+        *skipped = skipped.checked_add(1).ok_or(Error::Capacity {
+            operation: "counting rows skipped by OFFSET",
+        })?;
+        return Ok(CollectionStatus::Continue);
+    }
+    if limit.is_some_and(|limit| *emitted >= limit) {
+        return Ok(CollectionStatus::Complete);
+    }
+    let following_emitted = emitted.checked_add(1).ok_or(Error::Capacity {
+        operation: "counting rows emitted through LIMIT",
+    })?;
+
     let payload_bytes = projected_payload_size(projection, sources, output_budget)?;
     let row_charge = row_structure
         .checked_add(payload_bytes)
@@ -157,22 +228,67 @@ fn collect_streaming(
         )?);
     }
     rows.push(row);
-    Ok(())
+    *emitted = following_emitted;
+    if limit == Some(*emitted) {
+        Ok(CollectionStatus::Complete)
+    } else {
+        Ok(CollectionStatus::Continue)
+    }
 }
 
+/// Retains one qualifying row for an ordered query, bounded by the pagination
+/// window.
+///
+/// Once `retained` rows are held, the heap root is the worst row that could
+/// still be returned. A candidate that does not beat it can never enter the
+/// window, so it is rejected before anything is charged or cloned; a candidate
+/// that does beat it evicts the root and refunds the root's working bytes.
 #[allow(clippy::too_many_arguments)]
 fn collect_ordered(
     rows: &mut Vec<PendingRow>,
     next_ordinal: &mut u64,
     projection: &[ColumnLocation],
     order_by: &[ResolvedOrderTerm],
+    retained: Option<usize>,
     sources: &[&[Value]],
     working_budget: &mut ByteBudget,
     transient_working_bytes: usize,
-) -> Result<()> {
-    let following_ordinal = next_ordinal.checked_add(1).ok_or(Error::Capacity {
+) -> Result<CollectionStatus> {
+    let ordinal = *next_ordinal;
+    let following_ordinal = ordinal.checked_add(1).ok_or(Error::Capacity {
         operation: "assigning an ordered-row ordinal",
     })?;
+
+    if let Some(retained) = retained {
+        if retained == 0 {
+            return Ok(CollectionStatus::Complete);
+        }
+        if rows.len() >= retained {
+            let worst = rows.first().ok_or(Error::Capacity {
+                operation: "reading the worst retained ordered row",
+            })?;
+            // The candidate's ordinal is always the largest so far, so a key
+            // tie keeps the row already inside the window, exactly as the final
+            // stable sort would.
+            if compare_keys(
+                order_by.iter().map(|term| value_at(sources, term.column)),
+                ordinal,
+                &worst.keys,
+                worst.ordinal,
+                order_by,
+            ) != Ordering::Less
+            {
+                *next_ordinal = following_ordinal;
+                return Ok(CollectionStatus::Continue);
+            }
+            let evicted = heap_pop(rows, order_by).ok_or(Error::Capacity {
+                operation: "evicting an ordered row past the pagination window",
+            })?;
+            let refund = pending_row_charge(&evicted, working_budget)?;
+            working_budget.release(refund);
+        }
+    }
+
     let projected_payload = payload_size(
         projection
             .iter()
@@ -192,8 +308,6 @@ fn collect_ordered(
     )?;
     working_budget.charge_with_transient(charge, transient_working_bytes)?;
 
-    rows.try_reserve(1)
-        .map_err(|_| allocation_error("retaining ordered query rows"))?;
     let mut projected = Vec::new();
     projected
         .try_reserve_exact(projection.len())
@@ -215,22 +329,98 @@ fn collect_ordered(
         )?);
     }
 
-    rows.push(PendingRow {
-        projected,
-        keys,
-        ordinal: *next_ordinal,
-    });
+    heap_push(
+        rows,
+        PendingRow {
+            projected,
+            keys,
+            ordinal,
+        },
+        order_by,
+    )?;
     *next_ordinal = following_ordinal;
+    Ok(CollectionStatus::Continue)
+}
+
+/// Pushes a row into the max-heap keyed by [`compare_pending`].
+fn heap_push(
+    rows: &mut Vec<PendingRow>,
+    row: PendingRow,
+    order_by: &[ResolvedOrderTerm],
+) -> Result<()> {
+    rows.try_reserve(1)
+        .map_err(|_| allocation_error("retaining ordered query rows"))?;
+    rows.push(row);
+    let mut child = rows.len() - 1;
+    while child > 0 {
+        let parent = (child - 1) / 2;
+        if compare_pending(&rows[child], &rows[parent], order_by) != Ordering::Greater {
+            break;
+        }
+        rows.swap(child, parent);
+        child = parent;
+    }
     Ok(())
+}
+
+/// Removes the heap root, restoring the invariant. Never allocates.
+fn heap_pop(rows: &mut Vec<PendingRow>, order_by: &[ResolvedOrderTerm]) -> Option<PendingRow> {
+    let last = rows.len().checked_sub(1)?;
+    rows.swap(0, last);
+    let evicted = rows.pop();
+    let mut parent = 0_usize;
+    while let Some(left) = parent.checked_mul(2).and_then(|index| index.checked_add(1)) {
+        let mut largest = parent;
+        for child in [left, left.saturating_add(1)] {
+            if child < rows.len()
+                && compare_pending(&rows[child], &rows[largest], order_by) == Ordering::Greater
+            {
+                largest = child;
+            }
+        }
+        if largest == parent {
+            break;
+        }
+        rows.swap(parent, largest);
+        parent = largest;
+    }
+    evicted
+}
+
+/// The pagination window can never need more than `OFFSET + LIMIT` rows.
+///
+/// `None` means the window is open-ended — no `LIMIT`, or a bound too large to
+/// index a `Vec` — so every qualifying row has to be retained.
+fn ordered_retention(offset: u64, limit: Option<u64>) -> Option<usize> {
+    let limit = limit?;
+    if limit == 0 {
+        return Some(0);
+    }
+    usize::try_from(offset.checked_add(limit)?).ok()
+}
+
+/// Recomputes what `collect_ordered` charged for a retained row, so eviction
+/// returns exactly those bytes to the working budget.
+fn pending_row_charge(row: &PendingRow, budget: &ByteBudget) -> Result<usize> {
+    ordered_row_charge(
+        row.projected.len(),
+        row.keys.len(),
+        payload_size(&row.projected, budget)?,
+        payload_size(&row.keys, budget)?,
+        budget,
+    )
 }
 
 fn materialize_ordered(
     pending: Vec<PendingRow>,
+    offset: u64,
+    limit: Option<u64>,
     row_structure: usize,
     output_budget: &mut ByteBudget,
 ) -> Result<Vec<Vec<Value>>> {
+    let (skip, take) = ordered_window(pending.len(), offset, limit)?;
     let mut rows = Vec::new();
-    for pending in pending {
+    for pending in pending.into_iter().skip(skip).take(take) {
         let payload = payload_size(pending.projected.iter(), output_budget)?;
         let charge = row_structure
             .checked_add(payload)
@@ -243,18 +433,54 @@ fn materialize_ordered(
     Ok(rows)
 }
 
+fn ordered_window(cardinality: usize, offset: u64, limit: Option<u64>) -> Result<(usize, usize)> {
+    let cardinality = u64::try_from(cardinality).map_err(|_| Error::Capacity {
+        operation: "representing ordered query cardinality",
+    })?;
+    let skip = offset.min(cardinality);
+    let remaining = cardinality - skip;
+    let take = limit.unwrap_or(remaining).min(remaining);
+    let skip = usize::try_from(skip).map_err(|_| Error::Capacity {
+        operation: "applying ordered query OFFSET",
+    })?;
+    let take = usize::try_from(take).map_err(|_| Error::Capacity {
+        operation: "applying ordered query LIMIT",
+    })?;
+    Ok((skip, take))
+}
+
 fn compare_pending(
     left: &PendingRow,
     right: &PendingRow,
     order_by: &[ResolvedOrderTerm],
 ) -> Ordering {
-    for ((left, right), term) in left.keys.iter().zip(&right.keys).zip(order_by) {
+    compare_keys(
+        &left.keys,
+        left.ordinal,
+        &right.keys,
+        right.ordinal,
+        order_by,
+    )
+}
+
+/// Orders two rows by their sort keys and then by the monotonic ordinal.
+///
+/// Taking the keys as iterators lets a candidate still borrowed from the scan
+/// be compared against a retained row without cloning either side.
+fn compare_keys<'left, 'right>(
+    left: impl IntoIterator<Item = &'left Value>,
+    left_ordinal: u64,
+    right: impl IntoIterator<Item = &'right Value>,
+    right_ordinal: u64,
+    order_by: &[ResolvedOrderTerm],
+) -> Ordering {
+    for ((left, right), term) in left.into_iter().zip(right).zip(order_by) {
         let ordering = compare_values(left, right, term.descending);
         if ordering != Ordering::Equal {
             return ordering;
         }
     }
-    left.ordinal.cmp(&right.ordinal)
+    left_ordinal.cmp(&right_ordinal)
 }
 
 fn compare_values(left: &Value, right: &Value, descending: bool) -> Ordering {

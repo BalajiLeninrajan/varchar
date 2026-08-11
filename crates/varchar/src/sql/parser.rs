@@ -3,6 +3,7 @@
 mod create;
 mod expression;
 mod mutation;
+mod pagination;
 mod select;
 
 use std::ops::Range;
@@ -27,6 +28,7 @@ struct Parser {
     where_expression: Option<Range<usize>>,
     claimed_in_expression: Option<usize>,
     claimed_order_error: Option<usize>,
+    claimed_pagination_error: Option<usize>,
 }
 
 impl Parser {
@@ -37,6 +39,7 @@ impl Parser {
             where_expression: None,
             claimed_in_expression: None,
             claimed_order_error: None,
+            claimed_pagination_error: None,
         }
     }
 
@@ -81,7 +84,9 @@ impl Parser {
     fn reject_deferred_lexical_errors(&self) -> Result<()> {
         let mut index = 0;
         while let Some(token) = self.tokens.get(index) {
-            if self.claimed_order_error == Some(index) {
+            if self.claimed_order_error == Some(index)
+                || self.claimed_pagination_error == Some(index)
+            {
                 break;
             }
             if let TokenKind::LexicalError(error) = &token.kind {
@@ -320,6 +325,7 @@ fn trailing_feature(word: &str) -> Option<&'static str> {
         "ORDER" => Some("ORDER BY"),
         "GROUP" => Some("GROUP BY"),
         "LIMIT" => Some("LIMIT"),
+        "OFFSET" => Some("OFFSET"),
         "AS" => Some("aliases"),
         _ => None,
     }
@@ -361,6 +367,7 @@ fn is_reserved(word: &str) -> bool {
             | "DESC"
             | "GROUP"
             | "LIMIT"
+            | "OFFSET"
             | "ALTER"
             | "DROP"
             | "DEFAULT"

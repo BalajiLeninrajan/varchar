@@ -29,6 +29,7 @@ pub(super) enum LexicalErrorKind {
     UnterminatedString,
     QuotedIdentifier,
     SqlComment,
+    MalformedNumericToken,
 }
 
 impl LexicalErrorKind {
@@ -38,6 +39,7 @@ impl LexicalErrorKind {
             Self::UnterminatedString => Error::parse("unterminated string literal", span),
             Self::QuotedIdentifier => Error::unsupported("quoted identifiers", span),
             Self::SqlComment => Error::unsupported("SQL comments", span),
+            Self::MalformedNumericToken => malformed_numeric_error(span),
         }
     }
 }
@@ -158,22 +160,16 @@ pub(super) fn lex_for_parser(input: &str) -> Result<Vec<Token>> {
                 TokenKind::LexicalError(LexicalErrorKind::SqlComment)
             }
             '-' if bytes.get(cursor + 1).is_some_and(u8::is_ascii_digit) => {
-                cursor += 1;
-                while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-                    cursor += 1;
-                }
-                TokenKind::Number(input[start..cursor].to_owned())
+                cursor = scan_digits(bytes, cursor + 1);
+                numeric_token(input, bytes, start, &mut cursor)
             }
             '-' | '/' => {
                 cursor += 1;
                 TokenKind::ExpressionOperator(character)
             }
             value if value.is_ascii_digit() => {
-                cursor += 1;
-                while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
-                    cursor += 1;
-                }
-                TokenKind::Number(input[start..cursor].to_owned())
+                cursor = scan_digits(bytes, cursor);
+                numeric_token(input, bytes, start, &mut cursor)
             }
             value if value == '_' || value.is_ascii_alphabetic() => {
                 cursor += 1;
@@ -217,6 +213,35 @@ pub(super) fn comparison_error(operator: &str, span: Span) -> Error {
         "!" => Error::parse("expected `=` after `!`", span),
         _ => Error::parse(format!("malformed comparison operator `{operator}`"), span),
     }
+}
+
+fn numeric_token(input: &str, bytes: &[u8], start: usize, cursor: &mut usize) -> TokenKind {
+    if bytes.get(*cursor).is_some_and(|byte| numeric_glue(*byte)) {
+        scan_numeric_glue(bytes, cursor);
+        return TokenKind::LexicalError(LexicalErrorKind::MalformedNumericToken);
+    }
+    TokenKind::Number(input[start..*cursor].to_owned())
+}
+
+fn malformed_numeric_error(span: Span) -> Error {
+    Error::parse("malformed numeric token", span)
+}
+
+fn scan_digits(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn scan_numeric_glue(bytes: &[u8], cursor: &mut usize) {
+    while bytes.get(*cursor).is_some_and(|byte| numeric_glue(*byte)) {
+        *cursor += 1;
+    }
+}
+
+const fn numeric_glue(byte: u8) -> bool {
+    byte == b'.' || byte == b'_' || byte.is_ascii_alphanumeric()
 }
 
 #[cfg(test)]

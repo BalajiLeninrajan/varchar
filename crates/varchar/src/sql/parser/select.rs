@@ -15,12 +15,15 @@ impl Parser {
         let joins = self.parse_joins()?;
         let where_clause = self.parse_optional_where()?;
         let order_by = self.parse_optional_order_by()?;
+        let (limit, offset) = self.parse_optional_pagination()?;
         Ok(Select {
             table,
             joins,
             projection,
             where_clause,
             order_by,
+            limit,
+            offset,
         })
     }
 
