@@ -6,8 +6,6 @@
 [![docs.rs](https://img.shields.io/docsrs/varchar?label=docs.rs)](https://docs.rs/varchar)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/BalajiLeninrajan/varchar/blob/main/LICENSE)
 
-Source: [github.com/BalajiLeninrajan/varchar](https://github.com/BalajiLeninrajan/varchar)
-
 `varchar` is a really dumb SQL DB: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
 
 It is a real parser, type checker, storage codec, and query engine. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
