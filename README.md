@@ -1,6 +1,6 @@
 # varchar
 
-`varchar` is a deliberately absurd database: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
+`varchar` is a really dumb SQL DB: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
 
 It is a real parser, type checker, storage codec, and query engine. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
 
