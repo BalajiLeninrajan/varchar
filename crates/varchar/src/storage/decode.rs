@@ -2,7 +2,6 @@
 
 mod metadata;
 
-use std::collections::BTreeMap;
 use std::ops::Range;
 
 pub(super) use metadata::{
@@ -83,10 +82,10 @@ pub(crate) fn decode_row(record: &str, layout: RowLayout<'_>) -> Result<Vec<Valu
     decode_row_at(record, layout, 0)
 }
 
-pub(super) fn validate_row_record(
+pub(super) fn validate_row_record<'a>(
     record: &str,
     offset: usize,
-    tables: &BTreeMap<String, TableSchema>,
+    lookup_table: impl FnOnce(&str) -> Option<&'a TableSchema>,
 ) -> Result<()> {
     let body = complete_record_body(record, ROW_PREFIX, offset)?;
     let mut fields = body.split('|');
@@ -97,9 +96,8 @@ pub(super) fn validate_row_record(
             "invalid or noncanonical table name",
         ));
     }
-    let schema = tables
-        .get(table)
-        .ok_or_else(|| corrupt(offset, "row references an unknown table"))?;
+    let schema =
+        lookup_table(table).ok_or_else(|| corrupt(offset, "row references an unknown table"))?;
     validate_row_at(record, schema.row_layout(), offset)
 }
 
