@@ -50,6 +50,7 @@ fn defaulted_text_schema(name: &str) -> TableSchema {
         primary_key: None,
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     }
 }
 
@@ -99,6 +100,7 @@ fn table_metadata_create_checks_the_complete_boundary_before_v3_mutation() {
         primary_key: None,
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
     candidate
         .insert_schema_with_auto_increment(&fallback, None)

@@ -18,7 +18,9 @@ mod update;
 
 pub(crate) use crate::expression::{LikeAtom, Predicate as ResolvedPredicate};
 pub(crate) use column::ColumnLocation;
+#[cfg(test)]
 pub(crate) use create::create_schema;
+pub(crate) use create::create_schema_with_limit;
 pub(crate) use expression::local_expression;
 #[cfg(test)]
 pub(crate) use expression::predicate;

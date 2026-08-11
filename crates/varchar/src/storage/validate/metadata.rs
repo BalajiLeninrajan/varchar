@@ -6,7 +6,7 @@ use super::super::budget::WorkingBudget;
 use super::super::catalog::{AutoIncrementState, CatalogMap};
 use super::super::decode::{
     AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, UniqueMetadata,
-    decode_cell_at,
+    decode_cell_at, validate_cell_at,
 };
 use super::super::{Catalog, ForeignKey, TableSchema};
 use super::ValidationMode;
@@ -437,6 +437,8 @@ impl MetadataValidator {
         }
 
         let definition = &schema.columns[column];
+        validate_cell_at(metadata.encoded_value, definition, metadata.value_offset)
+            .map_err(Violation::storage)?;
         budget
             .charge(metadata.encoded_value.len())
             .map_err(Violation::storage)?;

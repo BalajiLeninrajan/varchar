@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::format;
+use crate::expression::{CheckPredicate, CheckProgram, CheckProgramNode};
 use crate::{DataType, Error, Result, SchemaColumn, Value};
 
 /// The physical shape required to encode, decode, or scan one table's rows.
@@ -22,6 +23,8 @@ pub(crate) struct TableSchema {
     pub(crate) unique_columns: Vec<usize>,
     /// Increasing by local column; each local column appears at most once.
     pub(crate) foreign_keys: Vec<ForeignKey>,
+    /// Resolved CHECK expressions in declaration order.
+    pub(crate) checks: Vec<CheckProgram>,
 }
 
 impl TableSchema {
@@ -102,6 +105,10 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
         }
     }
 
+    for check in &schema.checks {
+        validate_check_against_schema(schema, check)?;
+    }
+
     let mut previous_foreign_key_column = None;
     for foreign_key in &schema.foreign_keys {
         if schema.columns.get(foreign_key.column).is_none() {
@@ -135,6 +142,63 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Reject a `CHECK` that is not a canonical program over `schema`'s columns.
+///
+/// Every path that admits a `CHECK` — resolving a `CREATE TABLE`, re-encoding
+/// metadata, and decoding a persisted database — enforces the same invariants,
+/// so they all funnel through here.
+pub(in crate::storage) fn validate_check_against_schema(
+    schema: &TableSchema,
+    check: &CheckProgram,
+) -> Result<()> {
+    for node in check.nodes() {
+        let CheckProgramNode::Predicate(predicate) = node else {
+            continue;
+        };
+        let column_index = predicate.column();
+        let column = schema.columns.get(column_index).ok_or_else(|| {
+            Error::Schema(format!(
+                "CHECK references column index {column_index} outside table {:?}",
+                schema.name
+            ))
+        })?;
+        let valid = match predicate {
+            CheckPredicate::Equal { value, .. }
+            | CheckPredicate::NotEqual { value, .. }
+            | CheckPredicate::LessThan { value, .. }
+            | CheckPredicate::LessThanOrEqual { value, .. }
+            | CheckPredicate::GreaterThan { value, .. }
+            | CheckPredicate::GreaterThanOrEqual { value, .. } => {
+                !matches!(value, Value::Null) && value_matches_type(value, column.data_type)
+            }
+            CheckPredicate::Like { .. } => column.data_type == DataType::Text,
+            CheckPredicate::IsNull { .. } | CheckPredicate::IsNotNull { .. } => true,
+            CheckPredicate::In { values, .. } => {
+                !values.is_empty()
+                    && values.iter().all(|value| {
+                        matches!(value, Value::Null) || value_matches_type(value, column.data_type)
+                    })
+            }
+        };
+        if !valid {
+            return Err(Error::Schema(format!(
+                "invalid CHECK operand for column {:?}.{:?}",
+                schema.name, column.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+const fn value_matches_type(value: &Value, data_type: DataType) -> bool {
+    matches!(
+        (value, data_type),
+        (Value::Text(_), DataType::Text)
+            | (Value::Integer(_), DataType::Integer)
+            | (Value::Boolean(_), DataType::Boolean)
+    )
 }
 
 pub(crate) fn validate_row_layout(layout: RowLayout<'_>) -> Result<()> {

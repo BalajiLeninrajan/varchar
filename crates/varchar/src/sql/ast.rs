@@ -43,6 +43,7 @@ pub(crate) enum ColumnModifier {
     References(ForeignKeyReference),
     AutoIncrement,
     Default(Value),
+    Check(Expression),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +60,7 @@ pub(crate) enum TableConstraint {
         column: String,
         reference: ForeignKeyReference,
     },
+    Check(Expression),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

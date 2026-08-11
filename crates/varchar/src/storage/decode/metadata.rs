@@ -122,6 +122,7 @@ pub(in crate::storage) fn decode_schema_record(
         primary_key: None,
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     })
 }
 

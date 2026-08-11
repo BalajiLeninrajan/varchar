@@ -26,6 +26,7 @@ struct Parser {
     tokens: Vec<Token>,
     position: usize,
     where_expression: Option<Range<usize>>,
+    check_expressions: Vec<Range<usize>>,
     claimed_in_expression: Option<usize>,
     claimed_order_error: Option<usize>,
     claimed_pagination_error: Option<usize>,
@@ -37,6 +38,7 @@ impl Parser {
             tokens,
             position: 0,
             where_expression: None,
+            check_expressions: Vec::new(),
             claimed_in_expression: None,
             claimed_order_error: None,
             claimed_pagination_error: None,
@@ -94,9 +96,9 @@ impl Parser {
             }
 
             if comparison_fragment(&token.kind).is_some() {
-                if self.token_is_in_where_expression(index) {
+                if self.token_is_in_expression(index) {
                     let (operator, end, span) = self.comparison_sequence(index);
-                    if !is_where_comparison(&operator) {
+                    if !is_expression_comparison(&operator) {
                         return Err(comparison_error(&operator, span));
                     }
                     if self.claimed_in_expression == Some(index) {
@@ -151,10 +153,45 @@ impl Parser {
         )
     }
 
-    fn token_is_in_where_expression(&self, index: usize) -> bool {
+    pub(super) fn register_check_expression(&mut self, start: usize) -> Result<()> {
+        let end = self.check_expression_end(start);
+        self.check_expressions
+            .try_reserve(1)
+            .map_err(|_| Error::Allocation {
+                operation: "recording CHECK expression tokens",
+            })?;
+        self.check_expressions.push(start..end);
+        Ok(())
+    }
+
+    fn check_expression_end(&self, start: usize) -> usize {
+        let mut depth = 0_usize;
+        let mut index = start;
+        while let Some(token) = self.tokens.get(index) {
+            if matches!(&token.kind, TokenKind::End | TokenKind::Semicolon) {
+                break;
+            }
+            match &token.kind {
+                TokenKind::LeftParen => depth = depth.saturating_add(1),
+                TokenKind::RightParen if depth > 0 => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+            if depth == 0 {
+                break;
+            }
+        }
+        index
+    }
+
+    fn token_is_in_expression(&self, index: usize) -> bool {
         self.where_expression
             .as_ref()
             .is_some_and(|range| range.contains(&index))
+            || self
+                .check_expressions
+                .iter()
+                .any(|range| range.contains(&index))
     }
 
     fn parse_column_ref(&mut self) -> Result<ColumnRef> {
@@ -311,7 +348,7 @@ fn comparison_fragment(kind: &TokenKind) -> Option<&'static str> {
     }
 }
 
-fn is_where_comparison(operator: &str) -> bool {
+fn is_expression_comparison(operator: &str) -> bool {
     matches!(operator, "=" | "!=" | "<" | "<=" | ">" | ">=")
 }
 
@@ -372,6 +409,7 @@ fn is_reserved(word: &str) -> bool {
             | "DROP"
             | "DEFAULT"
             | "UNIQUE"
+            | "CHECK"
     )
 }
 

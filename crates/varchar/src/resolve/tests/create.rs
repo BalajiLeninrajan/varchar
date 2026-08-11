@@ -266,6 +266,93 @@ fn default_diagnostics_follow_source_order() {
 }
 
 #[test]
+fn check_diagnostics_follow_source_order_against_default_and_declaration_errors() {
+    let check_before_default =
+        create_table("CREATE TABLE items (value INTEGER CHECK (missing = 0) DEFAULT 'wrong')");
+    assert!(matches!(
+        create_schema(&Catalog::empty(), check_before_default),
+        Err(Error::Schema(ref message))
+            if message == "CHECK references unknown column \"missing\" in table \"items\""
+    ));
+
+    let default_before_check =
+        create_table("CREATE TABLE items (value INTEGER DEFAULT 'wrong' CHECK (missing = 0))");
+    assert!(matches!(
+        create_schema(&Catalog::empty(), default_before_check),
+        Err(Error::Type(ref message)) if message == "column \"value\" expects INTEGER, got TEXT"
+    ));
+
+    let check_before_local_error =
+        create_table("CREATE TABLE items (value INTEGER CHECK (missing = 0) UNIQUE UNIQUE)");
+    assert!(matches!(
+        create_schema(&Catalog::empty(), check_before_local_error),
+        Err(Error::Schema(ref message))
+            if message == "CHECK references unknown column \"missing\" in table \"items\""
+    ));
+
+    let local_error_before_check =
+        create_table("CREATE TABLE items (value INTEGER UNIQUE UNIQUE CHECK (missing = 0))");
+    assert!(matches!(
+        create_schema(&Catalog::empty(), local_error_before_check),
+        Err(Error::Schema(ref message))
+            if message == "duplicate UNIQUE declaration for column \"value\""
+    ));
+}
+
+#[test]
+fn table_check_foreign_key_and_auto_increment_errors_keep_phase_order() {
+    for (sql, expected) in [
+        (
+            "CREATE TABLE items (CHECK (missing = 0), parent_id INTEGER REFERENCES missing(id), id TEXT PRIMARY KEY AUTOINCREMENT)",
+            "CHECK references unknown column \"missing\" in table \"items\"",
+        ),
+        (
+            "CREATE TABLE items (parent_id INTEGER REFERENCES missing(id), CHECK (missing = 0), id TEXT PRIMARY KEY AUTOINCREMENT)",
+            "foreign key references unknown or later table \"missing\"",
+        ),
+        (
+            "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, CHECK (missing = 0), parent_id INTEGER REFERENCES missing(id))",
+            "CHECK references unknown column \"missing\" in table \"items\"",
+        ),
+        (
+            "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES missing(id), CHECK (missing = 0))",
+            "foreign key references unknown or later table \"missing\"",
+        ),
+        (
+            "CREATE TABLE items (CHECK (missing = 0), id TEXT PRIMARY KEY AUTOINCREMENT, parent_id INTEGER REFERENCES parents(id))",
+            "CHECK references unknown column \"missing\" in table \"items\"",
+        ),
+        (
+            "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, CHECK (missing = 0), parent_id INTEGER REFERENCES parents(id))",
+            "auto-increment column \"items\".\"id\" must be its INTEGER primary key",
+        ),
+    ] {
+        assert!(matches!(
+            create_schema(&keyed_parent_catalog(), create_table(sql)),
+            Err(Error::Schema(ref message)) if message == expected
+        ));
+    }
+}
+
+#[test]
+fn check_resolution_uses_the_full_preflighted_column_namespace() {
+    let resolved = create_schema(
+        &Catalog::empty(),
+        create_table("CREATE TABLE items (first INTEGER CHECK (later = 0), later INTEGER)"),
+    )
+    .expect("CHECK can reference a later local column");
+    assert_eq!(resolved.schema.checks.len(), 1);
+
+    let duplicate_column = create_table(
+        "CREATE TABLE items (value INTEGER CHECK (missing = 0), value INTEGER DEFAULT 'wrong')",
+    );
+    assert!(matches!(
+        create_schema(&Catalog::empty(), duplicate_column),
+        Err(Error::Schema(ref message)) if message == "duplicate column name \"value\""
+    ));
+}
+
+#[test]
 fn duplicate_columns_precede_declaration_errors_but_declarations_keep_source_order() {
     let duplicate_column =
         create_table("CREATE TABLE items (PRIMARY KEY (missing), id INTEGER, id INTEGER)");

@@ -131,6 +131,11 @@ impl WorkingBudget {
         Ok(owned)
     }
 
+    pub(super) fn release(&mut self, bytes: usize) {
+        debug_assert!(bytes <= self.used);
+        self.used -= bytes;
+    }
+
     const fn error(&self) -> Error {
         Error::ResourceLimit {
             resource: Resource::StorageWorkingBytes,

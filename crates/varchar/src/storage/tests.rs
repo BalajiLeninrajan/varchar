@@ -4,7 +4,7 @@ use super::budget::{reset_working_string_comparisons, working_limit, working_str
 use super::decode::{blob_row_scans, reset_blob_row_scans};
 use super::validate::validate_and_catalog;
 use super::{StorageState, TableSchema};
-use crate::{DataType, Error, Resource, SchemaColumn, Value};
+use crate::{DataType, Database, Error, Limits, Resource, SchemaColumn, Value};
 
 #[test]
 fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
@@ -20,6 +20,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
         primary_key: Some(0),
         unique_columns: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
     };
     let mut candidate = state.candidate(1024).expect("empty state fits");
     candidate
@@ -140,6 +141,31 @@ fn unique_index_preserves_exact_limit_loading() {
         validate_and_catalog(&blob, working_limit(blob.len())).unwrap_or_else(|error| {
             panic!(
                 "{columns} UNIQUE columns over {rows} rows exceeded their derived limit: {error}"
+            )
+        });
+    }
+}
+
+/// Regression: these databases reopened through the public API at a limit that is exactly their
+/// own length, and a fixed working cost per declared UNIQUE column closed them out of it.
+///
+/// The property only holds once each validation pass hands its temporary indexes back, which is
+/// why it is pinned here rather than beside the UNIQUE index that motivated it.
+#[test]
+fn small_unique_databases_reopen_at_their_own_size() {
+    for blob in [
+        "V3;~S|t0|i:T:!|u:T:?;~P|t0|i;~U|t0|u;~R|t0|Ta|Ta;",
+        "V3;~S|t|c0:T:?|c1:T:?;~U|t|c0;~U|t|c1;~R|t|Ta|Td;~R|t|Tb|Te;~R|t|Tc|Tf;",
+        "V3;~S|t|c0:T:?|c1:T:?;~U|t|c0;~U|t|c1;~R|t|Ta|N;~R|t|Tb|N;~R|t|Tc|N;",
+    ] {
+        let limits = Limits {
+            max_database_bytes: blob.len(),
+            ..Limits::default()
+        };
+        Database::from_string_with_limits(blob.to_string(), limits).unwrap_or_else(|error| {
+            panic!(
+                "{blob:?} no longer reopens at {} bytes: {error}",
+                blob.len()
             )
         });
     }

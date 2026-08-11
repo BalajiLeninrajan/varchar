@@ -150,6 +150,11 @@ pub(super) fn validate_rows(
     if primary_count == 0 {
         debug_assert!(!has_foreign_keys, "every foreign key targets a primary key");
     }
+    let primary_descriptor_bytes = primary_count
+        .checked_mul(std::mem::size_of::<PrimaryValues<'_>>())
+        .ok_or(Error::Capacity {
+            operation: "sizing primary-key validation indexes",
+        })?;
 
     let mut primary_values = Vec::new();
     budget.reserve_exact(
@@ -167,107 +172,128 @@ pub(super) fn validate_rows(
     }
     primary_values.sort_unstable_by(|left, right| left.table.cmp(right.table));
 
-    // The fill pass is spelled out rather than delegated to `for_each_row` because growing an
-    // index can exhaust the working budget, which is a storage error and not a row violation.
-    let mut earliest_primary_violation = None;
-    for row in row_records(blob, catalog.row_start) {
-        let row = row.map_err(ValidationError::Storage)?;
-        let offset = row.range().start;
-        let schema = catalog.table(row.table()).ok_or_else(|| {
-            Violation::new(offset, "row table disappeared during integrity validation")
-        })?;
-        let Some(primary_key) = schema.primary_key else {
-            continue;
-        };
-        let Some(value) = row.cells().nth(primary_key) else {
-            record_earliest(
-                &mut earliest_primary_violation,
-                Violation::new(offset, "primary-key cell is missing from a validated row"),
-            );
-            continue;
-        };
-        if value == "N" {
-            record_earliest(
-                &mut earliest_primary_violation,
-                Violation::new(
-                    offset,
-                    format!("primary key for table {:?} is NULL", schema.name),
-                ),
-            );
-            continue;
-        }
-        if let Some(auto_increment) = catalog.auto_increment_state(&schema.name) {
-            debug_assert_eq!(auto_increment.column, primary_key);
-            let Some(stored) = value
-                .strip_prefix('I')
-                .and_then(|payload| payload.parse::<i64>().ok())
-            else {
+    // Every append reports the bytes it charged, and this is the ledger they accumulate into:
+    // it is what the releases below hand back, so charge and release come from one place
+    // instead of from a capacity the allocator was free to round up.
+    let mut primary_index_bytes = primary_descriptor_bytes;
+
+    let primary_result = (|| -> ValidationResult<()> {
+        // The fill pass is spelled out rather than delegated to `for_each_row` because growing
+        // an index can exhaust the working budget, which is a storage error, not a violation.
+        let mut earliest_primary_violation = None;
+        for row in row_records(blob, catalog.row_start) {
+            let row = row.map_err(ValidationError::Storage)?;
+            let offset = row.range().start;
+            let schema = catalog.table(row.table()).ok_or_else(|| {
+                Violation::new(offset, "row table disappeared during integrity validation")
+            })?;
+            let Some(primary_key) = schema.primary_key else {
+                continue;
+            };
+            let Some(value) = row.cells().nth(primary_key) else {
                 record_earliest(
                     &mut earliest_primary_violation,
-                    Violation::new(offset, "auto-increment primary-key cell is not an INTEGER"),
+                    Violation::new(offset, "primary-key cell is missing from a validated row"),
                 );
                 continue;
             };
-            if stored > auto_increment.last {
+            if value == "N" {
                 record_earliest(
                     &mut earliest_primary_violation,
                     Violation::new(
                         offset,
-                        format!(
-                            "auto-increment high-water mark for table {:?} is below a stored key",
-                            schema.name
+                        format!("primary key for table {:?} is NULL", schema.name),
+                    ),
+                );
+                continue;
+            }
+            if let Some(auto_increment) = catalog.auto_increment_state(&schema.name) {
+                debug_assert_eq!(auto_increment.column, primary_key);
+                let Some(stored) = value
+                    .strip_prefix('I')
+                    .and_then(|payload| payload.parse::<i64>().ok())
+                else {
+                    record_earliest(
+                        &mut earliest_primary_violation,
+                        Violation::new(offset, "auto-increment primary-key cell is not an INTEGER"),
+                    );
+                    continue;
+                };
+                if stored > auto_increment.last {
+                    record_earliest(
+                        &mut earliest_primary_violation,
+                        Violation::new(
+                            offset,
+                            format!(
+                                "auto-increment high-water mark for table {:?} is below a stored key",
+                                schema.name
+                            ),
                         ),
-                    ),
-                );
+                    );
+                    continue;
+                }
+            }
+            let index = primary_values_index(&primary_values, &schema.name)
+                .expect("a primary-key index exists for every keyed table");
+            primary_index_bytes += primary_values[index].values.push(value, budget)?;
+        }
+        let mut earliest_duplicate = None;
+        for values in &mut primary_values {
+            let Some(occurrence) = values.values.duplicate_occurrence() else {
                 continue;
+            };
+            if earliest_duplicate.is_none_or(|(_, existing): (&str, &str)| {
+                source_position(occurrence) < source_position(existing)
+            }) {
+                earliest_duplicate = Some((values.table, occurrence));
             }
         }
-        let index = primary_values_index(&primary_values, &schema.name)
-            .expect("a primary-key index exists for every keyed table");
-        primary_values[index].values.push(value, budget)?;
-    }
-    let mut earliest_duplicate = None;
-    for values in &mut primary_values {
-        let Some(occurrence) = values.values.duplicate_occurrence() else {
-            continue;
-        };
-        if earliest_duplicate.is_none_or(|(_, existing): (&str, &str)| {
-            source_position(occurrence) < source_position(existing)
-        }) {
-            earliest_duplicate = Some((values.table, occurrence));
-        }
-    }
-    if let Some((table, occurrence)) = earliest_duplicate {
-        for row in row_records(blob, catalog.row_start) {
-            let row = row.map_err(ValidationError::Storage)?;
-            if row.table() != table {
-                continue;
-            }
-            let schema = catalog
-                .table(table)
-                .expect("a primary-key index names a catalog table");
-            let primary_key = schema
-                .primary_key
-                .expect("a primary-key index names a keyed table");
-            let value = row
-                .cells()
-                .nth(primary_key)
-                .expect("validated rows contain their primary-key cell");
-            if value.len() == occurrence.len() && std::ptr::eq(value.as_ptr(), occurrence.as_ptr())
-            {
-                record_earliest(
-                    &mut earliest_primary_violation,
-                    Violation::new(
-                        row.range().start,
-                        format!("duplicate primary key in table {table:?}"),
-                    ),
-                );
-                break;
+        if let Some((table, occurrence)) = earliest_duplicate {
+            for row in row_records(blob, catalog.row_start) {
+                let row = row.map_err(ValidationError::Storage)?;
+                if row.table() != table {
+                    continue;
+                }
+                let schema = catalog
+                    .table(table)
+                    .expect("a primary-key index names a catalog table");
+                let primary_key = schema
+                    .primary_key
+                    .expect("a primary-key index names a keyed table");
+                let value = row
+                    .cells()
+                    .nth(primary_key)
+                    .expect("validated rows contain their primary-key cell");
+                if value.len() == occurrence.len()
+                    && std::ptr::eq(value.as_ptr(), occurrence.as_ptr())
+                {
+                    record_earliest(
+                        &mut earliest_primary_violation,
+                        Violation::new(
+                            row.range().start,
+                            format!("duplicate primary key in table {table:?}"),
+                        ),
+                    );
+                    break;
+                }
             }
         }
+        if let Some(violation) = earliest_primary_violation {
+            return Err(violation.into());
+        }
+        Ok(())
+    })();
+
+    if !has_foreign_keys {
+        drop(std::mem::take(&mut primary_values));
+        budget.release(primary_index_bytes);
     }
-    if let Some(violation) = earliest_primary_violation {
-        return Err(violation.into());
+    if let Err(error) = primary_result {
+        if has_foreign_keys {
+            drop(primary_values);
+            budget.release(primary_index_bytes);
+        }
+        return Err(error);
     }
 
     unique::validate(blob, catalog, budget)?;
@@ -276,7 +302,7 @@ pub(super) fn validate_rows(
         return Ok(());
     }
 
-    for_each_row(blob, catalog, |row, schema| {
+    let result = for_each_row(blob, catalog, |row, schema| {
         let offset = row.range().start;
         if schema.foreign_keys.is_empty() {
             return Ok(());
@@ -320,7 +346,10 @@ pub(super) fn validate_rows(
             ));
         }
         Ok(())
-    })
+    });
+    drop(primary_values);
+    budget.release(primary_index_bytes);
+    result
 }
 
 fn for_each_row<'a>(

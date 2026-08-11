@@ -16,6 +16,8 @@ pub enum Resource {
     SqlBytes,
     /// Predicate units in one `WHERE` expression.
     WherePredicates,
+    /// Predicate units across all `CHECK` declarations on one table.
+    CheckPredicates,
     /// Source tables participating in one `SELECT`.
     JoinSources,
     /// One generated regular expression.
@@ -39,6 +41,7 @@ impl fmt::Display for Resource {
             Self::DatabaseBytes => "database bytes",
             Self::SqlBytes => "SQL bytes",
             Self::WherePredicates => "WHERE predicates",
+            Self::CheckPredicates => "CHECK predicates",
             Self::JoinSources => "JOIN sources",
             Self::GeneratedRegexBytes => "generated regex bytes",
             Self::QueryWorkingBytes => "query working bytes",
@@ -57,7 +60,8 @@ pub struct Limits {
     pub max_database_bytes: usize,
     /// Maximum size of one SQL statement, in UTF-8 bytes.
     pub max_sql_bytes: usize,
-    /// Maximum predicate units in one `WHERE` expression.
+    /// Maximum predicate units in one `WHERE` expression or cumulatively across
+    /// all `CHECK` declarations on one table.
     ///
     /// Ordinary predicate leaves consume one unit, while `IN` consumes one
     /// unit per list member. Logical operators and parentheses consume none.
