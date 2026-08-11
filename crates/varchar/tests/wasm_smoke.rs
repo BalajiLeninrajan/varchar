@@ -509,3 +509,32 @@ fn inner_joins_execute_inside_wasm() {
         ]]
     );
 }
+
+#[wasm_bindgen_test]
+fn v2_load_and_atomic_default_upgrade_work_inside_wasm() {
+    let v2 = String::from("V2;~S|legacy|id:I:!;~R|legacy|I1;");
+    let mut database = Database::from_string(v2.clone()).unwrap();
+    assert_eq!(database.as_str(), v2);
+
+    database
+        .execute("CREATE TABLE settings (enabled BOOLEAN DEFAULT TRUE, note TEXT DEFAULT NULL)")
+        .unwrap();
+    assert!(database.as_str().starts_with("V3;"));
+    assert!(database.as_str().contains("~D|settings|enabled|B1;"));
+    assert!(database.as_str().contains("~D|settings|note|N;"));
+    database
+        .execute("INSERT INTO settings (note) VALUES (NULL)")
+        .unwrap();
+
+    let blob = database.into_string();
+    let mut reloaded = Database::from_string(blob.clone()).unwrap();
+    assert_eq!(reloaded.as_str(), blob);
+    assert_eq!(
+        rows(
+            reloaded
+                .execute("SELECT enabled, note FROM settings")
+                .unwrap()
+        ),
+        vec![vec![Value::Boolean(true), Value::Null]]
+    );
+}

@@ -28,12 +28,21 @@ pub(crate) fn insert_values(
         }
         let mut seen = BTreeSet::new();
         let mut values = vec![Value::Null; schema.columns.len()];
+        let mut supplied_columns = vec![false; schema.columns.len()];
         for (name, value) in columns.into_iter().zip(supplied) {
             if !seen.insert(name.clone()) {
                 return Err(Error::Schema(format!("duplicate INSERT column {name:?}")));
             }
             let index = require_column(schema, &name)?;
             values[index] = value;
+            supplied_columns[index] = true;
+        }
+        for (index, column) in schema.columns.iter().enumerate() {
+            if !supplied_columns[index]
+                && let Some(default) = &column.default
+            {
+                values[index] = default.clone();
+            }
         }
         values
     } else {

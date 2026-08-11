@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use super::format;
-use crate::{Error, Result, SchemaColumn};
+use crate::{DataType, Error, Result, SchemaColumn, Value};
 
 /// The physical shape required to encode, decode, or scan one table's rows.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +53,25 @@ pub(crate) fn validate_schema_for_write(schema: &TableSchema) -> Result<()> {
         if column.nullable {
             return Err(Error::Schema(format!(
                 "primary-key column {:?}.{:?} must be NOT NULL",
+                schema.name, column.name
+            )));
+        }
+    }
+
+    for column in &schema.columns {
+        let Some(default) = &column.default else {
+            continue;
+        };
+        let valid = match (default, column.data_type) {
+            (Value::Null, _) => column.nullable,
+            (Value::Text(_), DataType::Text)
+            | (Value::Integer(_), DataType::Integer)
+            | (Value::Boolean(_), DataType::Boolean) => true,
+            _ => false,
+        };
+        if !valid {
+            return Err(Error::Schema(format!(
+                "invalid DEFAULT for column {:?}.{:?}",
                 schema.name, column.name
             )));
         }

@@ -871,6 +871,27 @@ fn single_table_scan_charges_large_unprojected_values_to_working_memory() {
 }
 
 #[test]
+fn wide_schema_loads_at_its_exact_database_limit() {
+    let mut blob = String::from("V2;~S|t");
+    for index in 0..16 {
+        let suffix = index.to_string();
+        let name = format!("c{}{suffix}", "x".repeat(22 - suffix.len()));
+        assert_eq!(name.len(), 23);
+        blob.push_str(&format!("|{name}:I:?"));
+    }
+    blob.push(';');
+    assert_eq!(blob.len(), 456);
+
+    let limits = Limits {
+        max_database_bytes: blob.len(),
+        ..Limits::default()
+    };
+    let database = Database::from_string_with_limits(blob.clone(), limits)
+        .expect("wide schema fits its exact database limit");
+    assert_eq!(database.as_str(), blob);
+}
+
+#[test]
 fn configurable_resource_limits_fail_without_partial_work() {
     let sql_limits = Limits {
         max_sql_bytes: 8,

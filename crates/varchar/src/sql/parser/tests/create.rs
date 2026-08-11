@@ -2,7 +2,7 @@ use super::{create_table, parse};
 use crate::sql::ast::{
     ColumnDef, ColumnModifier, CreateElement, ForeignKeyReference, TableConstraint,
 };
-use crate::{DataType, Error};
+use crate::{DataType, Error, Value};
 
 #[test]
 fn parses_inline_primary_and_foreign_keys_in_either_modifier_order() {
@@ -116,6 +116,75 @@ fn preserves_duplicate_declarations_for_semantic_resolution() {
         ]
     );
     assert_eq!(statement.elements.len(), 3);
+}
+
+#[test]
+fn parses_literal_defaults_and_preserves_duplicates_for_resolution() {
+    let statement = create_table(
+        "CREATE TABLE settings (value TEXT DEFAULT NULL DEFAULT 'fallback', enabled BOOLEAN DEFAULT TRUE)",
+    );
+    let CreateElement::Column(value) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        value.modifiers,
+        vec![
+            ColumnModifier::Default(Value::Null),
+            ColumnModifier::Default(Value::Text("fallback".to_owned())),
+        ]
+    );
+    let CreateElement::Column(enabled) = &statement.elements[1] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        enabled.modifiers,
+        vec![ColumnModifier::Default(Value::Boolean(true))]
+    );
+}
+
+#[test]
+fn default_is_reserved_and_cannot_be_used_as_an_identifier() {
+    for sql in [
+        "CREATE TABLE default (id INTEGER)",
+        "CREATE TABLE t (default TEXT)",
+        "INSERT INTO default (id) VALUES (1)",
+        "SELECT default FROM t",
+        "SELECT * FROM default",
+        "SELECT * FROM t WHERE default = 1",
+        "UPDATE default SET id = 1",
+        "UPDATE t SET default = 1",
+        "DELETE FROM default",
+    ] {
+        let span_start = sql.find("default").expect("fixture contains error marker");
+        match parse(sql) {
+            Err(Error::Parse {
+                message,
+                span_start: actual_start,
+                span_end,
+            }) => {
+                assert_eq!(
+                    message, "reserved keyword `DEFAULT` cannot be used as an identifier",
+                    "message for {sql:?}"
+                );
+                assert_eq!(
+                    (actual_start, span_end),
+                    (span_start, span_start + "default".len()),
+                    "span for {sql:?}"
+                );
+            }
+            other => panic!("expected exact Parse error for {sql:?}, got {other:?}"),
+        }
+    }
+
+    // The keyword still drives the column modifier it was reserved for.
+    let statement = create_table("CREATE TABLE t (value TEXT DEFAULT 'fallback')");
+    let CreateElement::Column(value) = &statement.elements[0] else {
+        panic!("expected a column");
+    };
+    assert_eq!(
+        value.modifiers,
+        vec![ColumnModifier::Default(Value::Text("fallback".to_owned()))]
+    );
 }
 
 #[test]

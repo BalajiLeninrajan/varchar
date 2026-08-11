@@ -1,4 +1,7 @@
+use std::fmt::Write as _;
+
 use crate::Error;
+use crate::resolve::create::{default_validations, reset_default_validations};
 use crate::resolve::create_schema;
 use crate::sql::{self, Statement};
 use crate::storage::{Catalog, ForeignKey, StorageState};
@@ -42,6 +45,28 @@ fn create_schema_normalizes_inline_and_table_key_metadata() {
             }]
         );
     }
+}
+
+#[test]
+fn wide_foreign_key_defaults_are_validated_once() {
+    const COLUMN_COUNT: usize = 512;
+
+    let mut sql = String::from("CREATE TABLE children (");
+    for column in 0..COLUMN_COUNT {
+        if column != 0 {
+            sql.push_str(", ");
+        }
+        write!(
+            sql,
+            "c{column} INTEGER DEFAULT {column} REFERENCES parents(id)"
+        )
+        .expect("writing SQL to a String succeeds");
+    }
+    sql.push(')');
+
+    reset_default_validations();
+    create_schema(&keyed_parent_catalog(), create_table(&sql)).expect("wide schema resolves");
+    assert_eq!(default_validations(), COLUMN_COUNT);
 }
 
 #[test]
@@ -104,6 +129,90 @@ fn create_schema_owns_column_shape_and_modifier_policy() {
             Err(Error::Schema(ref message)) if message == expected
         ));
     }
+}
+
+#[test]
+fn default_diagnostics_follow_source_order() {
+    for sql in [
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong' DEFAULT 1)",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', parent_id INTEGER REFERENCES missing(id))",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id TEXT PRIMARY KEY AUTOINCREMENT)",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER NOT NULL NOT NULL)",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER PRIMARY KEY PRIMARY KEY)",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER REFERENCES parents(id) REFERENCES parents(id))",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER, PRIMARY KEY (missing))",
+        "CREATE TABLE items (value INTEGER DEFAULT 'wrong', id INTEGER, FOREIGN KEY (missing) REFERENCES parents(id))",
+    ] {
+        assert!(matches!(
+            create_schema(&Catalog::empty(), create_table(sql)),
+            Err(Error::Type(ref message))
+                if message == "column \"value\" expects INTEGER, got TEXT"
+        ));
+    }
+
+    for sql in [
+        "CREATE TABLE items (value INTEGER NOT NULL DEFAULT NULL DEFAULT 1)",
+        "CREATE TABLE items (value INTEGER NOT NULL DEFAULT NULL, parent_id INTEGER REFERENCES missing(id))",
+        "CREATE TABLE items (value INTEGER NOT NULL DEFAULT NULL, id TEXT PRIMARY KEY AUTOINCREMENT)",
+    ] {
+        assert!(matches!(
+            create_schema(&Catalog::empty(), create_table(sql)),
+            Err(Error::Schema(ref message))
+                if message == "DEFAULT NULL is invalid for NOT NULL column \"items\".\"value\""
+        ));
+    }
+
+    let earlier_foreign_key = create_table(
+        "CREATE TABLE items (parent_id INTEGER REFERENCES missing(id), value INTEGER DEFAULT 'wrong')",
+    );
+    assert!(matches!(
+        create_schema(&Catalog::empty(), earlier_foreign_key),
+        Err(Error::Schema(ref message))
+            if message == "foreign key references unknown or later table \"missing\""
+    ));
+
+    let earlier_auto_increment = create_table(
+        "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, value INTEGER DEFAULT 'wrong')",
+    );
+    assert!(matches!(
+        create_schema(&Catalog::empty(), earlier_auto_increment),
+        Err(Error::Schema(ref message))
+            if message == "auto-increment column \"items\".\"id\" must be its INTEGER primary key"
+    ));
+
+    let activated_auto_increment = create_table(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY DEFAULT 1 REFERENCES parents(id) AUTO_INCREMENT, other INTEGER REFERENCES missing(id))",
+    );
+    assert!(matches!(
+        create_schema(&keyed_parent_catalog(), activated_auto_increment),
+        Err(Error::Schema(ref message))
+            if message == "auto-increment column \"items\".\"id\" cannot have a DEFAULT"
+    ));
+
+    let resumed_defaults = create_table(
+        "CREATE TABLE items (first INTEGER DEFAULT 1 REFERENCES parents(id), bad INTEGER DEFAULT 'wrong' REFERENCES missing(id))",
+    );
+    assert!(matches!(
+        create_schema(&keyed_parent_catalog(), resumed_defaults),
+        Err(Error::Type(ref message)) if message == "column \"bad\" expects INTEGER, got TEXT"
+    ));
+
+    let successful_foreign_key = create_table(
+        "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, value INTEGER DEFAULT 'wrong', parent_id INTEGER REFERENCES parents(id))",
+    );
+    assert!(matches!(
+        create_schema(&keyed_parent_catalog(), successful_foreign_key),
+        Err(Error::Schema(ref message))
+            if message == "auto-increment column \"items\".\"id\" must be its INTEGER primary key"
+    ));
+
+    let failing_foreign_key = create_table(
+        "CREATE TABLE items (id TEXT PRIMARY KEY AUTOINCREMENT, value INTEGER DEFAULT 'wrong', parent_id INTEGER REFERENCES missing(id))",
+    );
+    assert!(matches!(
+        create_schema(&Catalog::empty(), failing_foreign_key),
+        Err(Error::Type(ref message)) if message == "column \"value\" expects INTEGER, got TEXT"
+    ));
 }
 
 #[test]

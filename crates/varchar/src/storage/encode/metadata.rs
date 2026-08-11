@@ -1,13 +1,15 @@
 //! Canonical schema and constraint metadata encoding.
 
 use super::super::format::{
-    AUTO_INCREMENT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX, type_tag,
+    AUTO_INCREMENT_PREFIX, DEFAULT_PREFIX, FOREIGN_KEY_PREFIX, PRIMARY_KEY_PREFIX, SCHEMA_PREFIX,
+    type_tag,
 };
 use super::super::{TableSchema, validate_schema_for_write};
+use super::encode_cell;
 use crate::{DataType, Error, Result};
 
-/// Encode a complete schema record, including its terminator.
-pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
+/// Encode a schema and its key records, preserving the frozen V2 byte shape.
+fn encode_schema(schema: &TableSchema) -> Result<String> {
     validate_schema_for_write(schema)?;
 
     let mut encoded = String::from(SCHEMA_PREFIX);
@@ -46,6 +48,23 @@ pub(crate) fn encode_schema(schema: &TableSchema) -> Result<String> {
     Ok(encoded)
 }
 
+/// Encode all metadata for one newly created table in canonical phase order.
+pub(in crate::storage) fn encode_table_metadata(
+    schema: &TableSchema,
+    auto_increment: Option<(usize, i64)>,
+) -> Result<String> {
+    let mut encoded = encode_schema(schema)?;
+    if let Some((column, last)) = auto_increment {
+        encoded.push_str(&encode_auto_increment_record(schema, column, last)?);
+    }
+    for (column, definition) in schema.columns.iter().enumerate() {
+        if definition.default.is_some() {
+            encoded.push_str(&encode_default_record(schema, column)?);
+        }
+    }
+    Ok(encoded)
+}
+
 /// Encode one persisted auto-increment high-water record.
 pub(crate) fn encode_auto_increment_record(
     schema: &TableSchema,
@@ -73,6 +92,26 @@ pub(crate) fn encode_auto_increment_record(
     }
     Ok(format!(
         "{AUTO_INCREMENT_PREFIX}{}|{}|I{last};",
+        schema.name, definition.name
+    ))
+}
+
+fn encode_default_record(schema: &TableSchema, column: usize) -> Result<String> {
+    let definition = schema.columns.get(column).ok_or_else(|| {
+        Error::Schema(format!(
+            "DEFAULT index {column} is outside table {:?}",
+            schema.name
+        ))
+    })?;
+    let value = definition.default.as_ref().ok_or_else(|| {
+        Error::Schema(format!(
+            "column {:?}.{:?} has no DEFAULT",
+            schema.name, definition.name
+        ))
+    })?;
+    let cell = encode_cell(value, definition)?;
+    Ok(format!(
+        "{DEFAULT_PREFIX}{}|{}|{cell};",
         schema.name, definition.name
     ))
 }

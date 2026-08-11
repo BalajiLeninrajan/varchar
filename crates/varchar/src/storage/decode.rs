@@ -5,8 +5,9 @@ mod metadata;
 use std::ops::Range;
 
 pub(super) use metadata::{
-    AutoIncrementMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, decode_auto_increment_record,
-    decode_foreign_key_record, decode_primary_key_record, decode_schema_record,
+    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata,
+    decode_auto_increment_record, decode_default_record, decode_foreign_key_record,
+    decode_primary_key_record, decode_schema_record,
 };
 
 use super::format::{
@@ -16,7 +17,7 @@ use super::format::{
 use super::{RowLayout, TableSchema};
 use crate::{DataType, Error, Result, SchemaColumn, Value};
 
-/// A zero-copy view over a parsed V2 row envelope and validated table name.
+/// A zero-copy view over a parsed row envelope and validated table name.
 ///
 /// Cell slices remain encoded so integrity validation can compare canonical
 /// key values without allocating decoded rows.
@@ -166,36 +167,11 @@ fn row_width_error(offset: usize, layout: RowLayout<'_>, actual: usize) -> Error
     )
 }
 
-fn validate_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<()> {
-    if encoded == "N" {
-        return if column.nullable {
-            Ok(())
-        } else {
-            Err(corrupt(offset, "NULL stored in a NOT NULL column"))
-        };
-    }
-
-    match column.data_type {
-        DataType::Text => {
-            let payload = encoded
-                .strip_prefix('T')
-                .ok_or_else(|| corrupt(offset, "cell type does not match TEXT column"))?;
-            scan_text(payload, offset + 1, |_| {})
-        }
-        DataType::Integer => {
-            let payload = encoded
-                .strip_prefix('I')
-                .ok_or_else(|| corrupt(offset, "cell type does not match INTEGER column"))?;
-            decode_integer(payload, offset + 1).map(|_| ())
-        }
-        DataType::Boolean => match encoded {
-            "B0" | "B1" => Ok(()),
-            _ => Err(corrupt(offset, "invalid BOOLEAN cell")),
-        },
-    }
+pub(super) fn validate_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<()> {
+    decode_cell_at(encoded, column, offset).map(|_| ())
 }
 
-fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<Value> {
+pub(super) fn decode_cell_at(encoded: &str, column: &SchemaColumn, offset: usize) -> Result<Value> {
     if encoded == "N" {
         return if column.nullable {
             Ok(Value::Null)

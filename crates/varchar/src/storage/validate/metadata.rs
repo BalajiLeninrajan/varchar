@@ -4,7 +4,9 @@ use std::ops::Range;
 
 use super::super::budget::WorkingBudget;
 use super::super::catalog::{AutoIncrementState, CatalogMap};
-use super::super::decode::{AutoIncrementMetadata, ForeignKeyMetadata, PrimaryKeyMetadata};
+use super::super::decode::{
+    AutoIncrementMetadata, DefaultMetadata, ForeignKeyMetadata, PrimaryKeyMetadata, decode_cell_at,
+};
 use super::super::{Catalog, ForeignKey, TableSchema};
 use super::ValidationMode;
 use crate::{DataType, Error, Result};
@@ -14,6 +16,7 @@ enum MetadataPhase {
     None,
     Keys,
     AutoIncrement,
+    Defaults,
 }
 
 struct MetadataState {
@@ -22,6 +25,7 @@ struct MetadataState {
     saw_primary_key: bool,
     saw_foreign_key: bool,
     next_foreign_key_column: usize,
+    next_default_column: usize,
 }
 
 impl MetadataState {
@@ -32,6 +36,7 @@ impl MetadataState {
             saw_primary_key: false,
             saw_foreign_key: false,
             next_foreign_key_column: 0,
+            next_default_column: 0,
         }
     }
 
@@ -42,6 +47,7 @@ impl MetadataState {
             saw_primary_key: false,
             saw_foreign_key: false,
             next_foreign_key_column: 0,
+            next_default_column: 0,
         }
     }
 }
@@ -119,6 +125,17 @@ impl MetadataValidator {
         budget: &mut WorkingBudget,
     ) -> Result<()> {
         let result = self.apply_auto_increment_inner(metadata, record_range, budget);
+        result.map_err(|violation| violation.into_error(mode))
+    }
+
+    pub(super) fn apply_default(
+        &mut self,
+        metadata: DefaultMetadata<'_>,
+        offset: usize,
+        mode: ValidationMode,
+        budget: &mut WorkingBudget,
+    ) -> Result<()> {
+        let result = self.apply_default_inner(metadata, offset, budget);
         result.map_err(|violation| violation.into_error(mode))
     }
 
@@ -349,6 +366,73 @@ impl MetadataValidator {
             )
             .map_err(Violation::storage)?;
         self.state.phase = MetadataPhase::AutoIncrement;
+        Ok(())
+    }
+
+    fn apply_default_inner(
+        &mut self,
+        metadata: DefaultMetadata<'_>,
+        offset: usize,
+        budget: &mut WorkingBudget,
+    ) -> std::result::Result<(), Violation> {
+        if !matches!(
+            self.state.phase,
+            MetadataPhase::Keys | MetadataPhase::AutoIncrement | MetadataPhase::Defaults
+        ) || metadata.table != self.state.table
+        {
+            return Err(Violation::new(
+                offset,
+                "DEFAULT metadata is outside its table's DEFAULT phase",
+            ));
+        }
+
+        let schema = self
+            .tables
+            .get(&self.state.table)
+            .expect("metadata state always names the most recent schema");
+        let remaining_columns = &schema.columns[self.state.next_default_column..];
+        let Some(relative_column) = remaining_columns
+            .iter()
+            .position(|column| column.name == metadata.column)
+        else {
+            let message = if schema.columns[..self.state.next_default_column]
+                .iter()
+                .any(|column| column.name == metadata.column)
+            {
+                String::from("DEFAULT metadata is duplicated or not in increasing column order")
+            } else {
+                format!(
+                    "DEFAULT for table {:?} references unknown column {:?}",
+                    metadata.table, metadata.column
+                )
+            };
+            return Err(Violation::new(offset, message));
+        };
+        let column = self.state.next_default_column + relative_column;
+        if self
+            .auto_increments
+            .get(metadata.table)
+            .is_some_and(|state| state.column == column)
+        {
+            return Err(Violation::new(
+                offset,
+                "auto-increment columns cannot have DEFAULT metadata",
+            ));
+        }
+
+        let definition = &schema.columns[column];
+        budget
+            .charge(metadata.encoded_value.len())
+            .map_err(Violation::storage)?;
+        let value = decode_cell_at(metadata.encoded_value, definition, metadata.value_offset)
+            .map_err(Violation::storage)?;
+        self.tables
+            .get_mut(&self.state.table)
+            .expect("metadata state always names the most recent schema")
+            .columns[column]
+            .default = Some(value);
+        self.state.phase = MetadataPhase::Defaults;
+        self.state.next_default_column = column + 1;
         Ok(())
     }
 }

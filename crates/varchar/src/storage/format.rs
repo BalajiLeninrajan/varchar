@@ -1,16 +1,47 @@
-//! The physical V2 grammar shared by decoding and encoding.
+//! The physical V2/V3 grammar shared by decoding and encoding.
 
 use std::fmt::Write as _;
 use std::ops::Range;
 
 use crate::{DataType, Error, Result};
 
-pub(super) const HEADER: &str = "V2;";
+pub(super) const V2_HEADER: &str = "V2;";
+pub(super) const V3_HEADER: &str = "V3;";
 pub(super) const SCHEMA_PREFIX: &str = "~S|";
 pub(super) const PRIMARY_KEY_PREFIX: &str = "~P|";
 pub(super) const FOREIGN_KEY_PREFIX: &str = "~F|";
 pub(super) const AUTO_INCREMENT_PREFIX: &str = "~A|";
+pub(super) const DEFAULT_PREFIX: &str = "~D|";
 pub(crate) const ROW_PREFIX: &str = "~R|";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FormatVersion {
+    V2,
+    V3,
+}
+
+impl FormatVersion {
+    pub(super) const fn header(self) -> &'static str {
+        match self {
+            Self::V2 => V2_HEADER,
+            Self::V3 => V3_HEADER,
+        }
+    }
+
+    pub(super) const fn supports_extensions(self) -> bool {
+        matches!(self, Self::V3)
+    }
+}
+
+pub(super) fn decode_header(blob: &str) -> Result<FormatVersion> {
+    if blob.starts_with(V2_HEADER) {
+        Ok(FormatVersion::V2)
+    } else if blob.starts_with(V3_HEADER) {
+        Ok(FormatVersion::V3)
+    } else {
+        Err(corrupt(0, "expected canonical V2; or V3; header"))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RecordKind {
@@ -18,6 +49,7 @@ pub(super) enum RecordKind {
     PrimaryKey,
     ForeignKey,
     AutoIncrement,
+    Default,
     Row,
     Unknown,
 }
@@ -35,8 +67,8 @@ pub(super) struct RecordIter<'a> {
     failed: bool,
 }
 
-pub(super) fn records(blob: &str) -> RecordIter<'_> {
-    records_from(blob, HEADER.len())
+pub(super) fn records(blob: &str, version: FormatVersion) -> RecordIter<'_> {
+    records_from(blob, version.header().len())
 }
 
 pub(super) fn records_from(blob: &str, offset: usize) -> RecordIter<'_> {
@@ -82,6 +114,8 @@ impl<'a> Iterator for RecordIter<'a> {
             RecordKind::ForeignKey
         } else if text.starts_with(AUTO_INCREMENT_PREFIX) {
             RecordKind::AutoIncrement
+        } else if text.starts_with(DEFAULT_PREFIX) {
+            RecordKind::Default
         } else if text.starts_with(ROW_PREFIX) {
             RecordKind::Row
         } else {

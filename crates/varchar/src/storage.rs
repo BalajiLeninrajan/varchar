@@ -14,7 +14,7 @@ mod validate;
 pub(crate) use candidate::Candidate;
 pub(crate) use catalog::{AutoIncrement, Catalog};
 pub(crate) use decode::{RowRecordRef, decode_row, row_record};
-pub(crate) use encode::{encode_cell, encode_row, encode_schema};
+pub(crate) use encode::{encode_cell, encode_row};
 pub(crate) use format::{ROW_PREFIX, encode_text_into};
 pub(crate) use schema::{
     ForeignKey, RowLayout, TableSchema, validate_row_layout, validate_schema_for_write,

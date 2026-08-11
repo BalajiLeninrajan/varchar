@@ -74,6 +74,10 @@ impl Parser {
                     self.advance();
                     modifiers.push(ColumnModifier::AutoIncrement);
                 }
+                Some("DEFAULT") => {
+                    self.advance();
+                    modifiers.push(ColumnModifier::Default(self.parse_value()?));
+                }
                 _ => break,
             }
         }

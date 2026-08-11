@@ -41,6 +41,7 @@ pub(crate) enum ColumnModifier {
     PrimaryKey,
     References(ForeignKeyReference),
     AutoIncrement,
+    Default(Value),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

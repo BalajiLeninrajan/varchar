@@ -15,6 +15,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
             name: String::from("id"),
             data_type: DataType::Integer,
             nullable: false,
+            default: None,
         }],
         primary_key: Some(0),
         foreign_keys: Vec::new(),
@@ -28,7 +29,7 @@ fn candidate_installs_key_metadata_and_a_matching_catalog_together() {
         .expect("row edit succeeds");
 
     let next = candidate.finish().expect("candidate validates");
-    let reconstructed =
+    let (_, reconstructed) =
         validate_and_catalog(next.as_str(), usize::MAX).expect("finished candidate remains valid");
 
     assert_eq!(state.as_str(), "V2;");
@@ -61,6 +62,20 @@ fn primary_key_validation_uses_indexed_duplicate_checks() {
         insert_comparisons <= ROW_COUNT * 16,
         "{ROW_COUNT} distinct keys required {insert_comparisons} duplicate comparisons"
     );
+}
+
+#[test]
+fn primary_key_index_preserves_exact_limit_loading() {
+    let compact = "V2;~S|t|c0:I:!;~P|t|c0;~R|t|I0;~R|t|I1;~R|t|I2;";
+    validate_and_catalog(compact, working_limit(compact.len()))
+        .expect("a compact primary-key index fits its exact derived limit");
+
+    let mut larger = String::from("V2;~S|t|id:T:!;~P|t|id;");
+    for key in 0..=20 {
+        larger.push_str(&format!("~R|t|Tk{key};"));
+    }
+    validate_and_catalog(&larger, working_limit(larger.len()))
+        .expect("a larger primary-key index fits its exact derived limit");
 }
 
 #[test]
@@ -99,6 +114,38 @@ fn integrity_validation_never_sizes_an_index_with_its_own_blob_pass() {
         2,
         "a referenced load adds only the foreign-key pass"
     );
+}
+
+/// The growth factor is bounded by the derived working limit rather than chosen for comfort.
+///
+/// This is the densest primary key a blob can carry: eight bytes of row per single-character
+/// key, each indexed at `size_of::<&str>()` bytes, so an exactly sized index already spends
+/// half of the four-times-database-size working limit and growth may only claim the other
+/// half. The key count stops one past a growth step, where the overshoot is at its worst, and
+/// the load still fits its exact derived limit. Growing by more than half would not: doubling
+/// reserves 64 keys for these 33 and breaches the limit outright, so this fixture fails if the
+/// growth factor is ever loosened.
+#[test]
+fn geometric_growth_stays_inside_the_derived_working_limit() {
+    const PREFIX: &str = "V2;~S|t|c:T:!;~P|t|c;";
+    const KEYS: &str = "abcdefghijklmnopqrstuvwxyz0123456";
+
+    let mut blob = String::from(PREFIX);
+    for key in KEYS.chars() {
+        blob.push_str(&format!("~R|t|T{key};"));
+    }
+    assert_eq!(blob.len(), PREFIX.len() + KEYS.len() * 8);
+
+    validate_and_catalog(&blob, working_limit(blob.len()))
+        .expect("the worst geometric overshoot still fits the exact derived working limit");
+
+    assert!(matches!(
+        validate_and_catalog(&blob, 128),
+        Err(Error::ResourceLimit {
+            resource: Resource::StorageWorkingBytes,
+            limit: 128,
+        })
+    ));
 }
 
 #[test]
@@ -157,50 +204,4 @@ fn foreign_key_validation_uses_indexed_membership_checks() {
         (ROW_COUNT..=ROW_COUNT * 16).contains(&lookup_comparisons),
         "{ROW_COUNT} foreign keys required {lookup_comparisons} membership comparisons"
     );
-}
-
-#[test]
-fn primary_key_index_preserves_exact_limit_loading() {
-    let compact = "V2;~S|t|c0:I:!;~P|t|c0;~R|t|I0;~R|t|I1;~R|t|I2;";
-    validate_and_catalog(compact, working_limit(compact.len()))
-        .expect("a compact primary-key index fits its exact derived limit");
-
-    let mut larger = String::from("V2;~S|t|id:T:!;~P|t|id;");
-    for key in 0..=20 {
-        larger.push_str(&format!("~R|t|Tk{key};"));
-    }
-    validate_and_catalog(&larger, working_limit(larger.len()))
-        .expect("a larger primary-key index fits its exact derived limit");
-}
-
-/// The growth factor is bounded by the derived working limit rather than chosen for comfort.
-///
-/// This is the densest primary key a blob can carry: eight bytes of row per single-character
-/// key, each indexed at `size_of::<&str>()` bytes, so an exactly sized index already spends
-/// half of the four-times-database-size working limit and growth may only claim the other
-/// half. The key count stops one past a growth step, where the overshoot is at its worst, and
-/// the load still fits its exact derived limit. Growing by more than half would not: doubling
-/// reserves 64 keys for these 33 and breaches the limit outright, so this fixture fails if the
-/// growth factor is ever loosened.
-#[test]
-fn geometric_growth_stays_inside_the_derived_working_limit() {
-    const PREFIX: &str = "V2;~S|t|c:T:!;~P|t|c;";
-    const KEYS: &str = "abcdefghijklmnopqrstuvwxyz0123456";
-
-    let mut blob = String::from(PREFIX);
-    for key in KEYS.chars() {
-        blob.push_str(&format!("~R|t|T{key};"));
-    }
-    assert_eq!(blob.len(), PREFIX.len() + KEYS.len() * 8);
-
-    validate_and_catalog(&blob, working_limit(blob.len()))
-        .expect("the worst geometric overshoot still fits the exact derived working limit");
-
-    assert!(matches!(
-        validate_and_catalog(&blob, 128),
-        Err(Error::ResourceLimit {
-            resource: Resource::StorageWorkingBytes,
-            limit: 128,
-        })
-    ));
 }
