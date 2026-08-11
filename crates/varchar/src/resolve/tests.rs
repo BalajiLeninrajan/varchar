@@ -3,6 +3,7 @@ mod create;
 mod expression;
 mod insert;
 mod join;
+mod order;
 mod predicate;
 mod projection;
 mod select;

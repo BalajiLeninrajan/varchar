@@ -1,9 +1,11 @@
 #![cfg(not(target_family = "wasm"))]
 
+use std::cmp::Ordering;
+
 use proptest::prelude::*;
 use varchar::{DataType, Database, Error, Outcome, ResultColumn, RowSet, Value};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectedColumn {
     Text,
     Number,
@@ -15,6 +17,19 @@ struct ModelRow {
     text: Option<String>,
     number: i64,
     flag: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OrderedModelRow {
+    text: Option<String>,
+    number: Option<i64>,
+    flag: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ModelOrderTerm {
+    column: SelectedColumn,
+    descending: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +101,25 @@ fn model_row() -> impl Strategy<Value = ModelRow> {
         .prop_map(|(text, number, flag)| ModelRow { text, number, flag })
 }
 
+fn nullable_integer() -> impl Strategy<Value = Option<i64>> {
+    prop_oneof![
+        2 => Just(None),
+        8 => (-3_i64..=3).prop_map(Some),
+        1 => Just(Some(i64::MIN)),
+        1 => Just(Some(i64::MAX)),
+        1 => any::<i64>().prop_map(Some),
+    ]
+}
+
+fn nullable_boolean() -> impl Strategy<Value = Option<bool>> {
+    prop_oneof![1 => Just(None), 3 => any::<bool>().prop_map(Some)]
+}
+
+fn ordered_model_row() -> impl Strategy<Value = OrderedModelRow> {
+    (nullable_text(10), nullable_integer(), nullable_boolean())
+        .prop_map(|(text, number, flag)| OrderedModelRow { text, number, flag })
+}
+
 fn selected_column() -> impl Strategy<Value = SelectedColumn> {
     prop::sample::select(vec![
         SelectedColumn::Text,
@@ -138,8 +172,16 @@ fn sql_nullable_text(value: &Option<String>) -> String {
     value.as_deref().map_or_else(|| "NULL".to_owned(), sql_text)
 }
 
+fn sql_nullable_integer(value: Option<i64>) -> String {
+    value.map_or_else(|| "NULL".to_owned(), |value| value.to_string())
+}
+
 fn sql_boolean(value: bool) -> &'static str {
     if value { "TRUE" } else { "FALSE" }
+}
+
+fn sql_nullable_boolean(value: Option<bool>) -> String {
+    value.map_or_else(|| "NULL".to_owned(), |value| sql_boolean(value).to_owned())
 }
 
 fn selected_column_name(column: SelectedColumn) -> &'static str {
@@ -147,6 +189,14 @@ fn selected_column_name(column: SelectedColumn) -> &'static str {
         SelectedColumn::Text => "txt",
         SelectedColumn::Number => "n",
         SelectedColumn::Flag => "flag",
+    }
+}
+
+fn next_selected_column(column: SelectedColumn) -> SelectedColumn {
+    match column {
+        SelectedColumn::Text => SelectedColumn::Number,
+        SelectedColumn::Number => SelectedColumn::Flag,
+        SelectedColumn::Flag => SelectedColumn::Text,
     }
 }
 
@@ -198,6 +248,67 @@ fn selected_value(row: &ModelRow, column: SelectedColumn) -> Value {
         SelectedColumn::Number => Value::Integer(row.number),
         SelectedColumn::Flag => Value::Boolean(row.flag),
     }
+}
+
+fn ordered_selected_value(row: &OrderedModelRow, column: SelectedColumn) -> Value {
+    match column {
+        SelectedColumn::Text => row
+            .text
+            .as_ref()
+            .map_or(Value::Null, |value| Value::Text(value.clone())),
+        SelectedColumn::Number => row.number.map_or(Value::Null, Value::Integer),
+        SelectedColumn::Flag => row.flag.map_or(Value::Null, Value::Boolean),
+    }
+}
+
+fn compare_nullable<T>(
+    left: Option<&T>,
+    right: Option<&T>,
+    compare: impl FnOnce(&T, &T) -> Ordering,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(left), Some(right)) => compare(left, right),
+    }
+}
+
+fn compare_ordered_values(
+    left: &OrderedModelRow,
+    right: &OrderedModelRow,
+    term: ModelOrderTerm,
+) -> Ordering {
+    let ascending = match term.column {
+        SelectedColumn::Text => {
+            compare_nullable(left.text.as_ref(), right.text.as_ref(), |a, b| {
+                a.chars().cmp(b.chars())
+            })
+        }
+        SelectedColumn::Number => {
+            compare_nullable(left.number.as_ref(), right.number.as_ref(), Ord::cmp)
+        }
+        SelectedColumn::Flag => compare_nullable(left.flag.as_ref(), right.flag.as_ref(), Ord::cmp),
+    };
+    if term.descending {
+        ascending.reverse()
+    } else {
+        ascending
+    }
+}
+
+fn compare_ordered_model_rows(
+    left: &(i64, OrderedModelRow),
+    right: &(i64, OrderedModelRow),
+    terms: &[ModelOrderTerm],
+) -> Ordering {
+    for term in terms {
+        let ordering = compare_ordered_values(&left.1, &right.1, *term);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.0.cmp(&right.0)
 }
 
 fn render_like_pattern(atoms: &[LikeAtom]) -> String {
@@ -379,6 +490,115 @@ proptest! {
         prop_assert_eq!(result_columns(selected.columns()), expected_columns);
         prop_assert_eq!(selected.rows(), expected_rows);
         prop_assert_eq!(database.as_str(), &before);
+    }
+
+    #[test]
+    fn generated_ordering_matches_a_stable_model_before_and_after_reload(
+        rows in prop::collection::vec(ordered_model_row(), 1..=8),
+        hidden_key in selected_column(),
+        projection in prop::collection::vec(selected_column(), 0..=5),
+        extra_order_terms in prop::collection::vec((selected_column(), any::<bool>()), 0..=4),
+    ) {
+        let visible_projection = projection
+            .into_iter()
+            .filter(|column| *column != hidden_key)
+            .collect::<Vec<_>>();
+        let mut order_terms = vec![
+            ModelOrderTerm {
+                column: hidden_key,
+                descending: false,
+            },
+            ModelOrderTerm {
+                column: next_selected_column(hidden_key),
+                descending: true,
+            },
+            ModelOrderTerm {
+                column: hidden_key,
+                descending: true,
+            },
+        ];
+        order_terms.extend(extra_order_terms.into_iter().map(|(column, descending)| {
+            ModelOrderTerm { column, descending }
+        }));
+
+        let mut database = Database::new();
+        database
+            .execute(
+                "CREATE TABLE ordered_rows (\
+                 id INTEGER NOT NULL, txt TEXT, n INTEGER, flag BOOLEAN)",
+            )
+            .unwrap();
+        let mut model_rows = Vec::with_capacity(rows.len() * 2);
+        let mut id = 0_i64;
+        for row in rows {
+            for _ in 0..2 {
+                id += 1;
+                let sql = format!(
+                    "INSERT INTO ordered_rows VALUES ({id}, {}, {}, {})",
+                    sql_nullable_text(&row.text),
+                    sql_nullable_integer(row.number),
+                    sql_nullable_boolean(row.flag),
+                );
+                prop_assert_eq!(
+                    database.execute(&sql).unwrap(),
+                    Outcome::Affected { rows: 1 }
+                );
+                model_rows.push((id, row.clone()));
+            }
+        }
+
+        let projection_sql = std::iter::once("id")
+            .chain(
+                visible_projection
+                    .iter()
+                    .copied()
+                    .map(selected_column_name),
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
+        let order_sql = order_terms
+            .iter()
+            .map(|term| {
+                format!(
+                    "{} {}",
+                    selected_column_name(term.column),
+                    if term.descending { "DESC" } else { "ASC" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {projection_sql} FROM ordered_rows ORDER BY {order_sql}"
+        );
+
+        model_rows.sort_unstable_by(|left, right| {
+            compare_ordered_model_rows(left, right, &order_terms)
+        });
+        let expected_rows = model_rows
+            .iter()
+            .map(|(id, row)| {
+                std::iter::once(Value::Integer(*id))
+                    .chain(
+                        visible_projection
+                            .iter()
+                            .copied()
+                            .map(|column| ordered_selected_value(row, column)),
+                    )
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let before = database.as_str().to_owned();
+        let selected = rows_from_outcome(database.execute(&sql).unwrap());
+        prop_assert_eq!(selected.rows(), expected_rows.as_slice());
+        prop_assert_eq!(database.as_str(), before.as_str());
+
+        let stored = database.into_string();
+        prop_assert_eq!(stored.as_str(), before.as_str());
+        let mut reloaded = Database::from_string(stored.clone()).unwrap();
+        let reloaded_selected = rows_from_outcome(reloaded.execute(&sql).unwrap());
+        prop_assert_eq!(reloaded_selected, selected);
+        prop_assert_eq!(reloaded.as_str(), stored.as_str());
     }
 
     #[test]

@@ -1,42 +1,100 @@
-//! Streaming `SELECT` row collection.
+//! Streaming and ordered `SELECT` row collection.
+
+use std::cmp::Ordering;
 
 use super::{ByteBudget, allocation_error};
-use crate::Result;
 use crate::output::{ColumnOrigin, ResultColumn, RowSet};
 use crate::query::SelectPlan;
-use crate::resolve::ColumnLocation;
+use crate::resolve::{ColumnLocation, ResolvedOrderTerm};
 use crate::value::Value;
+use crate::{Error, Result};
 
 pub(super) struct RowCollector<'plan> {
     projection: &'plan [ColumnLocation],
+    order_by: &'plan [ResolvedOrderTerm],
     output_budget: ByteBudget,
     row_structure: usize,
-    rows: Vec<Vec<Value>>,
+    state: CollectionState,
+}
+
+enum CollectionState {
+    Streaming(Vec<Vec<Value>>),
+    Ordered {
+        rows: Vec<PendingRow>,
+        next_ordinal: u64,
+    },
+}
+
+struct PendingRow {
+    projected: Vec<Value>,
+    keys: Vec<Value>,
+    ordinal: u64,
 }
 
 impl<'plan> RowCollector<'plan> {
     pub(super) fn new(plan: &'plan SelectPlan<'_, '_>, output_budget: ByteBudget) -> Result<Self> {
         let row_structure = row_structure_charge(plan.projection.len(), &output_budget)?;
+        let state = if plan.order_by.is_empty() {
+            CollectionState::Streaming(Vec::new())
+        } else {
+            CollectionState::Ordered {
+                rows: Vec::new(),
+                next_ordinal: 0,
+            }
+        };
         Ok(Self {
             projection: &plan.projection,
+            order_by: &plan.order_by,
             output_budget,
             row_structure,
-            rows: Vec::new(),
+            state,
         })
     }
 
-    pub(super) fn collect(&mut self, sources: &[&[Value]]) -> Result<()> {
-        collect_streaming(
-            &mut self.rows,
-            self.projection,
-            sources,
-            self.row_structure,
-            &mut self.output_budget,
-        )
+    pub(super) fn collect(
+        &mut self,
+        sources: &[&[Value]],
+        working_budget: &mut ByteBudget,
+        transient_working_bytes: usize,
+    ) -> Result<()> {
+        match &mut self.state {
+            CollectionState::Streaming(rows) => collect_streaming(
+                rows,
+                self.projection,
+                sources,
+                self.row_structure,
+                &mut self.output_budget,
+            ),
+            CollectionState::Ordered { rows, next_ordinal } => collect_ordered(
+                rows,
+                next_ordinal,
+                self.projection,
+                self.order_by,
+                sources,
+                working_budget,
+                transient_working_bytes,
+            ),
+        }
     }
 
     pub(super) fn finish(self, columns: Vec<ResultColumn>) -> Result<RowSet> {
-        Ok(RowSet::new(columns, self.rows))
+        let Self {
+            order_by,
+            mut output_budget,
+            row_structure,
+            state,
+            ..
+        } = self;
+        let rows = match state {
+            CollectionState::Streaming(rows) => rows,
+            CollectionState::Ordered { mut rows, .. } => {
+                // `sort_unstable_by` is allocation-free. The monotonic ordinal is
+                // the final key, so physical/nested-loop order wins every tie.
+                rows.sort_unstable_by(|left, right| compare_pending(left, right, order_by));
+                materialize_ordered(rows, row_structure, &mut output_budget)?
+            }
+        };
+        Ok(RowSet::new(columns, rows))
     }
 }
 
@@ -100,6 +158,147 @@ fn collect_streaming(
     }
     rows.push(row);
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_ordered(
+    rows: &mut Vec<PendingRow>,
+    next_ordinal: &mut u64,
+    projection: &[ColumnLocation],
+    order_by: &[ResolvedOrderTerm],
+    sources: &[&[Value]],
+    working_budget: &mut ByteBudget,
+    transient_working_bytes: usize,
+) -> Result<()> {
+    let following_ordinal = next_ordinal.checked_add(1).ok_or(Error::Capacity {
+        operation: "assigning an ordered-row ordinal",
+    })?;
+    let projected_payload = payload_size(
+        projection
+            .iter()
+            .map(|location| value_at(sources, *location)),
+        working_budget,
+    )?;
+    let key_payload = payload_size(
+        order_by.iter().map(|term| value_at(sources, term.column)),
+        working_budget,
+    )?;
+    let charge = ordered_row_charge(
+        projection.len(),
+        order_by.len(),
+        projected_payload,
+        key_payload,
+        working_budget,
+    )?;
+    working_budget.charge_with_transient(charge, transient_working_bytes)?;
+
+    rows.try_reserve(1)
+        .map_err(|_| allocation_error("retaining ordered query rows"))?;
+    let mut projected = Vec::new();
+    projected
+        .try_reserve_exact(projection.len())
+        .map_err(|_| allocation_error("reserving ordered projected values"))?;
+    for location in projection {
+        projected.push(clone_value(
+            value_at(sources, *location),
+            "cloning ordered projected text",
+        )?);
+    }
+
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(order_by.len())
+        .map_err(|_| allocation_error("reserving ORDER BY keys"))?;
+    for term in order_by {
+        keys.push(clone_value(
+            value_at(sources, term.column),
+            "cloning ORDER BY key text",
+        )?);
+    }
+
+    rows.push(PendingRow {
+        projected,
+        keys,
+        ordinal: *next_ordinal,
+    });
+    *next_ordinal = following_ordinal;
+    Ok(())
+}
+
+fn materialize_ordered(
+    pending: Vec<PendingRow>,
+    row_structure: usize,
+    output_budget: &mut ByteBudget,
+) -> Result<Vec<Vec<Value>>> {
+    let mut rows = Vec::new();
+    for pending in pending {
+        let payload = payload_size(pending.projected.iter(), output_budget)?;
+        let charge = row_structure
+            .checked_add(payload)
+            .ok_or_else(|| output_budget.limit_error())?;
+        output_budget.charge(charge)?;
+        rows.try_reserve(1)
+            .map_err(|_| allocation_error("reserving ordered query output rows"))?;
+        rows.push(pending.projected);
+    }
+    Ok(rows)
+}
+
+fn compare_pending(
+    left: &PendingRow,
+    right: &PendingRow,
+    order_by: &[ResolvedOrderTerm],
+) -> Ordering {
+    for ((left, right), term) in left.keys.iter().zip(&right.keys).zip(order_by) {
+        let ordering = compare_values(left, right, term.descending);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.ordinal.cmp(&right.ordinal)
+}
+
+fn compare_values(left: &Value, right: &Value, descending: bool) -> Ordering {
+    let ascending = match (left, right) {
+        (Value::Null, Value::Null) => Ordering::Equal,
+        (Value::Null, _) => Ordering::Greater,
+        (_, Value::Null) => Ordering::Less,
+        (Value::Integer(left), Value::Integer(right)) => left.cmp(right),
+        (Value::Boolean(left), Value::Boolean(right)) => left.cmp(right),
+        (Value::Text(left), Value::Text(right)) => left.chars().cmp(right.chars()),
+        _ => unreachable!("resolved ORDER BY keys always have one scalar type"),
+    };
+    if descending {
+        ascending.reverse()
+    } else {
+        ascending
+    }
+}
+
+fn ordered_row_charge(
+    projection_count: usize,
+    key_count: usize,
+    projected_payload: usize,
+    key_payload: usize,
+    budget: &ByteBudget,
+) -> Result<usize> {
+    // One descriptor is live per row and three more conservatively account for
+    // geometric growth of the pending-row vector. `PendingRow` contains both
+    // child-vector descriptors and the charged `u64` ordinal.
+    let pending_descriptors = std::mem::size_of::<PendingRow>()
+        .checked_mul(4)
+        .ok_or_else(|| budget.limit_error())?;
+    let projected_slots = projection_count
+        .checked_mul(std::mem::size_of::<Value>())
+        .ok_or_else(|| budget.limit_error())?;
+    let key_slots = key_count
+        .checked_mul(std::mem::size_of::<Value>())
+        .ok_or_else(|| budget.limit_error())?;
+    pending_descriptors
+        .checked_add(projected_slots)
+        .and_then(|charge| charge.checked_add(projected_payload))
+        .and_then(|charge| charge.checked_add(key_slots))
+        .and_then(|charge| charge.checked_add(key_payload))
+        .ok_or_else(|| budget.limit_error())
 }
 
 fn row_structure_charge(column_count: usize, budget: &ByteBudget) -> Result<usize> {
@@ -168,3 +367,6 @@ fn clone_string(value: &str, operation: &'static str) -> Result<String> {
     cloned.push_str(value);
     Ok(cloned)
 }
+
+#[cfg(test)]
+mod tests;

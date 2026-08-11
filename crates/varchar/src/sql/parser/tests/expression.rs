@@ -123,11 +123,6 @@ fn malformed_supported_expressions_are_parse_errors() {
 fn recognized_trailing_features_remain_statement_level_unsupported_errors() {
     for (sql, feature, marker) in [
         (
-            "SELECT * FROM t WHERE id = 1 AND (id = 2 OR id = 3) ORDER BY id",
-            "ORDER BY",
-            "ORDER",
-        ),
-        (
             "EXPLAIN REGEX SELECT * FROM t WHERE (id = 1 OR id = 2) GROUP BY id",
             "GROUP BY",
             "GROUP",

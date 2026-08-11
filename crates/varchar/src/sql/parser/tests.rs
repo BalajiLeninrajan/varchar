@@ -1,5 +1,6 @@
 mod create;
 mod expression;
+mod order_by;
 
 use super::parse;
 use crate::sql::ast::{
@@ -52,6 +53,7 @@ fn parsing_produces_the_exact_normalized_ast() {
                     operator: PredicateOperator::NotEqual(Value::Integer(-7)),
                 }),
             ])),
+            order_by: Vec::new(),
         })
     );
 }
@@ -101,6 +103,7 @@ fn parses_qualified_projection_inner_join_and_predicate_ast() {
                     operator: PredicateOperator::Like("R%".to_owned()),
                 },
             )])),
+            order_by: Vec::new(),
         }
     );
 }

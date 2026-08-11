@@ -20,7 +20,7 @@ pub enum Resource {
     JoinSources,
     /// One generated regular expression.
     GeneratedRegexBytes,
-    /// Conservatively accounted decoded-row state for `SELECT`.
+    /// Conservatively accounted transient and retained working state for `SELECT`.
     QueryWorkingBytes,
     /// Returned query data, explanations, and resolved-projection planning.
     QueryOutputBytes,
@@ -71,14 +71,16 @@ pub struct Limits {
     /// Maximum logical `SELECT` working-state charge, in conservatively
     /// accounted bytes.
     ///
-    /// A single-table query retains one decoded row at a time, so its charge is
-    /// a peak-per-row budget rather than a cumulative scan budget. A joined
-    /// query checks each decoded row transiently, then cumulatively charges rows
-    /// retained after source-local residuals, its chosen-row pointer stack, and
-    /// one reusable residual-evaluation stack. This does not govern `UPDATE` or
-    /// `DELETE`; returned rows have a separate limit. Charges include
-    /// target-layout sizes, so an exact boundary can differ between 32-bit and
-    /// 64-bit builds.
+    /// An unordered single-table query retains one decoded row at a time, so its
+    /// decoded-row charge is a peak-per-row budget rather than a cumulative scan
+    /// budget. An ordered query additionally accumulates every qualifying
+    /// projection, one owned value per sort key (including text payload),
+    /// pending-row descriptors, and a tie-breaking ordinal. Joined queries also
+    /// charge each decoded row transiently, then cumulatively charge rows retained
+    /// after source-local residuals, the chosen-row pointer stack, and one reusable
+    /// residual-evaluation stack. This does not govern `UPDATE` or `DELETE`;
+    /// returned rows have a separate limit. Charges include target-layout sizes,
+    /// so an exact boundary can differ between 32-bit and 64-bit builds.
     pub max_query_working_bytes: usize,
     /// Maximum conservatively accounted bytes for one materialized `SELECT`
     /// result or `SELECT` explanation.
