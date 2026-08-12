@@ -25,7 +25,9 @@ export function Topbar({
   return (
     <header class="topbar">
       <div class="topbar-start">
-        <span class="mark-solid">v</span>
+        <span class="mark-solid">
+          <Icon id="mark" size={13} />
+        </span>
         <span class="wordmark">
           var<em>char</em>
         </span>
