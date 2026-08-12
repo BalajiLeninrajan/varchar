@@ -1,5 +1,7 @@
 # varchar playground
 
+**[varchar.balajileninrajan.dev](https://varchar.balajileninrajan.dev/)**
+
 A single-screen web app for [`varchar`](../README.md): run SQL against a database that is one
 string, and watch both the string and the regex that scans it.
 
