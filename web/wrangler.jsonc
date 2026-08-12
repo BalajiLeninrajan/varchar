@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "varchar-playground",
+  "compatibility_date": "2026-08-01",
+  // A static-assets-only Worker: there is no server side. The engine is the
+  // WebAssembly module the page downloads and runs inside the tab.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

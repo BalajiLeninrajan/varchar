@@ -1,0 +1,100 @@
+/* ── Catppuccin Mocha + neumorphic depth: foundation layer ──────────────────
+   Drop this in first, unmodified. Everything else builds on these tokens.   */
+
+:root {
+  color-scheme: dark;
+
+  /* Catppuccin Mocha — do not substitute hexes */
+  --crust: #11111b;
+  --mantle: #181825;
+  --base: #1e1e2e;
+  --surface-0: #313244;
+  --surface-1: #45475a;
+  --surface-2: #585b70;
+  --overlay-0: #6c7086;
+  --overlay-1: #7f849c;
+  --overlay-2: #9399b2;
+  --subtext-0: #a6adc8;
+  --subtext-1: #bac2de;
+  --text: #cdd6f4;
+  --rosewater: #f5e0dc;
+  --pink: #f5c2e7;
+  --mauve: #cba6f7;
+  --red: #f38ba8;
+  --peach: #fab387;
+  --yellow: #f9e2af;
+  --green: #a6e3a1;
+  --teal: #94e2d5;
+  --sky: #89dceb;
+  --blue: #89b4fa;
+  --lavender: #b4befe;
+
+  /* Semantic aliases — reference these, not raw palette names, in components */
+  --line: var(--surface-0);
+  --muted: var(--subtext-0);
+  --soft: var(--subtext-1);
+
+  --sans: "Inter", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "JetBrainsMono Nerd Font", "JetBrainsMono Nerd Font Mono", "JetBrains Mono",
+          ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* Neumorphic depth. Light source is top-left: dark shadow bottom-right,
+     lift highlight top-left. Every elevation in the app is one of these four. */
+  --neu-dark: rgb(17 17 27 / .58);
+  --neu-dark-soft: rgb(17 17 27 / .34);
+  --neu-light-soft: rgb(69 71 90 / .14);
+  --neu-raised: 6px 6px 14px var(--neu-dark), -3px -3px 8px var(--neu-light-soft);
+  --neu-raised-soft: 3px 3px 8px var(--neu-dark-soft), -2px -2px 5px var(--neu-light-soft);
+  --neu-inset: inset 2px 2px 5px rgb(17 17 27 / .58), inset -2px -2px 5px rgb(69 71 90 / .2);
+  --neu-inset-soft: inset 1px 1px 3px rgb(17 17 27 / .48), inset -1px -1px 3px rgb(69 71 90 / .16);
+
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--base);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scrollbar-gutter: stable; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--base); }
+button, input, select, textarea { font: inherit; }
+button { color: inherit; }
+h1, h2, p { margin-top: 0; }
+h1 { text-wrap: balance; }
+
+/* Accent-colored focus + selection, everywhere, no exceptions */
+:focus-visible { outline: 2px solid var(--mauve); outline-offset: 3px; }
+::selection { color: var(--crust); background: var(--mauve); }
+
+/* Scrollbars inside dark wells */
+.scroll-well { scrollbar-color: var(--surface-2) transparent; }
+
+/* Ambient page wash — an almost-invisible accent bloom, not a gradient hero */
+.app-shell {
+  background:
+    radial-gradient(circle at 14% 8%, rgb(203 166 247 / .008), transparent 44rem),
+    var(--base);
+}
+
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+@keyframes enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes spin  { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: .45; box-shadow: 0 0 0 7px transparent; } }
+@keyframes blink { 50% { opacity: 0; } }
+
+.page-enter { animation: enter .34s ease both; }
+.live-dot {
+  width: 7px; height: 7px; flex: 0 0 auto; display: inline-block; border-radius: 50%;
+  color: var(--green); background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
