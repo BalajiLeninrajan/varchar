@@ -109,13 +109,19 @@ export const GROUPS = [
       {
         id: "update",
         name: "Update a row",
-        blurb: "Rewrites the whole string in place",
+        blurb: "A scan finds the row, then the whole string is rewritten",
         sql: ["UPDATE users SET active = FALSE WHERE name = 'Alan Turing'"],
+      },
+      {
+        id: "delete-prefilter",
+        name: "Delete on a range",
+        blurb: "Prefilter again: more rows match than the query deletes",
+        sql: ["DELETE FROM posts WHERE views > 1000"],
       },
       {
         id: "delete-cascade",
         name: "Delete a parent, cascade the children",
-        blurb: "Watch the posts records vanish too",
+        blurb: "One scan finds the parent; the cascade uses no regex at all",
         sql: ["DELETE FROM users WHERE id = 1"],
       },
       {
