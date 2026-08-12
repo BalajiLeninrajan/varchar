@@ -8,6 +8,8 @@
 
 `varchar` is a really dumb SQL DB: its entire authoritative state—schemas, constraints, sequence state, and rows—is one UTF-8 `String`, and every supported `SELECT` scans that string with regexes.
 
+**Try it in your browser: [varchar.balajileninrajan.dev](https://varchar.balajileninrajan.dev/)** — the real engine compiled to WebAssembly, with the string and the regex both on screen.
+
 It is a real parser, type checker, storage codec, and query engine. It is also a toy. Do not use it for production data, durability, concurrent writers, or anything whose loss would make your day worse.
 
 ```console
@@ -116,6 +118,7 @@ Varchar is meant to be understandable, inspectable, and funny—not fast. Every 
 
 ## Documentation
 
+- [Playground](https://varchar.balajileninrajan.dev/) — run SQL against the engine in your browser and watch the string change
 - [docs.rs/varchar](https://docs.rs/varchar) — generated API documentation for the core crate
 - [SQL reference](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/sql-reference.md) — the complete dialect, clause by clause
 - [Library API](https://github.com/BalajiLeninrajan/varchar/blob/main/docs/library-api.md) — embedding the core crate, errors, and limits

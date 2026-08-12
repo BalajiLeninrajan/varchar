@@ -8,7 +8,7 @@ rust-version = "1.97"
 version = "0.1.1"
 license = "MIT"
 repository = "https://github.com/BalajiLeninrajan/varchar"
-homepage = "https://github.com/BalajiLeninrajan/varchar"
+homepage = "https://varchar.balajileninrajan.dev"
 authors = ["Balaji Leninrajan <bleninrajan@gmail.com>"]
 
 [workspace.lints.rust]
