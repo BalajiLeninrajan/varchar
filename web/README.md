@@ -52,7 +52,7 @@ The Worker serves `dist/` as static assets; nothing runs on the edge.
 
 | Method | Purpose |
 | --- | --- |
-| `db.exec(sql)` | Execute one statement. `SELECT` results also carry the compiled pattern and the byte ranges it matched. |
+| `db.exec(sql)` | Execute one statement. `SELECT` results also carry the compiled pattern and the byte ranges it matched; `UPDATE` and `DELETE` carry the pattern and match count of the scan that found their rows. |
 | `db.explain(sql)` | Compile a `SELECT` to its pattern without executing it. |
 | `db.load(blob)` | Validate and adopt a persisted string; the current database is untouched if it is rejected. |
 | `db.dump()` / `db.reset()` | Read the authoritative string, or drop everything. |
@@ -60,3 +60,23 @@ The Worker serves `dist/` as static assets; nothing runs on the edge.
 Match ranges are UTF-8 byte offsets into the blob, which is why `src/lib/bytes.js` slices the
 encoded bytes rather than the JS string. `INTEGER` values travel as strings, since the column is
 signed 64-bit and JSON numbers lose precision past 2^53.
+
+### Mutation scans
+
+`SELECT`, `UPDATE` and `DELETE` are the only statements that compile a scan pattern —
+`INSERT`, `CREATE TABLE`, the metadata statements and referential cascades never build one.
+The core only explains `SELECT`, so the adapter rewrites a mutation into the `SELECT` that
+performs the same scan: both go through one `pattern::row_scan_pattern` call with the same table
+schema and the same resolved predicates, so the pattern text is identical.
+
+Two properties keep that honest:
+
+- The explanation is compiled from the string **before** the write, because that is what the
+  mutation scanned, and the envelope carries that string as `blobBefore` with the scan marked
+  `appliesTo: "before"`. The pattern stays valid afterwards, but its offsets do not: the matched
+  rows have been re-encoded or removed, so every byte past the first edit has shifted. Highlights
+  are drawn over the before-image or not at all.
+- It is attached **only if the statement succeeded**. `UPDATE` resolves its `SET` list before it
+  compiles the scan, so a rejected mutation (`SET missing = 1`, a type mismatch, a duplicate
+  assignment) is exactly the case where the rewritten `SELECT` would describe a statement that
+  never ran.
