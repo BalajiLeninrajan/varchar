@@ -1,0 +1,27 @@
+# Standalone crate: deliberately not a member of the root workspace so the
+# published crates and their CI gates stay unaffected by the browser adapter.
+[workspace]
+
+[package]
+name = "varchar-wasm"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.97"
+description = "Browser adapter for the varchar engine"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+varchar = { path = "../../crates/varchar" }
+fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
+serde_json = "1"
+wasm-bindgen = "0.2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
