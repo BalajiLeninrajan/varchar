@@ -19,6 +19,7 @@ export function Topbar({
   logOpen,
   onToggleLog,
   onOpenPresets,
+  onOpenReference,
   onOpenImport,
   onOpenAbout,
 }) {
@@ -44,6 +45,9 @@ export function Topbar({
         </Chip>
         <button class="btn-flat" onClick={onOpenPresets}>
           examples
+        </button>
+        <button class="btn-flat" onClick={onOpenReference}>
+          sql
         </button>
         <button class="btn-flat" onClick={onOpenImport}>
           import
