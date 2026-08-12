@@ -7,7 +7,10 @@ const MARK_LIMIT = 600;
 
 export function StringDock({
   blob,
-  matches,
+  scan,
+  blobBefore,
+  explain,
+  onExplain,
   current,
   onCurrent,
   open,
@@ -16,7 +19,17 @@ export function StringDock({
   onDrop,
 }) {
   const marks = useRef([]);
-  const bytes = useMemo(() => encode(blob), [blob]);
+
+  // A mutation's ranges index the string it scanned, which is the one from
+  // before the write — so lighting them up means showing that string too. If
+  // that string is missing the ranges describe nothing on screen, and drawing
+  // them over the live blob would be worse than drawing nothing.
+  const beforeWrite = scan?.appliesTo === "before";
+  const historic = beforeWrite && typeof blobBefore === "string";
+  const shown = historic && explain ? blobBefore : blob;
+  const matches = explain && (historic || !beforeWrite) ? (scan?.matches ?? []) : [];
+
+  const bytes = useMemo(() => encode(shown), [shown]);
   const { segments, drawn } = useMemo(
     () => segmentMatches(bytes, matches, MARK_LIMIT),
     [bytes, matches],
@@ -38,7 +51,12 @@ export function StringDock({
       aria-labelledby="dock-heading"
     >
       <div class="pane-head">
-        <h2 id="dock-heading">the database string</h2>
+        <h2 id="dock-heading">
+          the database string
+          {explain && historic ? (
+            <em class="as-of"> · before the write</em>
+          ) : null}
+        </h2>
         <div class="head-chips">
           <span class="note" id="blob-note">
             {total !== 0 && (
@@ -52,6 +70,20 @@ export function StringDock({
               </>
             )}
           </span>
+          {scan?.matches?.length ? (
+            <button
+              class={`btn-flat${explain ? " is-on" : ""}`}
+              aria-pressed={String(explain)}
+              title={
+                historic
+                  ? "Show the string the scan read, with the rows it matched"
+                  : "Highlight the bytes the pattern matched"
+              }
+              onClick={onExplain}
+            >
+              explain
+            </button>
+          ) : null}
           {drawn > 0 ? (
             <span class="match-nav">
               <button

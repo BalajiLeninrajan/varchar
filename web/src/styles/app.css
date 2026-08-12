@@ -396,6 +396,9 @@ td.is-integer { color: var(--peach); }
 
 .dock .pane-head { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
 .dock .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The dock is showing a snapshot rather than the live string — say so in the
+   one place nobody can miss. */
+.dock .as-of { color: var(--peach); font-style: normal; }
 .dock pre {
   margin: 0;
   padding: 10px;

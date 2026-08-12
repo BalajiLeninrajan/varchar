@@ -32,6 +32,8 @@ export function App() {
   const [blob, setBlob] = useState("");
   const [outcome, setOutcome] = useState(null);
   const [scan, setScan] = useState(null);
+  const [blobBefore, setBlobBefore] = useState(null);
+  const [explain, setExplain] = useState(true);
   const [current, setCurrent] = useState(0);
   const [entries, setEntries] = useState([]);
   const [sql, setSql] = useState(FIRST_QUERY);
@@ -75,12 +77,15 @@ export function App() {
   /** Applies one envelope to the panes: string, highlights, scan and result. */
   const settle = useCallback((statement, envelope) => {
     setBlob(envelope.blob);
+    // A mutation's ranges index the string it read, so that one is kept
+    // alongside the live blob for as long as its scan is on screen.
+    setBlobBefore(envelope.ok ? (envelope.blobBefore ?? null) : null);
     setOutcome({ statement, envelope });
     setScan(envelope.ok ? (envelope.scan ?? null) : null);
     setCurrent(0);
     if (envelope.ok && !envelope.scan) {
-      // A mutation invalidates any highlight drawn over the previous string, so
-      // the pattern that produced them cannot stay on screen either.
+      // A statement with no scan leaves nothing to highlight, so the pattern
+      // that drew the previous highlights cannot stay on screen either.
       setScanPlaceholder({
         title: "no scan for this statement",
         body: "Only a SELECT compiles to a pattern. Run one and every byte it matches lights up in the string below.",
@@ -196,8 +201,6 @@ export function App() {
     );
   }
 
-  const matches = scan?.matches ?? [];
-
   return (
     <div class="app-shell">
       <Topbar
@@ -234,7 +237,14 @@ export function App() {
 
       <StringDock
         blob={blob}
-        matches={matches}
+        blobBefore={blobBefore}
+        scan={scan}
+        explain={explain}
+        onExplain={() => {
+          setDockOpen(true);
+          setCurrent(0);
+          setExplain((on) => !on);
+        }}
         current={current}
         onCurrent={(index) => {
           setDockOpen(true);
