@@ -20,7 +20,7 @@ doc = false
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
-varchar = { path = "../varchar", version = "0.1.1" }
+varchar = { path = "../varchar", version = "0.1.2" }
 
 [dev-dependencies]
 assert_cmd = "2"
