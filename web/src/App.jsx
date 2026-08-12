@@ -6,7 +6,7 @@ import { ResultPane } from "./components/ResultPane.jsx";
 import { ScanPane } from "./components/ScanPane.jsx";
 import { StringDock } from "./components/StringDock.jsx";
 import { Topbar } from "./components/Topbar.jsx";
-import { AboutDialog, ImportDialog, PresetsDrawer } from "./components/dialogs.jsx";
+import { AboutDialog, ImportDialog, PresetsDrawer, ReferenceDrawer } from "./components/dialogs.jsx";
 import { Banner } from "./components/ui.jsx";
 import { byteLength } from "./lib/bytes.js";
 import { createDb, describe, exec, load, splitStatements } from "./lib/db.js";
@@ -208,6 +208,7 @@ export function App() {
         logOpen={logOpen}
         onToggleLog={() => setLogOpen((open) => !open)}
         onOpenPresets={() => setDialog("presets")}
+        onOpenReference={() => setDialog("reference")}
         onOpenImport={() => setDialog("import")}
         onOpenAbout={() => setDialog("about")}
       />
@@ -261,9 +262,17 @@ export function App() {
         open={dialog === "presets"}
         onClose={() => setDialog(null)}
         onPick={(preset) => {
+          // The console is loaded, not fired: the reader presses run.
           setSql(preset.sql.join(";\n"));
           setDialog(null);
-          run(preset.sql);
+        }}
+      />
+      <ReferenceDrawer
+        open={dialog === "reference"}
+        onClose={() => setDialog(null)}
+        onUse={(statement) => {
+          setSql(statement);
+          setDialog(null);
         }}
       />
       <ImportDialog

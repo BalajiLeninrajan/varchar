@@ -1,7 +1,9 @@
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
-import { CopyCommand, Icon, Modal } from "./ui.jsx";
+import { CopyCommand, EmptyState, Icon, Modal } from "./ui.jsx";
 import { GROUPS } from "../lib/presets.js";
+import { SECTIONS } from "../lib/reference.js";
+import { tokenizeSql } from "../lib/sql.js";
 
 export function AboutDialog({ open, onClose }) {
   return (
@@ -96,7 +98,7 @@ export function PresetsDrawer({ open, onClose, onPick }) {
       </div>
       <div class="drawer-body scroll-well">
         {GROUPS.map((group) => (
-          <div class="preset-group" key={group.title}>
+          <div class="drawer-group" key={group.title}>
             <h3>{group.title}</h3>
             <div class="preset-list">
               {group.presets.map((preset) => (
@@ -117,6 +119,127 @@ export function PresetsDrawer({ open, onClose, onPick }) {
           </div>
         ))}
       </div>
+    </Modal>
+  );
+}
+
+const REFERENCE_DOC =
+  "https://github.com/BalajiLeninrajan/varchar/blob/main/docs/sql-reference.md";
+
+/** SQL with the dialect's keywords, types and literals coloured. */
+function Sql({ text }) {
+  return tokenizeSql(text).map((token, index) => (
+    <span key={index} class={`sql-${token.kind}`}>
+      {token.text}
+    </span>
+  ));
+}
+
+/** Sections whose title matches keep every entry; otherwise entries filter. */
+function search(query) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return SECTIONS;
+  return SECTIONS.map((section) => {
+    if (section.title.toLowerCase().includes(needle)) return section;
+    const entries = (section.entries ?? []).filter((entry) =>
+      `${entry.syntax} ${entry.note}`.toLowerCase().includes(needle),
+    );
+    const items = (section.items ?? []).filter((item) => item.toLowerCase().includes(needle));
+    if (entries.length === 0 && items.length === 0) return null;
+    return { ...section, entries, items };
+  }).filter(Boolean);
+}
+
+export function ReferenceDrawer({ open, onClose, onUse }) {
+  const [query, setQuery] = useState("");
+  const body = useRef(null);
+  const sections = useMemo(() => search(query), [query]);
+
+  // The drawer stays mounted while closed, so each opening resets it to the
+  // top of the whole grammar rather than wherever it was left.
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    if (body.current) body.current.scrollTop = 0;
+  }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} className="drawer is-wide">
+      <div class="pane-head">
+        <h2>sql reference</h2>
+        <button class="btn-flat" onClick={onClose}>
+          close
+        </button>
+      </div>
+      <div class="drawer-search">
+        <input
+          type="search"
+          value={query}
+          spellcheck={false}
+          autocapitalize="off"
+          autocorrect="off"
+          aria-label="Filter the SQL reference"
+          placeholder="filter — like, cascade, order by"
+          onInput={(event) => setQuery(event.currentTarget.value)}
+        />
+      </div>
+      <div class="drawer-body scroll-well" ref={body}>
+        {sections.length === 0 ? (
+          <EmptyState title="nothing matches">
+            No clause in the dialect mentions that. The whole grammar is on the other side of the filter.
+          </EmptyState>
+        ) : null}
+        {sections.map((section) => (
+          <section class="drawer-group" key={section.title}>
+            <h3>{section.title}</h3>
+            {section.blurb ? <p class="ref-blurb">{section.blurb}</p> : null}
+            {section.entries?.length ? (
+              <ul class="ref-list">
+                {section.entries.map((entry) => (
+                  <li key={entry.syntax}>
+                    {/* A complete statement is a button that loads the console;
+                        a fragment is shown for its shape and nothing else. */}
+                    {entry.run ? (
+                      <button
+                        type="button"
+                        class="ref-syntax is-runnable"
+                        title="Put this in the console"
+                        onClick={() => onUse(entry.syntax)}
+                      >
+                        <code>
+                          <Sql text={entry.syntax} />
+                        </code>
+                        <span class="ref-use">use</span>
+                      </button>
+                    ) : (
+                      <div class="ref-syntax">
+                        <code>
+                          <Sql text={entry.syntax} />
+                        </code>
+                      </div>
+                    )}
+                    <p class="ref-note">{entry.note}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {section.items?.length ? (
+              <ul class="ref-tags">
+                {section.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
+            {section.note ? <p class="ref-blurb is-foot">{section.note}</p> : null}
+          </section>
+        ))}
+      </div>
+      <footer class="drawer-foot">
+        <span>The dialect is small on purpose.</span>
+        <a href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener">
+          <Icon id="book" size={13} /> full reference
+        </a>
+      </footer>
     </Modal>
   );
 }

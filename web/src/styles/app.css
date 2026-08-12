@@ -558,8 +558,8 @@ dialog[open]::backdrop { opacity: 1; }
 @starting-style { .drawer[open] { transform: translateX(26px); } }
 .drawer .pane-head { min-height: 38px; }
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
-.preset-group { display: flex; flex-direction: column; gap: 6px; }
-.preset-group h3 { margin: 0; color: var(--overlay-2); font: 750 9px/1 var(--mono); letter-spacing: .1em; }
+.drawer-group { display: flex; flex-direction: column; gap: 6px; }
+.drawer-group h3 { margin: 0; color: var(--overlay-2); font: 750 9px/1 var(--mono); letter-spacing: .1em; }
 .preset-list { display: grid; gap: 6px; }
 .preset-list button {
   padding: 8px 10px;
@@ -583,6 +583,101 @@ dialog[open]::backdrop { opacity: 1; }
 }
 .preset-list b { font: 700 12px var(--sans); }
 .preset-list small { color: var(--overlay-2); font: 500 9.5px/1.45 var(--mono); overflow-wrap: anywhere; }
+
+/* ── The SQL reference ──────────────────────────────────────────────────── */
+
+/* Statements are long; the reference gets more room than the examples. */
+.drawer.is-wide { width: min(560px, calc(100vw - 24px)); }
+
+.drawer-search { flex: none; padding: 10px 12px 0; }
+.drawer-search input {
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 9px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--surface-1) 42%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--crust) 62%, var(--mantle));
+  box-shadow: var(--neu-inset);
+  font: 500 11px/1.4 var(--mono);
+  transition: border-color .18s, box-shadow .18s;
+}
+.drawer-search input::placeholder { color: var(--overlay-0); }
+.drawer-search input:hover { border-color: var(--surface-2); }
+.drawer-search input:focus { box-shadow: var(--neu-inset), 0 0 0 2px color-mix(in srgb, var(--mauve) 20%, transparent); }
+
+/* Prose is prose: only the syntax itself, and the chrome around it, stay mono. */
+.ref-blurb { margin: 0; color: var(--subtext-0); font: 400 12px/1.5 var(--sans); }
+.ref-blurb.is-foot { color: var(--overlay-0); }
+.ref-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.ref-list li { display: flex; flex-direction: column; gap: 3px; }
+
+/* The syntax line is carved in, like the console it fills. */
+.ref-syntax {
+  width: 100%;
+  padding: 7px 9px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--subtext-1);
+  border: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--crust) 48%, var(--mantle));
+  box-shadow: var(--neu-inset-soft);
+  font: 600 11px/1.65 var(--mono);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.ref-syntax code { min-width: 0; font: inherit; color: inherit; }
+button.ref-syntax { cursor: pointer; transition: border-color .16s, background .16s, box-shadow .16s; }
+button.ref-syntax:hover { border-color: color-mix(in srgb, var(--mauve) 45%, var(--surface-1)); }
+button.ref-syntax:active { box-shadow: var(--neu-inset); }
+.ref-use {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--overlay-0);
+  font: 700 9px/1 var(--mono);
+  letter-spacing: .06em;
+}
+button.ref-syntax:hover .ref-use { color: var(--mauve); }
+.ref-note { margin: 0 0 0 2px; color: var(--overlay-2); font: 400 11.5px/1.5 var(--sans); }
+
+/* What the dialect refuses gets the dashed, unfilled treatment. */
+.ref-tags { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
+.ref-tags li {
+  padding: 3px 8px;
+  color: var(--overlay-1);
+  border: 1px dashed color-mix(in srgb, var(--surface-2) 55%, transparent);
+  border-radius: 999px;
+  font: 500 11px/1.35 var(--sans);
+}
+
+.sql-kw { color: var(--mauve); font-weight: 750; }
+.sql-type { color: var(--teal); }
+.sql-val { color: var(--peach); }
+
+.drawer-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--surface-1) 55%, transparent);
+  background: color-mix(in srgb, var(--crust) 24%, var(--base));
+}
+.drawer-foot span { color: var(--overlay-0); font: 400 11px/1 var(--sans); }
+.drawer-foot a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--overlay-2);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .04em;
+  text-decoration: none;
+  transition: color .16s;
+}
+.drawer-foot a:hover { color: var(--mauve); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
