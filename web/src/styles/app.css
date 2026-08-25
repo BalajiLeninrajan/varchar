@@ -15,8 +15,9 @@ body { overflow: hidden; }
 /* Class-level display would otherwise beat the UA rules for these two. */
 [hidden] { display: none !important; }
 dialog:not([open]) { display: none; }
-/* Inline code in prose — the semantic code element is a code context. */
-code { font: 650 .92em var(--mono); color: var(--teal); }
+/* Inline code in prose — the semantic code element is a code context. The
+   size floors at 12px so code inside 12-13px prose never dips below it. */
+code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--teal); }
 
 .app-shell {
   height: 100dvh;
@@ -49,6 +50,9 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
   justify-content: space-between;
   gap: 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  /* Band corner rule: the filled first child of a rounded surface takes
+     calc(parent - 1px) on its outer corners. */
+  border-radius: calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px) 0 0;
 }
 .pane-head h2 { margin: 0; color: var(--overlay-2); white-space: nowrap; }
 .head-chips { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
@@ -100,9 +104,11 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
 
 .button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .button-row.is-end { justify-content: flex-end; }
-.button-row.is-split { justify-content: space-between; align-items: center; }
 
 .chip b { color: var(--text); font-weight: 750; }
+/* Toned status chips keep the pill recipe but take their tint through the
+   --tone contract prop (set via the package cn-tone-* setters in markup). */
+.chip.is-toned { color: var(--tone); border-color: color-mix(in srgb, var(--tone) 45%, transparent); }
 
 /* Code-entry fields: SQL and encoded-string input is code, so the carved
    package input keeps the mono face here. */
@@ -373,7 +379,7 @@ dialog[open]::backdrop { opacity: 1; }
 }
 .side-sheet[open] { transform: none; }
 @starting-style { .side-sheet[open] { transform: translateX(26px); } }
-.side-sheet .pane-head { min-height: 38px; }
+.side-sheet .pane-head { min-height: 38px; border-radius: calc(var(--pane-radius) - 1px) 0 0 0; }
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 .drawer-group { display: flex; flex-direction: column; gap: 6px; }
 .drawer-group h3 { margin: 0; }
@@ -433,6 +439,8 @@ button.ref-syntax:hover .ref-use { color: var(--mauve); }
 .sql-kw { color: var(--mauve); font-weight: 750; }
 .sql-type { color: var(--teal); }
 .sql-val { color: var(--peach); }
+/* Identifiers, operators and punctuation stay in the surface's own ink. */
+.sql-plain { color: inherit; }
 
 /* Divider-only foot, per the footer canon. */
 .drawer-foot {

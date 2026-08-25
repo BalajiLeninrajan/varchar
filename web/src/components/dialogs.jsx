@@ -174,6 +174,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
       <div class="drawer-search">
         <input
           type="search"
+          name="ref-search"
           class="input"
           value={query}
           spellcheck={false}
@@ -203,7 +204,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
                     {entry.run ? (
                       <button
                         type="button"
-                        class="ref-syntax is-runnable"
+                        class="ref-syntax"
                         title="Put this in the console"
                         onClick={() => onUse(entry.syntax)}
                       >

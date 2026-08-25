@@ -28,11 +28,10 @@ export function PaneHead({ title, id, children }) {
 }
 
 export function Chip({ tone, title, children }) {
-  const style = tone
-    ? { color: `var(--${tone})`, borderColor: `color-mix(in srgb, var(--${tone}) 45%, transparent)` }
-    : undefined;
+  // Tint rides the package --tone contract prop via the cn-tone-* setters.
+  const className = tone ? `chip is-toned cn-tone-${tone}` : "chip";
   return (
-    <span class="chip" style={style} title={title}>
+    <span class={className} title={title}>
       {children}
     </span>
   );
