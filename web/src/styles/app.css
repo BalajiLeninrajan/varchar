@@ -129,8 +129,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .console-body textarea { flex: 1 1 auto; resize: none; }
 /* The hard offset shadow is drawn outside the box, so the button is inset by
    its own offset to keep the shadow clear of the pane edge. */
-.console-body .btn-primary { margin: 0 3px 3px 0; }
-.console-body .btn-ghost { margin-bottom: 3px; }
+.console-body .btn-primary { margin: 0 var(--hard-offset) var(--hard-offset) 0; }
+.console-body .btn-ghost { margin-bottom: var(--hard-offset); }
 .scan-pane { grid-column: 2; grid-row: 1; }
 .result-pane { grid-column: 1 / 3; grid-row: 2; }
 
@@ -154,7 +154,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   animation: pattern-in .2s ease both;
 }
 /* An offending statement, carved like a code block, with the span marked. */
-.pattern-well { padding: 9px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pattern-well { margin: 0; padding: 9px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .re-meta { color: var(--mauve); font-weight: 800; }
 .re-esc { color: var(--overlay-1); }
 .re-class { color: var(--peach); }

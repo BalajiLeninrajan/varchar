@@ -288,7 +288,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
             load string
           </button>
         </div>
-        <p class="note cn-meta">
+        <p class="cn-meta">
           Or turn a CSV into a table — column types are inferred, then a <code>CREATE TABLE</code> and one{" "}
           <code>INSERT</code> per row are run for you.
         </p>

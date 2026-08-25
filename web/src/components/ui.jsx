@@ -39,7 +39,7 @@ export function Chip({ tone, title, children }) {
 
 export function Banner({ tone = "peach", children }) {
   return (
-    <div class="banner" style={{ "--tone": `var(--${tone})` }}>
+    <div class={`banner cn-tone-${tone}`}>
       {children}
     </div>
   );
