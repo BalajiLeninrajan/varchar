@@ -35,13 +35,13 @@ export function Topbar({
       </div>
       <div class="appbar-end">
         <Chip title="Length of the encoded string in bytes">
-          <b>{stats.bytes.toLocaleString()}</b>&nbsp;B
+          <b>{stats.bytes.toLocaleString()}</b>B
         </Chip>
         <Chip title="~S records in the string">
-          <b>{stats.tables}</b>&nbsp;tbl
+          <b>{stats.tables}</b>tbl
         </Chip>
         <Chip title="~R records in the string">
-          <b>{stats.rows}</b>&nbsp;rows
+          <b>{stats.rows}</b>rows
         </Chip>
         <button class="btn-flat" onClick={onOpenPresets}>
           examples

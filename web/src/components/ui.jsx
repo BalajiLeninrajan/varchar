@@ -27,6 +27,14 @@ export function PaneHead({ title, id, children }) {
   );
 }
 
+// Prose with SQL in it: backticks in the source string mark the code spans, so
+// the mono face lands on the keywords and not the sentence around them.
+export function Marked({ text }) {
+  return text
+    .split("`")
+    .map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+}
+
 export function Chip({ tone, title, children }) {
   // Tint rides the package --tone contract prop via the cn-tone-* setters.
   const className = tone ? `chip is-toned cn-tone-${tone}` : "chip";

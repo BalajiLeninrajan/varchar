@@ -67,7 +67,7 @@ export const GROUPS = [
       },
       {
         id: "select-like",
-        name: "A LIKE prefix",
+        name: "A `LIKE` prefix",
         blurb: "% becomes a bounded wildcard inside the cell",
         sql: ["SELECT name FROM users WHERE name LIKE 'A%'"],
       },
@@ -79,7 +79,7 @@ export const GROUPS = [
       },
       {
         id: "select-and",
-        name: "AND across two columns",
+        name: "`AND` across two columns",
         blurb: "Both predicates land in one pattern",
         sql: ["SELECT title FROM posts WHERE published = TRUE AND user_id = 1"],
       },
@@ -91,13 +91,13 @@ export const GROUPS = [
       },
       {
         id: "select-page",
-        name: "ORDER BY, LIMIT, OFFSET",
+        name: "`ORDER BY`, `LIMIT`, `OFFSET`",
         blurb: "Sorting and paging happen after the scan",
         sql: ["SELECT title, views FROM posts ORDER BY views DESC LIMIT 3 OFFSET 1"],
       },
       {
         id: "select-explain",
-        name: "EXPLAIN REGEX",
+        name: "`EXPLAIN REGEX`",
         blurb: "Compile the pattern without running the query",
         sql: ["EXPLAIN REGEX SELECT name FROM users WHERE email IS NOT NULL"],
       },
@@ -135,9 +135,9 @@ export const GROUPS = [
   {
     title: "INTROSPECT",
     presets: [
-      { id: "show-tables", name: "SHOW TABLES", blurb: "Read the catalog", sql: ["SHOW TABLES"] },
-      { id: "describe", name: "DESCRIBE users", blurb: "Column types, keys, defaults", sql: ["DESCRIBE users"] },
-      { id: "show-create", name: "SHOW CREATE TABLE users", blurb: "Canonical DDL rebuilt from the string", sql: ["SHOW CREATE TABLE users"] },
+      { id: "show-tables", name: "`SHOW TABLES`", blurb: "Read the catalog", sql: ["SHOW TABLES"] },
+      { id: "describe", name: "`DESCRIBE users`", blurb: "Column types, keys, defaults", sql: ["DESCRIBE users"] },
+      { id: "show-create", name: "`SHOW CREATE TABLE users`", blurb: "Canonical DDL rebuilt from the string", sql: ["SHOW CREATE TABLE users"] },
     ],
   },
 ];

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
-import { CopyCommand, EmptyState, Icon, Modal } from "./ui.jsx";
+import { CopyCommand, EmptyState, Icon, Marked, Modal } from "./ui.jsx";
 import { GROUPS } from "../lib/presets.js";
 import { SECTIONS } from "../lib/reference.js";
 import { tokenizeSql } from "../lib/sql.js";
@@ -111,7 +111,7 @@ export function PresetsDrawer({ open, onClose, onPick }) {
                     onPick(preset);
                   }}
                 >
-                  <b>{preset.name}</b>
+                  <b><Marked text={preset.name} /></b>
                   <small>{preset.blurb}</small>
                 </button>
               ))}
