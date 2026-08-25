@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       catppuccin-neu:
-        specifier: github:BalajiLeninrajan/catppuccin-neu#v0.1.2
-        version: https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/c921d3abddc249068c86e0d033d57dc83025ffc9
+        specifier: github:BalajiLeninrajan/catppuccin-neu#v0.1.3
+        version: https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/114914ea220715be069b8982375ad4a929cbcd22
       preact:
         specifier: ^10.28.3
         version: 10.29.8
@@ -731,9 +731,9 @@ packages:
   caniuse-lite@1.0.30001809:
     resolution: {integrity: sha512-xxWVywk6a6Arlk+hymeycyn/VgqEfLDxupvhH/xiY5SJ/18kmi9o6MiO320DCUzypORHLtvh0I4i04tUhCNHNQ==}
 
-  catppuccin-neu@https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/c921d3abddc249068c86e0d033d57dc83025ffc9:
-    resolution: {gitHosted: true, integrity: sha512-rGtuNMC439C1oAuj33qCh8Ez+v8jfXRqcpkv+d9PwG9IdEK21w6+aam2M5RLnzdssQ23bZK3A8W2tWpFW1vVdQ==, tarball: https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/c921d3abddc249068c86e0d033d57dc83025ffc9}
-    version: 0.1.2
+  catppuccin-neu@https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/114914ea220715be069b8982375ad4a929cbcd22:
+    resolution: {gitHosted: true, integrity: sha512-ZN2bBvK8rdiVkUoJlpXDKGVTN5VuCSicVezukb4H67+ONzMIZzNAhLBKCmOD+PryxF95mMHxEapDTkU83Fd2UA==, tarball: https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/114914ea220715be069b8982375ad4a929cbcd22}
+    version: 0.1.3
     engines: {node: '>=18'}
     hasBin: true
 
@@ -1578,7 +1578,7 @@ snapshots:
 
   caniuse-lite@1.0.30001809: {}
 
-  catppuccin-neu@https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/c921d3abddc249068c86e0d033d57dc83025ffc9: {}
+  catppuccin-neu@https://codeload.github.com/BalajiLeninrajan/catppuccin-neu/tar.gz/114914ea220715be069b8982375ad4a929cbcd22: {}
 
   convert-source-map@2.0.0: {}
 
