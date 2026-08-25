@@ -17,13 +17,14 @@ export function Console({ sql, onSql, onRun, onSeed }) {
         >
           clear
         </button>
-        <span class="hint">⌘/ctrl + ⏎</span>
+        <span class="cn-meta">⌘/ctrl + ⏎</span>
       </PaneHead>
       <div class="pane-body console-body">
         <textarea
           ref={field}
           id="sql"
           name="sql"
+          class="input is-code"
           value={sql}
           spellcheck={false}
           autocapitalize="off"
@@ -39,10 +40,10 @@ export function Console({ sql, onSql, onRun, onSeed }) {
           }}
         />
         <div class="button-row is-end">
-          <button class="btn-ghost" onClick={onSeed}>
+          <button class="btn btn-ghost" onClick={onSeed}>
             seed demo data
           </button>
-          <button class="btn-primary" onClick={onRun}>
+          <button class="btn btn-primary" onClick={onRun}>
             <Icon id="play" size={11} /> run
           </button>
         </div>

@@ -18,7 +18,7 @@ export function AboutDialog({ open, onClose }) {
           every <code>SELECT</code> is a regular expression scanned across it. This page runs the real engine
           compiled to WebAssembly: nothing leaves your tab, and nothing survives a reload.
         </p>
-        <pre class="sample well">
+        <pre class="sample codeblock">
           <span class="tok-tag">V2;</span>
           {"\n"}
           <span class="tok-tag">~S|</span>
@@ -78,7 +78,7 @@ export function AboutDialog({ open, onClose }) {
               <Icon id="book" size={13} /> docs.rs
             </a>
           </nav>
-          <button class="btn-primary" onClick={onClose}>
+          <button class="btn btn-primary" onClick={onClose}>
             start
           </button>
       </footer>
@@ -89,9 +89,9 @@ export function AboutDialog({ open, onClose }) {
 export function PresetsDrawer({ open, onClose, onPick }) {
   const [active, setActive] = useState(null);
   return (
-    <Modal open={open} onClose={onClose} className="drawer">
-      <div class="pane-head">
-        <h2>examples</h2>
+    <Modal open={open} onClose={onClose} className="side-sheet">
+      <div class="pane-head cn-bg-head">
+        <h2 class="cn-microlabel">examples</h2>
         <button class="btn-flat" onClick={onClose}>
           close
         </button>
@@ -99,8 +99,8 @@ export function PresetsDrawer({ open, onClose, onPick }) {
       <div class="drawer-body scroll-well">
         {GROUPS.map((group) => (
           <div class="drawer-group" key={group.title}>
-            <h3>{group.title}</h3>
-            <div class="preset-list">
+            <h3 class="cn-microlabel">{group.title}</h3>
+            <div class="preset-list segmented is-stacked">
               {group.presets.map((preset) => (
                 <button
                   key={preset.id}
@@ -164,9 +164,9 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
   }, [open]);
 
   return (
-    <Modal open={open} onClose={onClose} className="drawer is-wide">
-      <div class="pane-head">
-        <h2>sql reference</h2>
+    <Modal open={open} onClose={onClose} className="side-sheet is-wide">
+      <div class="pane-head cn-bg-head">
+        <h2 class="cn-microlabel">sql reference</h2>
         <button class="btn-flat" onClick={onClose}>
           close
         </button>
@@ -174,6 +174,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
       <div class="drawer-search">
         <input
           type="search"
+          class="input"
           value={query}
           spellcheck={false}
           autocapitalize="off"
@@ -191,7 +192,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
         ) : null}
         {sections.map((section) => (
           <section class="drawer-group" key={section.title}>
-            <h3>{section.title}</h3>
+            <h3 class="cn-microlabel">{section.title}</h3>
             {section.blurb ? <p class="ref-blurb">{section.blurb}</p> : null}
             {section.entries?.length ? (
               <ul class="ref-list">
@@ -209,7 +210,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
                         <code>
                           <Sql text={entry.syntax} />
                         </code>
-                        <span class="ref-use">use</span>
+                        <span class="ref-use cn-microlabel">use</span>
                       </button>
                     ) : (
                       <div class="ref-syntax">
@@ -260,8 +261,8 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
 
   return (
     <Modal open={open} onClose={onClose} className="sheet is-narrow">
-      <div class="pane-head">
-        <h2>import</h2>
+      <div class="pane-head cn-bg-head">
+        <h2 class="cn-microlabel">import</h2>
         <button class="btn-flat" onClick={onClose}>
           close
         </button>
@@ -271,6 +272,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           <label for="blob-input">paste an encoded database string</label>
           <textarea
             id="blob-input"
+            class="is-code"
             spellcheck={false}
             value={text}
             placeholder="V2;~S|users|id:I:!|name:T:?;~P|users|id;"
@@ -278,19 +280,19 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           />
         </div>
         <div class="button-row is-end">
-          <button class="btn-secondary" onClick={() => blobFile.current?.click()}>
+          <button class="btn btn-secondary" onClick={() => blobFile.current?.click()}>
             <Icon id="upload" /> open .varchar file
           </button>
-          <button class="btn-primary" disabled={!text.trim()} onClick={() => onLoadBlob(text)}>
+          <button class="btn btn-primary" disabled={!text.trim()} onClick={() => onLoadBlob(text)}>
             load string
           </button>
         </div>
-        <p class="note">
+        <p class="note cn-meta">
           Or turn a CSV into a table — column types are inferred, then a <code>CREATE TABLE</code> and one{" "}
           <code>INSERT</code> per row are run for you.
         </p>
         <div class="button-row is-end">
-          <button class="btn-secondary" onClick={() => csvFile.current?.click()}>
+          <button class="btn btn-secondary" onClick={() => csvFile.current?.click()}>
             <Icon id="upload" /> import CSV as a table
           </button>
         </div>
@@ -299,14 +301,14 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
         ref={blobFile}
         type="file"
         accept=".varchar,.txt,text/plain"
-        class="sr-only"
+        class="cn-sr-only"
         onChange={(event) => read(event.currentTarget, (content) => onLoadBlob(content))}
       />
       <input
         ref={csvFile}
         type="file"
         accept=".csv,.tsv,text/csv"
-        class="sr-only"
+        class="cn-sr-only"
         onChange={(event) => read(event.currentTarget, (content, name) => onImportCsv(content, name))}
       />
     </Modal>

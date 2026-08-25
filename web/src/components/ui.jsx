@@ -10,7 +10,7 @@ export function Icon({ id, size = 12 }) {
 
 export function Pane({ className = "", children, ...rest }) {
   return (
-    <section class={`pane ${className}`.trim()} {...rest}>
+    <section class={`pane panel ${className}`.trim()} {...rest}>
       {children}
     </section>
   );
@@ -18,8 +18,10 @@ export function Pane({ className = "", children, ...rest }) {
 
 export function PaneHead({ title, id, children }) {
   return (
-    <div class="pane-head">
-      <h2 id={id}>{title}</h2>
+    <div class="pane-head cn-bg-head">
+      <h2 id={id} class="cn-microlabel">
+        {title}
+      </h2>
       <div class="head-chips">{children}</div>
     </div>
   );
@@ -107,9 +109,9 @@ export function CopyCommand({ command }) {
         }
       }}
     >
-      <span class="prompt">$</span>
-      <code>{command}</code>
-      <span class="copy-mark">{copied ? "copied" : <Icon id="copy" size={11} />}</span>
+      <span class="prompt cn-code">$</span>
+      <code class="cn-code">{command}</code>
+      <span class="copy-mark cn-microlabel">{copied ? "copied" : <Icon id="copy" size={11} />}</span>
     </button>
   );
 }

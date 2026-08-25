@@ -45,7 +45,7 @@ export function ScanPane({ scan, placeholder }) {
       </PaneHead>
 
       <div class="pane-body scroll-well">
-        <pre class="pattern">
+        <pre class="pattern cn-code">
           {tokenizePattern(scan.pattern).map((token, index) => (
             <span key={index} class={`re-${token.kind}`}>
               {token.text}

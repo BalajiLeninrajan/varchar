@@ -10,13 +10,13 @@ const CELL = {
 
 function Table({ columns, rows }) {
   return (
-    <table>
+    <table class="table-neu">
       <thead>
         <tr>
           {columns.map((column, index) => (
             <th key={index}>
               {column.label}
-              <small>
+              <small class="cn-microlabel">
                 {column.type}
                 {column.nullable ? "" : " NOT NULL"}
               </small>
@@ -46,7 +46,7 @@ function Table({ columns, rows }) {
 function Offender({ statement, detail }) {
   const bytes = encode(statement);
   return (
-    <pre class="well pattern-well scroll-well">
+    <pre class="pattern-well codeblock scroll-well">
       {decodeRange(bytes, 0, detail.start)}
       <mark>{decodeRange(bytes, detail.start, detail.end) || "⟨here⟩"}</mark>
       {decodeRange(bytes, detail.end, bytes.length)}
