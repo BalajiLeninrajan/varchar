@@ -1,0 +1,1370 @@
+/* ── Component recipes ──────────────────────────────────────────────────────
+   Every recipe reads tokens and contract properties only (--accent, --tone,
+   --hard-offset-color, the density knobs). Depth canon: clickable controls
+   default to the hard offset shadow and press with the half-slide — rest
+   --hard-offset (4px, 3px compact), hover translate(-1px,-1px), active a
+   half-slide onto the shadow, which shrinks to meet it. Type: sans is the
+   default; mono ships on the code surfaces (.terminal, .codeblock, .cn-code)
+   and may be adopted elsewhere sparingly in a consumer layer. Inset surfaces
+   are borderless — depth defines them; hairlines stay on raised surfaces
+   and tinted semantic surfaces only.
+   Requires tokens.css (+ utilities.css for .cn-scrim). Layer: cn.recipes.   */
+
+/* ── Surfaces ───────────────────────────────────────────────────────────── */
+
+/* Panel — the primary content container. Raised. */
+.panel {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--surface-2) 40%, transparent);
+  border-radius: var(--pane-radius);
+  background: var(--base);
+  box-shadow: var(--neu-raised);
+}
+
+/* The one rotated hero card. The hard offset rides over the neu raise so
+   the hero still answers the top-left light instead of floating as a flat
+   sticker. Flattened at ≤1060px. */
+.panel.is-tilted {
+  transform: rotate(1.2deg);
+  box-shadow: 10px 10px 0 var(--hard-offset-color), var(--neu-raised);
+}
+
+/* Panel header/footer — recessed bands inside a panel, on --mantle. The band
+   follows the parent radius (minus the 1px border) so its fill never pokes
+   past the panel corners; never fix this with overflow: hidden — that clips
+   anchored popovers and hard-offset shadows. */
+.panel-heading, .panel-footer {
+  min-height: 70px;
+  padding: 14px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+/* The heading anchors with a fill; the footer sits on the panel's own ground,
+   separated by the divider alone (band study, Revision 5). */
+.panel-heading {
+  background: color-mix(in srgb, var(--crust) 30%, var(--mantle));
+  border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  border-radius: calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px) 0 0;
+}
+.panel-footer {
+  border-top: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+}
+.panel-heading h2 { margin: 0; font-size: 18px; }
+
+/* A table filling the top of a panel: the header band respects the corners. */
+.panel > .table-neu:first-child th:first-child { border-top-left-radius: calc(var(--pane-radius) - 1px); }
+.panel > .table-neu:first-child th:last-child  { border-top-right-radius: calc(var(--pane-radius) - 1px); }
+/* …and the bottom mirror: a table (or ranked row) ending a panel keeps its
+   last filled band inside the rounded corners (hover fills live on the cells
+   so the radius can clip them; never overflow: hidden). */
+.panel > .table-neu:last-child tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--pane-radius) - 1px); }
+.panel > .table-neu:last-child tbody tr:last-child td:last-child  { border-bottom-right-radius: calc(var(--pane-radius) - 1px); }
+.panel > .ranked-row:last-child { border-radius: 0 0 calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px); }
+
+/* Well — an inset container for grouped controls or scrolling content.
+   Borderless: the inset depth defines the surface. */
+/* Carved from the parent surface — transparent ground, depth alone. Compose
+   cn-bg-well when an explicit darker fill is wanted. */
+.well {
+  border-radius: 13px;
+  background: transparent;
+  box-shadow: var(--neu-inset);
+}
+/* A scrolling well hints at its overflow: the bottom edge of the well
+   dissolves via a mask, so content visibly runs past the fold. */
+.well.scroll-well {
+  mask-image: linear-gradient(180deg, #000 calc(100% - 34px), transparent);
+}
+
+/* Terminal/log surface — the deepest well in the system. Borderless. */
+.terminal {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  background: var(--crust);
+  box-shadow: var(--neu-inset);
+}
+.terminal pre {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  color: var(--subtext-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 500 12px/1.65 var(--mono);
+  scrollbar-color: var(--surface-1) transparent;
+}
+.terminal .caret {
+  width: 6px; height: 14px;
+  display: inline-block;
+  margin-left: 3px;
+  vertical-align: -2px;
+  background: var(--accent);
+  animation: blink .75s steps(2) infinite;
+}
+
+/* Sticky top bar — translucent base, blurred, hairline + soft cast shadow. */
+.topbar {
+  min-height: 68px;
+  padding: 10px clamp(16px, 3vw, 42px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 24px;
+  background: color-mix(in srgb, var(--base) 91%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 45%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-cast),
+              inset 0 1px color-mix(in srgb, var(--surface-1) 30%, transparent);
+}
+
+/* Empty state */
+.empty-state {
+  min-height: 260px;
+  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px;
+  color: var(--overlay-1);
+  text-align: center;
+}
+.empty-state strong { color: var(--text); font-size: 15px; }
+.empty-state span { font-size: 12px; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────────
+   Compose: class="btn btn-primary". All labels sans; heights from the
+   density knobs.                                                            */
+
+.btn {
+  /* Neutral base so a variant-less .btn never shows UA button chrome. */
+  color: inherit;
+  border: 1px solid transparent;
+  background: transparent;
+  min-height: var(--control-h);
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border-radius: 10px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 780;
+  cursor: pointer;
+  transition: transform .16s, background .16s, border-color .16s, box-shadow .16s, color .16s;
+}
+.btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: var(--neu-inset-soft); }
+
+/* Primary — solid accent + hard offset (the flat graphic note, system-wide).
+   The offset is the one non-crust hard offset: mauve pressed into surface. */
+.btn-primary {
+  color: var(--crust);
+  border: 1px solid var(--mauve);
+  background: var(--mauve);
+  box-shadow: var(--hard-offset) var(--hard-offset) 0 color-mix(in srgb, var(--mauve) 25%, var(--surface-0)),
+              inset 1px 1px rgb(255 255 255 / .16);
+}
+.btn-primary:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  border-color: var(--pink);
+  background: var(--pink);
+}
+.btn-primary:active:not(:disabled) {
+  transform: translate(calc(var(--hard-offset) / 2), calc(var(--hard-offset) / 2));
+  box-shadow: calc(var(--hard-offset) / 2) calc(var(--hard-offset) / 2) 0 color-mix(in srgb, var(--mauve) 25%, var(--surface-0)),
+              inset 1px 1px rgb(255 255 255 / .16);
+}
+
+/* Secondary — hard offset in crust (the canon default for clickables).
+   Softening one requires an unlayered consumer override (e.g.
+   .btn-secondary.is-soft { box-shadow: var(--neu-raised-soft); } in consumer
+   CSS) — utility classes live in an earlier layer and cannot beat this rule. */
+.btn-secondary {
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--surface-2) 40%, transparent);
+  background: var(--base);
+  box-shadow: var(--hard-offset) var(--hard-offset) 0 var(--hard-offset-color);
+}
+.btn-secondary:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  border-color: color-mix(in srgb, var(--mauve) 50%, var(--surface-1));
+}
+.btn-secondary:active:not(:disabled) {
+  transform: translate(calc(var(--hard-offset) / 2), calc(var(--hard-offset) / 2));
+  box-shadow: calc(var(--hard-offset) / 2) calc(var(--hard-offset) / 2) 0 var(--hard-offset-color);
+}
+
+/* Ghost — chrome-free until hovered. */
+.btn-ghost {
+  color: var(--subtext-0);
+  border: 1px solid transparent;
+  background: transparent;
+}
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-0) 40%, transparent);
+}
+.btn-ghost:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--neu-inset-soft); }
+
+/* Flat toolbar button — flat at rest, engaged-in when pressed/toggled. */
+.btn-flat {
+  min-height: var(--control-h-sm);
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--subtext-0);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform .16s, background .16s, border-color .16s, box-shadow .16s, color .16s;
+}
+.btn-flat:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-0) 40%, transparent);
+}
+/* Engaged — borderless: the inset depth and mauve wash define the state. */
+.btn-flat[aria-pressed="true"], .btn-flat.active {
+  transform: translateY(1px);
+  color: var(--text);
+  background: color-mix(in srgb, var(--mauve) 7%, var(--base));
+  box-shadow: var(--neu-inset);
+}
+.btn-flat:disabled { opacity: .35; cursor: not-allowed; }
+
+/* Inline text button — mauve, sans, no chrome. */
+.btn-text {
+  color: var(--mauve);
+  border: 0;
+  border-radius: 8px; /* focus ring traces this — no sharp rectangles */
+  background: transparent;
+  font: 700 12px var(--sans);
+  cursor: pointer;
+  transition: color .16s, transform .16s;
+}
+.btn-text:hover:not(:disabled) { color: var(--pink); }
+.btn-text:active:not(:disabled) { transform: translateY(1px); }
+
+/* Icon button — flat until hovered, then tints toward its --tone. */
+.btn-icon {
+  width: var(--control-h-sm); height: var(--control-h-sm);
+  display: grid; place-items: center;
+  color: var(--overlay-1);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background .16s, border-color .16s, color .16s, transform .16s, box-shadow .16s;
+}
+.btn-icon:hover:not(:disabled) {
+  color: var(--tone);
+  border-color: color-mix(in srgb, var(--tone) 38%, transparent);
+  background: color-mix(in srgb, var(--tone) 9%, transparent);
+}
+.btn-icon:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--neu-inset-soft); }
+.btn-icon:disabled { opacity: .28; cursor: not-allowed; }
+
+/* Dashed button — the only dashed border in the system. An open, low-emphasis
+   slot of a control (drop zones, placeholder rows, optional extras). */
+.btn-dashed {
+  min-height: calc(var(--control-h) + 18px);
+  padding: 0 18px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--subtext-0);
+  border: 1px dashed var(--surface-1);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface-0) 16%, transparent);
+  font-family: var(--sans);
+  font-size: 13px; font-weight: 650;
+  cursor: pointer;
+  transition: background .16s, border-color .16s, color .16s, transform .16s, box-shadow .16s;
+}
+.btn-dashed:hover {
+  color: var(--mauve);
+  border-color: var(--mauve);
+  background: color-mix(in srgb, var(--mauve) 7%, transparent);
+}
+.btn-dashed:active { transform: translateY(1px); box-shadow: var(--neu-inset-soft); }
+
+/* ── Inputs ─────────────────────────────────────────────────────────────── */
+
+.field label {
+  display: block;
+  margin: 0 0 7px 1px;
+  color: var(--overlay-2);
+  font: 650 12px/1 var(--sans);
+  letter-spacing: .01em;
+}
+
+/* Borderless inset well, carved from whatever surface it sits on: the
+   background stays transparent so the parent ground shows through and only
+   the inner shadow defines the field. Sans face; numbers stay tabular. */
+.input,
+.field input, .field select, .field textarea {
+  width: 100%;
+  height: var(--input-h);
+  padding: 0 14px;
+  color: var(--text);
+  border: 0;
+  border-radius: 13px;
+  background: transparent;
+  box-shadow: var(--neu-inset);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  transition: box-shadow .18s;
+}
+.field textarea, textarea.input {
+  height: auto;
+  min-height: calc(var(--input-h) * 2);
+  padding: 12px 14px;
+  resize: vertical;
+}
+.input::placeholder,
+.field :is(input, textarea)::placeholder { color: var(--overlay-0); }
+/* Focus ring layers over the inset — no border swap; :focus-visible outline
+   stays untouched. */
+.input:focus,
+.field :is(input, select, textarea):focus {
+  box-shadow: var(--neu-inset), 0 0 0 2px var(--mauve);
+}
+/* The ring IS the focus indicator — the global :focus-visible outline would
+   double it (text fields match :focus-visible even on pointer focus). */
+.input:focus-visible,
+.field :is(input, select, textarea):focus-visible { outline: none; }
+/* Helper or message line inside a field. Tints with the state. */
+.field small {
+  display: block;
+  margin: 6px 1px 0;
+  color: var(--overlay-1);
+  font: 500 12px/1.4 var(--sans);
+}
+/* Validation: the state sets the tone, and a tone ring layers over the
+   inset, staying through focus. Set aria-invalid alongside .is-error. */
+.field.is-error, .input.is-error { --tone: var(--red); }
+.field.is-warning, .input.is-warning { --tone: var(--peach); }
+.field.is-error :is(input, select, textarea),
+.field.is-warning :is(input, select, textarea),
+.input.is-error,
+.input.is-warning {
+  box-shadow: var(--neu-inset), 0 0 0 2px var(--tone);
+}
+.field.is-error label, .field.is-warning label,
+.field.is-error small, .field.is-warning small { color: var(--tone); }
+
+/* Disabled fields flatten: the carve nearly fills in, text dims, no caret. */
+.input:disabled,
+.field :is(input, select, textarea):disabled {
+  color: var(--overlay-0);
+  opacity: .6;
+  box-shadow: var(--neu-inset-soft);
+  cursor: not-allowed;
+}
+/* Selects read as dropdowns: a chevron glyph (overlay-1, a palette hex — data
+   URIs can't reference custom properties) sits in the trailing padding. */
+.field select, select.input {
+  appearance: none;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237f849c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  background-size: 15px;
+  cursor: pointer;
+}
+
+/* Where the browser supports customizable selects (Chrome 135+), the OS
+   option list becomes a system popover. Elsewhere the native picker stays. */
+@supports (appearance: base-select) {
+  .field select, select.input,
+  .field select::picker(select), select.input::picker(select) {
+    appearance: base-select;
+  }
+  /* base-select renders the closed control as a flex button with
+     align-items: normal, which pins the label to the top of the well. */
+  .field select, select.input {
+    display: flex;
+    align-items: center;
+  }
+  .field select::picker-icon, select.input::picker-icon { display: none; }
+  .field select::picker(select), select.input::picker(select) {
+    margin-top: 6px;
+    padding: 6px;
+    border: 1px solid var(--surface-1);
+    border-radius: 13px;
+    background: var(--base);
+    box-shadow: var(--shadow-pop);
+    opacity: 1;
+    transition: opacity .16s ease, transform .16s ease, display .16s allow-discrete, overlay .16s allow-discrete;
+  }
+  .field select::picker(select):popover-open { opacity: 1; transform: none; }
+  @starting-style {
+    .field select::picker(select):popover-open,
+    select.input::picker(select):popover-open { opacity: 0; transform: translateY(-4px); }
+  }
+  .field select option, select.input option {
+    padding: 9px 11px;
+    border-radius: 8px;
+    color: var(--subtext-1);
+    background: transparent;
+    font: 500 13px var(--sans);
+  }
+  .field select option:hover, select.input option:hover,
+  .field select option:focus-visible, select.input option:focus-visible {
+    color: var(--text);
+    background: color-mix(in srgb, var(--mauve) 7%, var(--base));
+    outline: none;
+  }
+  .field select option:checked, select.input option:checked { color: var(--mauve); font-weight: 700; }
+  .field select option::checkmark, select.input option::checkmark { color: var(--mauve); }
+}
+
+/* Tooltip: a popover-styled bubble from a data-tip attribute. Use this, not
+   title=, which renders the OS tooltip. Shows on hover and keyboard focus. */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 90;
+  translate: -50%;
+  width: max-content;
+  max-width: 240px;
+  padding: 7px 10px;
+  color: var(--subtext-1);
+  border: 1px solid var(--surface-1);
+  border-radius: 8px;
+  background: var(--base);
+  box-shadow: var(--shadow-pop);
+  font: 500 12px/1.45 var(--sans);
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .16s ease, visibility .16s;
+}
+[data-tip]:hover::after, [data-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+
+/* Hero variant — the one oversized input on a page. */
+.input-lg {
+  height: 58px;
+  padding: 0 16px;
+  border-radius: 13px;
+  font-size: 15px;
+}
+
+/* Icon input — absolute leading icon inside a padded input. */
+.input-icon { position: relative; }
+.input-icon svg {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  width: 18px;
+  height: 18px;
+  color: var(--overlay-1);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.input-icon .input, .input-icon input { padding-left: 44px; }
+
+/* ── Segmented / preset control ─────────────────────────────────────────────
+   Options carry the hard offset at rest, half-slide when held, and press in
+   (engaged) when selected. Height tracks the density knob (46+12 = 58px).  */
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+.segmented > * {
+  min-height: calc(var(--control-h) + 12px);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--subtext-0);
+  border: 1px solid color-mix(in srgb, var(--surface-2) 36%, transparent);
+  border-radius: 10px;
+  background: var(--base);
+  box-shadow: var(--hard-offset) var(--hard-offset) 0 var(--hard-offset-color);
+  text-align: left;
+  cursor: pointer;
+  transition: transform .16s, background .16s, border-color .16s, box-shadow .16s, color .16s;
+}
+.segmented > *:hover {
+  transform: translate(-1px, -1px);
+  border-color: color-mix(in srgb, var(--mauve) 34%, var(--surface-1));
+}
+/* Held down — the half-slide. Transient only; the settled state never slides. */
+.segmented > *:active {
+  transform: translate(calc(var(--hard-offset) / 2), calc(var(--hard-offset) / 2));
+  box-shadow: calc(var(--hard-offset) / 2) calc(var(--hard-offset) / 2) 0 var(--hard-offset-color);
+}
+/* Selected — the engaged treatment: pressed in, mauve-keyed, borderless. */
+.segmented > .active,
+.segmented > .active:hover,
+.segmented > .active:active {
+  transform: translateY(1px);
+  color: var(--text);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mauve) 7%, var(--base));
+  box-shadow: var(--neu-inset);
+}
+.segmented b { font-family: var(--sans); font-size: 13px; font-weight: 750; }
+.segmented .active b { color: var(--mauve); }
+.segmented small { color: var(--overlay-2); font-size: 12px; }
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--mauve);
+  outline-offset: 3px;
+}
+
+/* Stacked variant — vertical option list with roomier rows. */
+.segmented.is-stacked { grid-auto-flow: row; gap: 12px; }
+.segmented.is-stacked > * { min-height: calc(var(--control-h) + 22px); padding: 12px 18px; }
+.segmented.is-stacked b { font-size: 17px; letter-spacing: -.02em; }
+.segmented.is-stacked small { font-size: 12px; }
+
+/* Stepper — phase track chips. Mark the current phase with .active (or
+   aria-current="step"), completed phases with .is-done. Borderless inset
+   pills; depth and tint carry the states.                                   */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.stepper > * {
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--overlay-1);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--crust) 38%, var(--mantle));
+  box-shadow: var(--neu-inset-soft);
+  font: 650 12px/1 var(--sans);
+}
+.stepper > .active,
+.stepper > [aria-current="step"] {
+  color: var(--mauve);
+  background: color-mix(in srgb, var(--mauve) 8%, transparent);
+}
+.stepper > .is-done { color: var(--green); }
+
+/* ── Marks, chips, banners ──────────────────────────────────────────────── */
+
+/* Solid accent square — step numbers, ranks, logo tile. Hard highlight edge. */
+.mark-solid {
+  width: 28px; height: 28px;
+  display: inline-grid; place-items: center;
+  flex: 0 0 auto;
+  color: var(--crust);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 8px;
+  background: var(--accent);
+  box-shadow: var(--shadow-mark);
+  font: 800 12px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Outlined pill — version tags, status, stat chips. */
+.chip {
+  padding: 7px 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--overlay-1);
+  border: 1px solid color-mix(in srgb, var(--surface-2) 42%, transparent);
+  border-radius: 999px;
+  background: var(--base);
+  box-shadow: var(--neu-raised-soft);
+  font: 600 12px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Tinted status tag — pass a semantic color via --tone (.cn-tone-*). The
+   tint keeps its hairline edge. */
+.chip-tone {
+  padding: 3px 5px;
+  display: inline-flex; align-items: center; gap: 5px;
+  color: var(--tone);
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
+  font: 650 12px/1 var(--sans);
+}
+
+/* Inline banner — semantic tint band, no card chrome. The tint keeps its
+   hairline edge. */
+.banner {
+  padding: 12px 18px;
+  display: flex; align-items: center; gap: 10px;
+  color: var(--tone);
+  border: 1px solid color-mix(in srgb, var(--tone) 25%, var(--surface-0));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tone) 7%, transparent);
+  box-shadow: var(--neu-inset-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── Selection controls ─────────────────────────────────────────────────── */
+
+/* Labeled choice row: <label class="choice"><input …>Text</label>. */
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--subtext-1);
+  font: 500 13px/1.4 var(--sans);
+  cursor: pointer;
+}
+.choice:has(:disabled) { opacity: .5; cursor: not-allowed; }
+
+/* Checkbox: an edged well that fills mauve when checked. At 20px the carve
+   alone is invisible, so small selection controls keep a hairline. */
+.checkbox {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--surface-2) 55%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: var(--neu-inset-soft);
+  cursor: pointer;
+  transition: background .16s, box-shadow .16s, border-color .16s;
+}
+.checkbox:hover:not(:disabled):not(:checked) { border-color: var(--surface-2); }
+.checkbox::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--crust);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 13 4 4 10-10'/%3E%3C/svg%3E") center / 13px no-repeat;
+  opacity: 0;
+  transform: scale(.6);
+  transition: opacity .16s, transform .16s;
+}
+.checkbox:checked {
+  border-color: var(--mauve);
+  background: var(--mauve);
+  box-shadow: var(--neu-inset-soft), inset 0 1px rgb(255 255 255 / .16);
+}
+.checkbox:checked::after { opacity: 1; transform: none; }
+
+/* Radio: same edged well, round, a mauve dot pressed into the center. */
+.radio {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--surface-2) 55%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: var(--neu-inset-soft);
+  cursor: pointer;
+  transition: box-shadow .16s, border-color .16s;
+}
+.radio:hover:not(:disabled):not(:checked) { border-color: var(--surface-2); }
+/* Deliberate asymmetry with the checkbox: the checkbox signals with its
+   mauve fill and stays on the soft inset; the radio only gets a dot, so it
+   leans on the full carve instead. */
+.radio:checked {
+  border-color: color-mix(in srgb, var(--mauve) 55%, var(--surface-1));
+  box-shadow: var(--neu-inset);
+}
+.radio::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--mauve);
+  /* Halo ring: the .live-dot composite (0 0 0 Npx currentColor-mix). */
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mauve) 13%, transparent);
+  opacity: 0;
+  transform: scale(.5);
+  transition: opacity .16s, transform .16s;
+}
+.radio:checked::after { opacity: 1; transform: none; }
+
+/* Switch: an abstract light switch. A carved wall plate holds a raised
+   rocker paddle; flipping slides the paddle across, flips its tilt, and
+   lights it mauve with a soft glow. */
+.switch {
+  appearance: none;
+  width: 50px;
+  height: 28px;
+  flex: 0 0 auto;
+  position: relative;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: var(--neu-inset);
+  cursor: pointer;
+  transition: box-shadow .2s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 21px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--surface-2) 42%, transparent);
+  border-radius: 6px;
+  background: var(--base);
+  box-shadow: var(--neu-raised-soft);
+  transform: perspective(120px) rotateY(16deg);
+  transition: translate .2s, transform .2s, background .2s, box-shadow .2s, border-color .2s;
+}
+.switch:checked::after {
+  translate: 23px 0;
+  border-color: var(--mauve);
+  background: var(--mauve);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--mauve) 18%, transparent),
+              inset 0 1px rgb(255 255 255 / .16);
+  transform: perspective(120px) rotateY(-16deg);
+}
+.switch:active:not(:disabled)::after { transform: perspective(120px) rotateY(0deg) scale(.96); }
+
+.checkbox:disabled, .radio:disabled, .switch:disabled { cursor: not-allowed; }
+
+/* ── Accordion — label + checkbox disclosure ────────────────────────────────
+   Native details cannot animate its close outside Chromium, so the fold
+   rides grid-template-rows 0fr → 1fr, which transitions everywhere. Markup:
+     <div class="accordion">
+       <label><input type="checkbox">Title</label>
+       <div class="fold"><div>…body…</div></div>
+     </div>
+   Use radios sharing a name for an exclusive-open group. Space toggles the
+   focused input; the whole label is the hit target.
+   The sink and the fold animate together, no sequencing. */
+.accordion {
+  border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  transition: box-shadow .2s, border-color .2s, border-radius .2s;
+}
+.accordion:has(> label > input:checked) {
+  border-radius: 10px;
+  border-bottom-color: transparent;
+  box-shadow: var(--neu-inset-soft);
+}
+.accordion > label {
+  min-height: 48px;
+  padding: 12px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--text);
+  font: 700 13px/1.3 var(--sans);
+  cursor: pointer;
+  transition: color .16s;
+}
+.accordion > label:hover { color: var(--mauve); }
+.accordion > label::after {
+  content: "";
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237f849c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'%3E%3C/path%3E%3C/svg%3E") center / contain no-repeat;
+  transition: transform .2s;
+}
+.accordion:has(> label > input:checked) > label::after { transform: rotate(180deg); }
+/* The input stays keyboard-reachable but visually silent; its focus ring
+   draws on the label. */
+.accordion > label > input {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.accordion > label:has(input:focus-visible) {
+  outline: 2px solid var(--mauve);
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+/* The fold: a grid row that opens from 0fr to 1fr. The inner wrapper must
+   be a single element with min-height 0 so the row can fully collapse. */
+.accordion .fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows .3s ease;
+}
+.accordion:has(> label > input:checked) .fold {
+  grid-template-rows: 1fr;
+}
+.accordion .fold > * {
+  min-height: 0;
+  overflow: clip;
+  padding: 0 12px;
+  /* Closed content leaves the tab order and the accessibility tree;
+     visibility flips at the end of the close, so the fold still animates. */
+  visibility: hidden;
+  transition: visibility .3s;
+}
+.accordion:has(> label > input:checked) .fold > * { visibility: visible; }
+/* Bottom spacing lives on the content's margin: padding would floor the
+   collapsed wrapper at its own height, margins clip away with the fold. */
+.accordion .fold > * > :last-child { margin-bottom: 16px; }
+
+/* Spinner — a 16px accent-keyed ring on the spin keyframe. */
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--surface-2) 45%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+/* ── Avatar — initials or an image on an accent-tinted round ────────────── */
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--surface-0));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 14%, var(--mantle));
+  box-shadow: var(--neu-raised-soft);
+  font: 700 12px/1 var(--sans);
+  letter-spacing: .02em;
+  user-select: none;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; }
+.avatar.is-lg { width: 44px; height: 44px; font-size: 14px; }
+/* Overlapping stack: later avatars ring themselves with the page ground. */
+.avatar-stack { display: inline-flex; }
+/* The ring matches the surface behind the stack; set --ring-ground when the
+   stack sits on a panel or mantle band. */
+.avatar-stack .avatar { box-shadow: var(--neu-raised-soft), 0 0 0 2px var(--ring-ground, var(--base)); }
+.avatar-stack .avatar + .avatar { margin-left: -8px; }
+
+/* ── Code block — a carved snippet well; mono is for code ───────────────── */
+
+.codeblock {
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: var(--neu-inset);
+  color: var(--subtext-1);
+  font: 500 12px/1.75 var(--mono);
+  font-variant-numeric: tabular-nums;
+  scrollbar-color: var(--surface-1) transparent;
+}
+.codeblock pre { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Copy control: a .btn-icon in the corner. Wire it with the one-line
+   listener documented on the code block page; copying is consumer JS. */
+.codeblock { position: relative; }
+.codeblock > .btn-icon {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+.codeblock:has(> .btn-icon) { padding-right: 44px; }
+
+/* Numbered lines: wrap each line in its own element (span or code) inside
+   the pre. CSS counters draw the gutter; no JS. */
+.codeblock.is-numbered pre { counter-reset: line; }
+.codeblock.is-numbered pre > * {
+  display: block;
+  padding-left: 34px;
+  position: relative;
+  counter-increment: line;
+}
+.codeblock.is-numbered pre > *::before {
+  content: counter(line);
+  position: absolute;
+  left: 0;
+  width: 22px;
+  color: var(--overlay-0);
+  text-align: right;
+  user-select: none;
+}
+
+/* Token colors. Tokenizing needs a build step or JS (shiki, prism); the
+   system only supplies the palette. Map your tokenizer's output to these. */
+.codeblock .tok-keyword { color: var(--blue); }
+.codeblock .tok-string  { color: var(--green); }
+.codeblock .tok-number  { color: var(--peach); }
+.codeblock .tok-fn      { color: var(--mauve); }
+.codeblock .tok-comment { color: var(--overlay-0); font-style: italic; }
+
+/* ── Accent cards keyed by --accent ─────────────────────────────────────── */
+
+.accent-card {
+  min-width: 0;
+  padding: 16px 16px 16px 22px;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--surface-0));
+  border-radius: 13px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, var(--mantle)), var(--mantle) 48%);
+  box-shadow: var(--neu-raised-soft),
+              inset 1px 1px color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  transition: transform .16s, box-shadow .16s, border-color .16s;
+}
+/* Left spine in the accent color — the identity cue. */
+.accent-card::before {
+  content: "";
+  position: absolute;
+  inset: 12px auto 12px 0;
+  width: 4px;
+  border-radius: 0 6px 6px 0;
+  background: var(--accent);
+}
+/* Cards wrapped in a link lift on hover, press in on click. The wrapper
+   takes the card's radius so its focus ring traces the card, not the
+   bare-link 4px. */
+a:has(> .accent-card) { border-radius: 13px; }
+a:hover > .accent-card {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--surface-0));
+  box-shadow: var(--neu-raised);
+}
+a:active > .accent-card {
+  transform: translateY(1px);
+  box-shadow: var(--neu-inset-soft);
+}
+
+/* ── Data display ───────────────────────────────────────────────────────── */
+
+/* Metric tile — small label above an oversized tabular number. */
+.metric { min-width: 0; padding: 12px 13px; display: flex; flex-direction: column; gap: 6px; }
+.metric span {
+  color: var(--overlay-1);
+  font: 650 12px var(--sans);
+}
+.metric strong { font: 650 21px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.metric.is-hero strong { font-size: 28px; color: var(--accent); }
+
+/* Label/value baseline row + a strip of them separated by hairlines. */
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--overlay-1);
+  font: 650 12px var(--sans);
+}
+.stat-row b {
+  color: var(--subtext-1);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.stat-strip { display: flex; flex-direction: column; }
+.stat-strip > * { padding: 9px 0; }
+.stat-strip > * + * { border-top: 1px solid color-mix(in srgb, var(--surface-1) 38%, transparent); }
+
+/* Progress — borderless inset track, accent-gradient fill. The fill inherits
+   the track radius, so no overflow clipping is needed. Re-key the fill per
+   instance via --progress-fill (any token color or token gradient):
+   <div class="progress-track" style="--progress-fill: var(--green)">.       */
+.progress-track {
+  height: 7px;
+  border-radius: 999px;
+  background: var(--crust);
+  box-shadow: var(--neu-inset-soft);
+}
+.progress-track span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--progress-fill, linear-gradient(90deg, var(--mauve), var(--pink), var(--peach)));
+  transition: width .35s;
+}
+
+/* Table — opt-in class on <table>; scopes all table styling. Sans tabular
+   body, mantle header, hover presses the row in. Give each data cell a
+   data-label attribute — it becomes the card label at ≤760px.              */
+.table-neu { width: 100%; border-collapse: collapse; }
+.table-neu th {
+  padding: 12px 14px;
+  color: var(--overlay-1);
+  border-bottom: 1px solid var(--surface-0);
+  background: color-mix(in srgb, var(--crust) 30%, var(--mantle));
+  text-align: left;
+  font: 650 12px var(--sans);
+}
+.table-neu td {
+  padding: 14px;
+  color: var(--subtext-1);
+  border-bottom: 1px solid var(--surface-0);
+  font: 600 13px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.table-neu tbody tr:last-child td { border-bottom: 0; }
+/* Hover fill sits on the cells, not the row — with border-collapse a td
+   border-radius cannot clip a tr background, so this keeps the fill inside
+   a rounded parent's corners. */
+.table-neu tbody tr:hover td {
+  background: color-mix(in srgb, var(--mauve) 5%, var(--base));
+  box-shadow: var(--neu-inset-soft);
+}
+/* Emphasized name cell — full-strength primary line, quiet secondary line. */
+.table-neu .cell-name strong { color: var(--text); font: 700 13px var(--sans); }
+.table-neu .cell-name small  { color: var(--overlay-2); font: 500 12px var(--sans); }
+
+/* Ranked row — ordered list line: rank mark, name, trailing value. */
+.ranked-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  color: var(--subtext-1);
+  border-bottom: 1px solid var(--surface-0);
+  font: 600 13px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.ranked-row:last-child { border-bottom: 0; }
+.ranked-row:hover {
+  background: color-mix(in srgb, var(--mauve) 5%, var(--base));
+  box-shadow: var(--neu-inset-soft);
+}
+.ranked-row strong { color: var(--text); font: 700 13px var(--sans); }
+.ranked-row b { margin-left: auto; color: var(--text); font-weight: 650; }
+
+/* ── Overlays — all float on --shadow-pop, never neu ────────────────────── */
+
+/* Popover / menu — anchored to a relative parent. No overflow clipping:
+   filled first/last children follow the parent radius instead. */
+.popover {
+  position: absolute;
+  z-index: 80;
+  width: min(390px, calc(100vw - 32px));
+  border: 1px solid var(--surface-1);
+  border-radius: 13px;
+  background: var(--base);
+  box-shadow: var(--shadow-pop);
+}
+/* Child bands follow the parent per R2: the 13px card radius minus the 1px
+   border — not a free 12px radius. */
+.popover > :first-child { border-top-left-radius: calc(13px - 1px); border-top-right-radius: calc(13px - 1px); }
+.popover > :last-child  { border-bottom-left-radius: calc(13px - 1px); border-bottom-right-radius: calc(13px - 1px); }
+
+/* Band layout inside popovers and drawers: the recipe owns the flex band;
+   compose cn-bg-head on headers for the fill. Popover footers are divider
+   only, per the footer rule. */
+.popover > header, .drawer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.drawer > header { min-height: 62px; padding: 14px 22px; gap: 16px; }
+.popover > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+}
+
+/* Modal — a child of .cn-scrim; centers itself in the viewport. */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: min(520px, calc(100vw - 32px));
+  height: fit-content;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  overflow: auto;
+  border: 1px solid var(--surface-1);
+  border-radius: var(--pane-radius);
+  background: var(--base);
+  box-shadow: var(--shadow-pop);
+}
+/* Recessed header band, like a panel heading — follows the parent radius. */
+.modal > header {
+  min-height: 62px;
+  padding: 14px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: color-mix(in srgb, var(--crust) 30%, var(--mantle));
+  border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  border-radius: calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px) 0 0;
+}
+/* Drawer — side sheet pinned to the right edge, above the scrim. Square
+   corners, so child bands need no radius treatment. */
+.drawer {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  z-index: 80;
+  width: min(420px, calc(100vw - 40px));
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  border-left: 1px solid var(--surface-1);
+  background: var(--base);
+  box-shadow: var(--shadow-pop);
+}
+
+/* Toast — shadcn-shaped. `.toast-stack` is the fixed viewport; toasts append
+   at its bottom. Each `.toast` is a row: a content column (`b` title over a
+   span/p description) plus trailing controls (.btn-text and/or .btn-icon).
+   Neutral surface-1 border — the toast carries no accent color. */
+.toast-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(380px, calc(100vw - 40px));
+}
+.toast-stack .toast { width: 100%; }
+/* Collapsed pile: only the newest visible toast stays in flow, so the stack
+   is exactly its size. Older visible toasts pin absolutely to that same box
+   (clipped, so taller content cannot poke out) and lift behind it, scaled.
+   Depth counts VISIBLE toasts only, so an exiting [hidden] toast never
+   shifts the pile. Hover or keyboard focus fans the column back out. */
+/* Exiting toasts leave the flow at once, fading in place over the stack
+   bottom, so the pile never reserves a ghost row during the exit. */
+.toast-stack .toast[hidden] {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  z-index: 1;
+}
+/* Fanned, the exiting toast instead stays in flow and collapses its row, so
+   the toasts above it ride down with the transition. The negative margin
+   swallows the flex gap its slot leaves behind. */
+.toast-stack:is(:hover, :focus-within) .toast[hidden] {
+  position: static;
+  max-height: 0;
+  margin-bottom: -10px;
+  padding-block: 0;
+  border-block-width: 0;
+  overflow: clip;
+}
+.toast-stack:not(:hover):not(:focus-within) .toast:not([hidden]):has(~ .toast:not([hidden])) {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  overflow: clip;
+  translate: 0 -12px;
+  scale: .96;
+  z-index: -1;
+}
+.toast-stack:not(:hover):not(:focus-within) .toast:not([hidden]):has(~ .toast:not([hidden]) ~ .toast:not([hidden])) {
+  translate: 0 -22px;
+  scale: .92;
+  z-index: -2;
+}
+.toast-stack:not(:hover):not(:focus-within) .toast:not([hidden]):has(~ .toast:not([hidden]) ~ .toast:not([hidden]) ~ .toast:not([hidden])) {
+  opacity: 0;
+  visibility: hidden;
+}
+.toast {
+  /* Caps nothing in practice; exists so the fanned exit can animate height. */
+  max-height: 140px;
+  max-width: 100%;
+  padding: 14px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--text);
+  border: 1px solid var(--surface-1);
+  border-radius: 13px;
+  background: var(--base);
+  box-shadow: var(--shadow-pop);
+  font: 500 12px/1.5 var(--sans);
+}
+/* The content column takes the slack, pinning trailing controls to the
+   toast's right edge regardless of text width. */
+.toast > :first-child { flex: 1; min-width: 0; }
+.toast b {
+  display: block;
+  color: var(--text);
+  font: 700 12.5px/1.4 var(--sans);
+}
+.toast span,
+.toast p {
+  margin: 0;
+  color: var(--subtext-0);
+  font: 500 12px/1.5 var(--sans);
+}
+
+/* ── Overlay motion ──────────────────────────────────────────────────────────
+   Overlays enter via @starting-style and exit via [hidden]. The exit does NOT
+   rely on display transitions (allow-discrete is too new to trust): [hidden]
+   keeps the element's display and drops `visibility` instead — visibility is
+   discretely transitionable everywhere, staying visible for the whole exit
+   and flipping only at the end. A hidden overlay is invisible, unfocusable,
+   and inert to pointers, same as display:none for a fixed element.
+   These rules must stay AFTER the component blocks so [hidden] wins. */
+
+.cn-scrim,
+.popover,
+.modal,
+.drawer,
+.toast {
+  transition: opacity .2s ease, transform .2s ease, visibility .2s;
+}
+.cn-scrim { transition: opacity .2s ease, backdrop-filter .2s ease, visibility .2s; }
+.popover { transition-duration: .16s; }
+.drawer  { transition-duration: .26s; }
+/* The toast travels on the `translate` property (transform stays free for
+   consumers); .26s to match the drawer's travel tier. */
+.toast   { transition: opacity .2s ease, translate .2s ease, scale .2s ease, visibility .25s, max-height .25s ease, margin .25s ease, padding .25s ease, border-width .25s ease; }
+
+/* Exit targets — mirrored as pre-entry states in @starting-style below. */
+.cn-scrim[hidden] { display: block; visibility: hidden; opacity: 0; backdrop-filter: blur(0); pointer-events: none; }
+.popover[hidden]  { display: block; visibility: hidden; opacity: 0; transform: translateY(-4px); pointer-events: none; }
+.modal[hidden]    { display: block; visibility: hidden; opacity: 0; transform: translateY(8px) scale(.98); pointer-events: none; }
+.drawer[hidden]   { display: flex; visibility: hidden; transform: translateX(calc(100% + 40px)); pointer-events: none; }
+.toast[hidden]    { display: flex; visibility: hidden; opacity: 0; translate: 0 6px; pointer-events: none; }
+/* A modal or drawer inside a scrim rides the scrim's exit. */
+.cn-scrim[hidden] .modal  { visibility: hidden; opacity: 0; transform: translateY(8px) scale(.98); }
+.cn-scrim[hidden] .drawer { visibility: hidden; transform: translateX(calc(100% + 40px)); }
+
+@starting-style {
+  .cn-scrim:not([hidden]) { opacity: 0; backdrop-filter: blur(0); }
+  .popover:not([hidden])  { opacity: 0; transform: translateY(-4px); }
+  .modal:not([hidden])    { opacity: 0; transform: translateY(8px) scale(.98); }
+  .cn-scrim:not([hidden]) .modal  { opacity: 0; transform: translateY(8px) scale(.98); }
+  .drawer:not([hidden])   { transform: translateX(calc(100% + 40px)); }
+  .cn-scrim:not([hidden]) .drawer { transform: translateX(calc(100% + 40px)); }
+  .toast:not([hidden])    { opacity: 0; translate: 0 6px; }
+}
+
+/* ── Page furniture ─────────────────────────────────────────────────────────
+   Recipes never style bare element selectors (the tokens reset aside).
+   The main-column pattern, applied by the consumer:
+     main { width: min(1440px, calc(100% - 40px)); min-width: 0;
+            margin: 0 auto; position: relative; z-index: 1; }               */
+
+/* Aliases of the type roles, kept for base-layer compatibility. */
+.eyebrow {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 13px;
+  color: var(--mauve);
+  font: 700 12px/1 var(--sans);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.display-title {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: clamp(36px, 4.6vw, 56px);
+  line-height: .98;
+  letter-spacing: -.055em;
+  font-weight: 820;
+}
+.display-title em { color: var(--mauve); font-style: normal; }
+.lede { max-width: 690px; margin: 20px 0; color: var(--subtext-1); font-family: var(--sans); font-size: 16px; line-height: 1.65; }
+
+.footer-neu {
+  width: min(1440px, calc(100% - 40px));
+  min-height: 72px;
+  margin: 0 auto;
+  padding: 12px 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  color: var(--overlay-1);
+  border-top: 1px solid var(--surface-0);
+}
+.footer-neu span { font: 700 12px var(--sans); }
+.footer-neu p { margin: 0; font: 500 12px var(--sans); }
+
+/* ── Responsive ─────────────────────────────────────────────────────────────
+   Three breakpoints, always these three. Each one removes decoration before
+   it removes content.                                                       */
+
+/* 1060 — drop ornament: the tilted card flattens, secondary nav hides. */
+@media (max-width: 1060px) {
+  .topbar { grid-template-columns: 1fr auto; }
+  .topbar .nav-secondary { display: none; }
+  .panel.is-tilted {
+    transform: none;
+    box-shadow: var(--neu-raised);
+  }
+}
+
+/* 760 — tablet/phone: tighter chrome, icon-only chips, tables become cards. */
+@media (max-width: 760px) {
+  .topbar { min-height: 60px; padding: 9px 13px; }
+  .footer-neu { width: min(100% - 24px, 1440px); }
+
+  /* Icon-only collapse, glyph chips only: kill the label with font-size 0,
+     keep the glyph. Text-only chips keep their label. Keep an accessible
+     name on the control. */
+  .chip:has(svg) { padding: 7px; font-size: 0; }
+  .chip svg { width: 16px; height: 16px; }
+
+  .display-title { font-size: 38px; }
+  .lede { font-size: 14px; }
+  .panel-footer { flex-direction: column; align-items: stretch; }
+  .panel-footer .btn-primary { width: 100%; }
+
+  /* Full-bleed on phones: the outermost panel sheds its chrome so content
+     runs edge to edge instead of sitting in a shrunken card. */
+  .panel.is-shell { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+
+  /* Table → stacked cards. Header row drops; each td[data-label] carries its
+     own micro-label via ::before. */
+  .table-neu thead { display: none; }
+  .table-neu tbody, .table-neu tr, .table-neu td { display: block; }
+  .table-neu tbody { padding: 9px; }
+  .table-neu tbody tr {
+    margin-bottom: 9px;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    border: 1px solid var(--surface-0);
+    border-radius: 10px;
+    background: var(--mantle);
+  }
+  .table-neu td { min-width: 0; padding: 0; border: 0; }
+  .table-neu td[data-label] { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .table-neu td[data-label]::before {
+    content: attr(data-label);
+    color: var(--overlay-1);
+    font: 650 12px var(--sans);
+  }
+}
+
+/* 520 — small phone: display type shrinks again, horizontal rows stack,
+   oversized numerals step down. */
+@media (max-width: 520px) {
+  .display-title { font-size: 34px; }
+  .segmented { grid-auto-flow: row; }
+  .metric { padding-inline: 10px; }
+  .metric strong { font-size: 18px; }
+  .metric.is-hero strong { font-size: 22px; }
+  .footer-neu p { display: none; }
+}

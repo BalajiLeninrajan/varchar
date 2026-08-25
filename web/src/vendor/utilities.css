@@ -1,0 +1,226 @@
+/* ── Utilities ──────────────────────────────────────────────────────────────
+   Single-purpose classes, blessed values only — no utility takes a numeric
+   parameter. Compose them; when a combination recurs, promote it to a recipe.
+   Requires tokens.css. Layer: cn.utilities.                                 */
+
+/* ── Depth ──────────────────────────────────────────────────────────────── */
+
+.cn-raised      { box-shadow: var(--neu-raised); }
+.cn-raised-soft { box-shadow: var(--neu-raised-soft); }
+.cn-inset       { box-shadow: var(--neu-inset); }
+.cn-inset-soft  { box-shadow: var(--neu-inset-soft); }
+/* Floats above the surface — overlays only, never neu. */
+.cn-pop         { box-shadow: var(--shadow-pop); }
+/* Topbar cast plus its lit hairline. */
+.cn-cast        { box-shadow: var(--shadow-cast), inset 0 1px color-mix(in srgb, var(--surface-1) 30%, transparent); }
+/* Solid-mark mini-drop. */
+.cn-mark-drop   { box-shadow: var(--shadow-mark); }
+/* The hard offset — the flat graphic note. Any clickable control may take it. */
+.cn-hard        { box-shadow: var(--hard-offset) var(--hard-offset) 0 var(--hard-offset-color); }
+.cn-hard-lg     { box-shadow: 10px 10px 0 var(--hard-offset-color); }  /* tilted hero card */
+.cn-hard-sm     { box-shadow: 3px 3px 0 var(--hard-offset-color); }    /* fixed small offset */
+.cn-flat        { box-shadow: none; }
+
+/* ── Interaction ────────────────────────────────────────────────────────── */
+
+.cn-pressable,
+.cn-pressable-slide {
+  transition: transform .16s, background .16s, border-color .16s, box-shadow .16s;
+}
+
+/* The soft-control press: lift on hover, sink to an inset when held. */
+.cn-pressable:hover:not(:disabled)  { transform: translateY(-1px); }
+.cn-pressable:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--neu-inset-soft); }
+
+/* The canonical half-slide — legal only combined with .cn-hard. The control
+   slides halfway onto its own offset shadow, which shrinks to meet it. */
+.cn-pressable-slide:hover:not(:disabled)  { transform: translate(-1px, -1px); }
+.cn-pressable-slide:active:not(:disabled) { transform: translate(calc(var(--hard-offset) / 2), calc(var(--hard-offset) / 2)); box-shadow: calc(var(--hard-offset) / 2) calc(var(--hard-offset) / 2) 0 var(--hard-offset-color); }
+
+/* (.cn-engaged — the selected/toggled state — is declared after the border
+   utilities so its border-color beats a composed .cn-edge-*.)              */
+
+/* ── Type roles ─────────────────────────────────────────────────────────────
+   No bare font-family utility exists: pick the role, not the face.
+   Sans is the default voice: every shipped role is sans except .cn-code.
+   Mono is not forbidden elsewhere — in the rare right circumstance any text
+   may take it (a consumer-layer call, not a shipped default). Numbers keep
+   tabular-nums on the sans face. Uppercase is scarce — only the eyebrow and
+   the microlabel shout; everything else is sentence case.                   */
+
+.cn-label {
+  font: 650 12px/1 var(--sans);
+  letter-spacing: .01em;
+  color: var(--overlay-2);
+}
+.cn-microlabel {
+  /* The one exception to the 12px floor: the smallest voice in the system.
+     One of the two uppercase voices — caps buy legibility at 10px. */
+  font: 700 10px/1 var(--sans);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--overlay-1);
+}
+.cn-value {
+  font: 650 21px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.cn-value-lg {
+  font: 650 28px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);  /* opt out via a color utility */
+}
+.cn-meta {
+  font: 550 12px/1.5 var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--overlay-1);
+}
+.cn-eyebrow {
+  /* The other uppercase voice — one per page, announcing a section. */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 700 12px/1 var(--sans);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--mauve);
+}
+/* Inline code voice — code, CLI strings, machine literals. */
+.cn-code {
+  font: 500 13px/1.6 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.cn-display {
+  font-family: var(--sans);
+  font-size: clamp(32px, 4vw, 46px);
+  line-height: .98;
+  letter-spacing: -.055em;
+  font-weight: 820;
+  text-wrap: balance;
+}
+.cn-display-sm {
+  font-family: var(--sans);
+  font-size: clamp(26px, 3.4vw, 36px);
+  line-height: .98;
+  letter-spacing: -.045em;
+  font-weight: 820;
+  text-wrap: balance;
+}
+.cn-display em, .cn-display-sm em { color: var(--mauve); font-style: normal; }
+.cn-title { font-family: var(--sans); font-size: 20px; font-weight: 800; letter-spacing: -.03em; }
+/* Emphasized proper names — full-strength text color at body scale. */
+.cn-name { font: 700 13px/1.3 var(--sans); color: var(--text); }
+.cn-lede { font-family: var(--sans); font-size: 16px; line-height: 1.65; color: var(--subtext-1); max-width: 690px; }
+.cn-copy { font-family: var(--sans); font-size: 14px; line-height: 1.6; color: var(--subtext-0); }
+
+/* ── Color ──────────────────────────────────────────────────────────────── */
+
+/* Text ramp + palette */
+.cn-text-text      { color: var(--text); }
+.cn-text-subtext-1 { color: var(--subtext-1); }
+.cn-text-subtext-0 { color: var(--subtext-0); }
+.cn-text-overlay-2 { color: var(--overlay-2); }
+.cn-text-overlay-1 { color: var(--overlay-1); }
+.cn-text-overlay-0 { color: var(--overlay-0); }
+.cn-text-mauve     { color: var(--mauve); }
+.cn-text-pink      { color: var(--pink); }
+.cn-text-red       { color: var(--red); }
+.cn-text-green     { color: var(--green); }
+.cn-text-peach     { color: var(--peach); }
+.cn-text-yellow    { color: var(--yellow); }
+.cn-text-blue      { color: var(--blue); }
+.cn-text-teal      { color: var(--teal); }
+.cn-text-lavender  { color: var(--lavender); }
+.cn-text-accent    { color: var(--accent); }
+.cn-text-tone      { color: var(--tone); }
+
+/* Backgrounds */
+.cn-bg-base   { background: var(--base); }
+.cn-bg-mantle { background: var(--mantle); }
+.cn-bg-crust  { background: var(--crust); }
+.cn-bg-well   { background: color-mix(in srgb, var(--crust) 38%, var(--mantle)); }
+.cn-bg-head   { background: color-mix(in srgb, var(--crust) 30%, var(--mantle)); }
+.cn-tint      { background: color-mix(in srgb, var(--tone) 7%, transparent); }
+.cn-tint-accent {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, var(--mantle)), var(--mantle) 48%);
+}
+
+/* Tone setters — set --tone only; pair with .cn-tint / .cn-text-tone / recipes. */
+.cn-tone-red    { --tone: var(--red); }
+.cn-tone-green  { --tone: var(--green); }
+.cn-tone-peach  { --tone: var(--peach); }
+.cn-tone-yellow { --tone: var(--yellow); }
+.cn-tone-blue   { --tone: var(--blue); }
+.cn-tone-mauve  { --tone: var(--mauve); }
+
+/* ── Borders ──────────────────────────────────────────────────────────────
+   Hairlines belong to raised surfaces and tinted semantic surfaces.
+   Inset surfaces are defined by depth alone.                                */
+
+.cn-edge        { border: 1px solid color-mix(in srgb, var(--surface-2) 40%, transparent); }
+.cn-edge-soft   { border: 1px solid color-mix(in srgb, var(--surface-1) 38%, transparent); }  /* inner separators */
+.cn-edge-line   { border: 1px solid var(--surface-0); }  /* row separators, footer rules */
+.cn-edge-mauve  { border: 1px solid color-mix(in srgb, var(--mauve) 30%, transparent); }
+.cn-edge-tone   { border: 1px solid color-mix(in srgb, var(--tone) 25%, var(--surface-0)); }
+.cn-edge-accent { border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--surface-0)); }
+.cn-edge-dashed { border: 1px dashed var(--surface-1); }  /* the only dashed border */
+
+/* The selected/toggled state — pressed in, mauve-keyed, borderless: the inset
+   depth and tint define it. Declared after the edge utilities so the cleared
+   border-color wins over a composed base edge. */
+.cn-engaged {
+  transform: translateY(1px);
+  box-shadow: var(--neu-inset);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--mauve) 7%, var(--base));
+}
+
+/* ── Radii — role-named; no numeric escape hatch ────────────────────────── */
+
+.cn-r-panel   { border-radius: var(--pane-radius); }
+.cn-r-card    { border-radius: 13px; }
+.cn-r-control { border-radius: 10px; }
+.cn-r-mark    { border-radius: 8px; }
+.cn-r-chip    { border-radius: 4px; }
+.cn-r-pill    { border-radius: 999px; }
+.cn-r-round   { border-radius: 50%; }
+
+/* ── Structure ──────────────────────────────────────────────────────────── */
+
+/* Left color spine — the accent identity cue. */
+.cn-spine { position: relative; }
+.cn-spine::before {
+  content: "";
+  position: absolute;
+  inset: 12px auto 12px 0;
+  width: 4px;
+  border-radius: 0 6px 6px 0;
+  background: var(--accent);
+}
+
+/* Fixed overlay backdrop for modals/drawers. */
+.cn-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: color-mix(in srgb, var(--crust) 74%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+/* Screen-reader only — clipped, not hidden. */
+.cn-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cn-hidden { display: none !important; }
+
+/* (.scroll-well, .app-shell, .page-enter, .live-dot live in tokens.css.) */
