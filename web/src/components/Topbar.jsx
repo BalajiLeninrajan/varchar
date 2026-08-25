@@ -24,8 +24,8 @@ export function Topbar({
   onOpenAbout,
 }) {
   return (
-    <header class="topbar">
-      <div class="topbar-start">
+    <header class="appbar">
+      <div class="appbar-start">
         <span class="mark-solid">
           <Icon id="mark" size={13} />
         </span>
@@ -33,15 +33,15 @@ export function Topbar({
           var<em>char</em>
         </span>
       </div>
-      <div class="topbar-end">
+      <div class="appbar-end">
         <Chip title="Length of the encoded string in bytes">
-          <b>{stats.bytes.toLocaleString()}</b>&nbsp;B
+          <b>{stats.bytes.toLocaleString()}</b>B
         </Chip>
         <Chip title="~S records in the string">
-          <b>{stats.tables}</b>&nbsp;tbl
+          <b>{stats.tables}</b>tbl
         </Chip>
         <Chip title="~R records in the string">
-          <b>{stats.rows}</b>&nbsp;rows
+          <b>{stats.rows}</b>rows
         </Chip>
         <button class="btn-flat" onClick={onOpenPresets}>
           examples
@@ -53,7 +53,7 @@ export function Topbar({
           import
         </button>
         <button
-          class={`btn-flat${logOpen ? " is-on" : ""}`}
+          class={`btn-flat${logOpen ? " active" : ""}`}
           aria-expanded={String(logOpen)}
           onClick={onToggleLog}
         >

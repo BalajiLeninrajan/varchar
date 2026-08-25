@@ -10,7 +10,7 @@ export function Icon({ id, size = 12 }) {
 
 export function Pane({ className = "", children, ...rest }) {
   return (
-    <section class={`pane ${className}`.trim()} {...rest}>
+    <section class={`pane panel ${className}`.trim()} {...rest}>
       {children}
     </section>
   );
@@ -18,19 +18,28 @@ export function Pane({ className = "", children, ...rest }) {
 
 export function PaneHead({ title, id, children }) {
   return (
-    <div class="pane-head">
-      <h2 id={id}>{title}</h2>
+    <div class="pane-head cn-bg-head">
+      <h2 id={id} class="cn-microlabel">
+        {title}
+      </h2>
       <div class="head-chips">{children}</div>
     </div>
   );
 }
 
+// Prose with SQL in it: backticks in the source string mark the code spans, so
+// the mono face lands on the keywords and not the sentence around them.
+export function Marked({ text }) {
+  return text
+    .split("`")
+    .map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+}
+
 export function Chip({ tone, title, children }) {
-  const style = tone
-    ? { color: `var(--${tone})`, borderColor: `color-mix(in srgb, var(--${tone}) 45%, transparent)` }
-    : undefined;
+  // Tint rides the package --tone contract prop via the cn-tone-* setters.
+  const className = tone ? `chip is-toned cn-tone-${tone}` : "chip";
   return (
-    <span class="chip" style={style} title={title}>
+    <span class={className} title={title}>
       {children}
     </span>
   );
@@ -38,7 +47,7 @@ export function Chip({ tone, title, children }) {
 
 export function Banner({ tone = "peach", children }) {
   return (
-    <div class="banner" style={{ "--tone": `var(--${tone})` }}>
+    <div class={`banner cn-tone-${tone}`}>
       {children}
     </div>
   );
@@ -107,9 +116,9 @@ export function CopyCommand({ command }) {
         }
       }}
     >
-      <span class="prompt">$</span>
-      <code>{command}</code>
-      <span class="copy-mark">{copied ? "copied" : <Icon id="copy" size={11} />}</span>
+      <span class="prompt cn-code">$</span>
+      <code class="cn-code">{command}</code>
+      <span class="copy-mark cn-microlabel">{copied ? "copied" : <Icon id="copy" size={11} />}</span>
     </button>
   );
 }

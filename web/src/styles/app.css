@@ -1,11 +1,13 @@
-/* ── varchar playground ─────────────────────────────────────────────────────
-   Catppuccin Mocha + neumorphic depth, run at instrument density: the page is
-   one screen of panes, like a tmux session, not a scrolling document.
-   Requires tokens.css.                                                      */
+/* ── varchar playground — app layer ─────────────────────────────────────────
+   Sits unlayered on top of the catppuccin-neu package (cn.tokens /
+   cn.utilities / cn.recipes), so every rule here wins without !important.
+   Only genuinely app-specific styling lives here: the one-screen pane grid,
+   the native <dialog> machinery, and the string-dock / syntax-highlight
+   colors. Tokens, utilities and recipes come from the package.
+   The app runs at [data-density="compact"] (set on <html>).                 */
 
 :root {
   --gap: 8px;
-  --pane-radius: 12px;
 }
 
 html, body { height: 100%; }
@@ -13,7 +15,9 @@ body { overflow: hidden; }
 /* Class-level display would otherwise beat the UA rules for these two. */
 [hidden] { display: none !important; }
 dialog:not([open]) { display: none; }
-code { font: 650 .92em var(--mono); color: var(--teal); }
+/* Inline code in prose — the semantic code element is a code context. The
+   size floors at 12px so code inside 12-13px prose never dips below it. */
+code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--teal); }
 
 .app-shell {
   height: 100dvh;
@@ -23,20 +27,20 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
   padding: var(--gap);
 }
 
-/* ── Panes ──────────────────────────────────────────────────────────────── */
+/* ── Panes — the package .panel run as instrument chrome ────────────────── */
 
+/* Markup composes "pane panel": the panel recipe paints the surface, this
+   class only turns it into a flex column that clips its own scrolling. */
 .pane {
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--surface-2) 40%, transparent);
-  border-radius: var(--pane-radius);
-  background: var(--base);
-  box-shadow: var(--neu-raised), inset 1px 1px color-mix(in srgb, var(--surface-2) 30%, transparent);
 }
 
+/* Recessed heading band (fill composed via cn-bg-head in markup; the title
+   is a cn-microlabel). Densities here are the app's instrument scale. */
 .pane-head {
   min-height: 30px;
   padding: 4px 8px;
@@ -45,28 +49,25 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  background: color-mix(in srgb, var(--crust) 30%, var(--mantle));
   border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
+  /* Band corner rule: the filled first child of a rounded surface takes
+     calc(parent - 1px) on its outer corners. */
+  border-radius: calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px) 0 0;
 }
-.pane-head h2 {
-  margin: 0;
-  color: var(--overlay-2);
-  font: 750 10px/1 var(--mono);
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
+.pane-head h2 { margin: 0; color: var(--overlay-2); white-space: nowrap; }
 .head-chips { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
-.hint { color: var(--overlay-0); font: 600 9px var(--mono); letter-spacing: .05em; }
-.note { color: var(--overlay-1); font: 500 10px/1.5 var(--mono); }
 
 .pane-body { min-height: 0; flex: 1 1 auto; padding: 9px; overflow: auto; }
 .pane-body.is-flush { padding: 0; }
-.scroll-well { scrollbar-color: var(--surface-2) transparent; }
 
-/* ── Top bar ────────────────────────────────────────────────────────────── */
+/* Terminal surfaces embedded in panes sit flush: the pane's own radius and
+   clipping do the shaping, the terminal keeps its crust fill and mono pre. */
+.pane-body.terminal { border-radius: 0; }
+.log-pane .terminal { box-shadow: none; }
 
-.topbar {
+/* ── App bar — a compact strip, not the package's sticky page topbar ────── */
+
+.appbar {
   min-height: 34px;
   padding: 3px 4px 3px 8px;
   display: flex;
@@ -78,107 +79,19 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
   background: color-mix(in srgb, var(--crust) 40%, var(--mantle));
   box-shadow: var(--neu-raised-soft), inset 0 1px color-mix(in srgb, var(--surface-1) 30%, transparent);
 }
-.topbar-start { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.topbar-end { min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.wordmark { color: var(--text); font: 800 13px/1 var(--mono); letter-spacing: -.02em; }
+.appbar-start { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.appbar-end { min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.appbar .mark-solid { width: 20px; height: 20px; }
+.wordmark { color: var(--text); font: 800 14px/1 var(--sans); letter-spacing: -.02em; }
 .wordmark em { color: var(--mauve); font-style: normal; }
-.tagline { color: var(--overlay-0); font: 600 9px/1 var(--mono); letter-spacing: .07em; }
 
-/* ── Controls ───────────────────────────────────────────────────────────── */
+/* ── Controls — package buttons, with the app's few extras ──────────────── */
 
-.btn-primary, .btn-secondary {
-  min-height: 28px;
-  padding: 0 11px;
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  border-radius: 8px;
-  font: 750 11px/1 var(--mono);
-  letter-spacing: .03em;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: transform .16s, background .16s, border-color .16s, box-shadow .16s, color .16s;
-}
-.btn-primary {
-  color: var(--crust);
-  border: 1px solid var(--mauve);
-  background: var(--mauve);
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--mauve) 25%, var(--surface-0)),
-              inset 1px 1px rgb(255 255 255 / .16);
-}
-.btn-primary:hover:not(:disabled) { transform: translate(-1px, -1px); border-color: var(--pink); background: var(--pink); }
-.btn-primary:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--neu-inset); }
-.btn-primary:disabled { opacity: .35; cursor: not-allowed; box-shadow: var(--neu-inset-soft); }
-
-.btn-secondary {
-  color: var(--subtext-1);
-  border: 1px solid color-mix(in srgb, var(--surface-2) 42%, transparent);
-  background: var(--base);
-  box-shadow: var(--neu-raised-soft);
-  text-decoration: none;
-}
-.btn-secondary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--mauve) 50%, var(--surface-1));
-}
-.btn-secondary:active:not(:disabled) { transform: translateY(1px); box-shadow: var(--neu-inset-soft); }
-.btn-secondary.is-danger:hover:not(:disabled) { color: var(--red); border-color: color-mix(in srgb, var(--red) 50%, var(--surface-1)); }
-
-/* Ghost — reads as a button, but deliberately quieter than anything raised:
-   an outline only, no depth, so it never competes with the primary. */
-.btn-ghost {
-  min-height: 25px;
-  padding: 0 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--overlay-2);
-  border: 1px solid color-mix(in srgb, var(--surface-2) 50%, transparent);
-  border-radius: 8px;
-  background: transparent;
-  font: 700 11px/1 var(--mono);
-  letter-spacing: .03em;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color .16s, border-color .16s, background .16s;
-}
-.btn-ghost:hover {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--mauve) 45%, var(--surface-1));
-  background: color-mix(in srgb, var(--mauve) 6%, transparent);
-}
-.btn-ghost:active { box-shadow: var(--neu-inset-soft); }
-
-/* Flat chrome button — the dense chrome in the bars, no card of its own. */
-.btn-flat {
-  min-height: 24px;
-  padding: 0 7px;
-  display: inline-flex; align-items: center; gap: 5px;
-  color: var(--overlay-1);
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  font: 700 10px/1 var(--mono);
-  letter-spacing: .05em;
-  cursor: pointer;
-  text-decoration: none;
-  transition: color .16s, border-color .16s, background .16s;
-}
-.btn-flat:hover {
-  color: var(--mauve);
-  border-color: color-mix(in srgb, var(--mauve) 34%, transparent);
-  background: color-mix(in srgb, var(--mauve) 8%, transparent);
-}
-.btn-flat.is-on {
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--mauve) 50%, var(--surface-1));
-  background: color-mix(in srgb, var(--mauve) 9%, var(--base));
-  box-shadow: var(--neu-inset-soft);
-}
-.btn-flat.is-danger:hover {
+.btn-flat.is-danger:hover:not(:disabled) {
   color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 34%, transparent);
   background: color-mix(in srgb, var(--red) 8%, transparent);
 }
+.btn-flat[aria-expanded="false"] svg { transform: rotate(180deg); }
 
 /* Hairline grouping the dock's actions without boxing them in. */
 .head-rule {
@@ -188,72 +101,22 @@ code { font: 650 .92em var(--mono); color: var(--teal); }
   margin: 0 3px;
   background: color-mix(in srgb, var(--surface-2) 55%, transparent);
 }
-.btn-flat[aria-expanded="false"] svg { transform: rotate(180deg); }
 
 .button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .button-row.is-end { justify-content: flex-end; }
-.button-row.is-split { justify-content: space-between; align-items: center; }
 
-.chip {
-  padding: 4px 7px;
-  display: inline-flex; align-items: center; gap: 5px;
-  color: var(--overlay-1);
-  border: 1px solid color-mix(in srgb, var(--surface-2) 42%, transparent);
-  border-radius: 999px;
-  background: var(--base);
-  box-shadow: var(--neu-raised-soft);
-  font: 600 10px/1 var(--mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
 .chip b { color: var(--text); font-weight: 750; }
+/* Stat pills in the app bar are numeric readouts, not labels: compact, and
+   mono so the digits keep a fixed width as the counts change. */
+.appbar-end .chip { padding: 3px 8px; gap: 4px; font: 600 11px/1 var(--mono); }
+.appbar-end .chip b { font-weight: 700; }
+/* Toned status chips keep the pill recipe but take their tint through the
+   --tone contract prop (set via the package cn-tone-* setters in markup). */
+.chip.is-toned { color: var(--tone); border-color: color-mix(in srgb, var(--tone) 45%, transparent); }
 
-.well {
-  border: 1px solid color-mix(in srgb, var(--surface-1) 38%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--crust) 38%, var(--mantle));
-  box-shadow: var(--neu-inset-soft);
-}
-
-.field label { display: block; margin: 0 0 5px 1px; color: var(--overlay-2); font: 650 10px/1 var(--mono); letter-spacing: .06em; }
-textarea {
-  width: 100%;
-  padding: 9px 10px;
-  color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--surface-1) 42%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--crust) 62%, var(--mantle));
-  box-shadow: var(--neu-inset);
-  font: 500 12px/1.6 var(--mono);
-  resize: none;
-  tab-size: 2;
-  transition: border-color .18s, box-shadow .18s;
-}
-textarea:hover { border-color: var(--surface-2); }
-textarea:focus { box-shadow: var(--neu-inset), 0 0 0 2px color-mix(in srgb, var(--mauve) 20%, transparent); }
-
-.mark-solid {
-  width: 20px; height: 20px;
-  display: inline-grid; place-items: center;
-  flex: 0 0 auto;
-  color: var(--crust);
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-  border-radius: 6px;
-  background: var(--accent, var(--mauve));
-  box-shadow: 2px 2px 5px var(--neu-dark-soft), inset 0 1px rgb(255 255 255 / .1);
-  font: 800 10px/1 var(--mono);
-}
-
-.banner {
-  padding: 8px 10px;
-  display: flex; align-items: flex-start; gap: 8px;
-  color: var(--tone, var(--peach));
-  border: 1px solid color-mix(in srgb, var(--tone, var(--peach)) 25%, var(--surface-0));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--tone, var(--peach)) 7%, transparent);
-  box-shadow: var(--neu-inset-soft);
-  font: 600 11px/1.5 var(--mono);
-}
+/* Code-entry fields: SQL and encoded-string input is code, so the carved
+   package input keeps the mono face here. */
+textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2; }
 
 /* ── Workbench ──────────────────────────────────────────────────────────── */
 
@@ -267,28 +130,35 @@ textarea:focus { box-shadow: var(--neu-inset), 0 0 0 2px color-mix(in srgb, var(
 }
 .console-pane { grid-column: 1; grid-row: 1; }
 .console-body { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.console-body textarea { flex: 1 1 auto; min-height: 60px; }
+.console-body textarea { flex: 1 1 auto; resize: none; }
 /* The hard offset shadow is drawn outside the box, so the button is inset by
    its own offset to keep the shadow clear of the pane edge. */
-.console-body .btn-primary { min-height: 25px; padding: 0 12px; margin: 0 3px 3px 0; }
-.console-body .btn-ghost { margin-bottom: 3px; }
+.console-body .btn-primary { margin: 0 var(--hard-offset) var(--hard-offset) 0; }
+.console-body .btn-ghost { margin-bottom: var(--hard-offset); }
 .scan-pane { grid-column: 2; grid-row: 1; }
 .result-pane { grid-column: 1 / 3; grid-row: 2; }
 
-/* ── The regex ──────────────────────────────────────────────────────────── */
+/* Dense empty states inside panes and drawers. */
+.pane .empty-state, .drawer-body .empty-state { height: 100%; min-height: 90px; padding: 16px; gap: 6px; }
+.pane .empty-state span, .drawer-body .empty-state span { max-width: 46ch; }
+
+/* ── The regex — app syntax-highlight surfaces ──────────────────────────── */
 
 .scan-body { display: flex; flex-direction: column; gap: 9px; }
 
-/* The pattern is the whole point of this pane, so it gets the whole pane. */
-.pattern, .pattern-well {
+/* The pattern is the whole point of this pane, so it gets the whole pane.
+   Markup composes cn-code for the face; these are the pane's own metrics. */
+.pattern {
   margin: 0;
   color: var(--subtext-1);
-  font: 650 12.5px/1.85 var(--mono);
+  font-weight: 650;
+  line-height: 1.85;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   animation: pattern-in .2s ease both;
 }
-.pattern-well { padding: 9px 10px; font-size: 11px; line-height: 1.65; animation: none; }
+/* An offending statement, carved like a code block, with the span marked. */
+.pattern-well { margin: 0; padding: 9px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .re-meta { color: var(--mauve); font-weight: 800; }
 .re-esc { color: var(--overlay-1); }
 .re-class { color: var(--peach); }
@@ -297,61 +167,45 @@ textarea:focus { box-shadow: var(--neu-inset), 0 0 0 2px color-mix(in srgb, var(
 @keyframes pattern-in { from { opacity: 0; transform: translateY(3px); } }
 
 .scan-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
-.scan-steps li { display: flex; gap: 8px; align-items: flex-start; color: var(--subtext-0); font-size: 11.5px; line-height: 1.55; }
-.scan-steps .mark-solid { width: 17px; height: 17px; border-radius: 5px; font-size: 9px; }
+.scan-steps li { display: flex; gap: 8px; align-items: flex-start; color: var(--subtext-0); font-size: 12px; line-height: 1.55; }
+.scan-steps .mark-solid { width: 20px; height: 20px; }
 .scan-steps strong { color: var(--text); font-weight: 750; }
 
 .match-nav { display: inline-flex; align-items: center; gap: 2px; }
-.match-nav output { min-width: 52px; text-align: center; color: var(--overlay-2); font: 650 10px var(--mono); font-variant-numeric: tabular-nums; }
+.match-nav output {
+  min-width: 52px;
+  text-align: center;
+  color: var(--overlay-2);
+  font: 650 12px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
 
-/* ── Result table ───────────────────────────────────────────────────────── */
+/* ── Result table — the package table at instrument density ─────────────── */
 
-table { width: 100%; border-collapse: collapse; }
-th {
+.result-pane .table-neu th {
   padding: 6px 9px;
   position: sticky;
   top: 0;
   z-index: 2;
-  color: var(--overlay-1);
-  border-bottom: 1px solid var(--surface-0);
-  background: color-mix(in srgb, var(--crust) 30%, var(--mantle));
-  text-align: left;
-  font: 700 9px var(--mono);
-  letter-spacing: .07em;
   white-space: nowrap;
 }
-th small { display: block; margin-top: 2px; color: var(--overlay-0); font: 500 8px var(--mono); letter-spacing: .04em; }
-td {
+.result-pane .table-neu th small { display: block; margin-top: 3px; }
+.result-pane .table-neu td {
   padding: 6px 9px;
-  color: var(--subtext-1);
-  border-bottom: 1px solid color-mix(in srgb, var(--surface-0) 70%, transparent);
-  font: 600 12px var(--mono);
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover { background: color-mix(in srgb, var(--mauve) 5%, var(--base)); box-shadow: var(--neu-inset-soft); }
-td.is-null { color: var(--overlay-0); font-style: italic; }
-td.is-boolean { color: var(--teal); }
-td.is-integer { color: var(--peach); }
-
-.empty-state {
-  height: 100%;
-  min-height: 90px;
-  padding: 16px;
-  display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px;
-  color: var(--overlay-1);
-  text-align: center;
-}
-.empty-state strong { color: var(--subtext-0); font: 700 12px var(--sans); }
-.empty-state span { max-width: 46ch; font-size: 11px; line-height: 1.55; }
+/* Value-type colors — app semantics. */
+.table-neu td.is-null { color: var(--overlay-0); font-style: italic; }
+.table-neu td.is-boolean { color: var(--teal); }
+.table-neu td.is-integer { color: var(--peach); }
 
 /* ── Log + string dock ──────────────────────────────────────────────────── */
 
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
-   reduced-motion block in tokens.css turns all of it off.                   */
+   reduced-motion block in the package tokens turns all of it off.           */
 
 .log-pane { animation: pane-in .19s ease both; }
 .log-pane.is-leaving { animation: pane-out .17s ease both; }
@@ -375,17 +229,7 @@ td.is-integer { color: var(--peach); }
 .dock.is-collapsed .collapsible { grid-template-rows: 0fr; }
 
 .log-pane .pane-body { max-height: 26vh; }
-.log-pane pre {
-  margin: 0;
-  padding: 9px 10px;
-  max-height: 26vh;
-  overflow: auto;
-  color: var(--subtext-1);
-  background: var(--crust);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: 500 10.5px/1.6 var(--mono);
-}
+.log-pane .terminal pre { padding: 9px 10px; max-height: 26vh; }
 .log-line { display: block; }
 .log-line .log-sql { color: var(--text); }
 .log-line.is-error .log-sql { color: var(--red); }
@@ -399,31 +243,24 @@ td.is-integer { color: var(--peach); }
 /* The dock is showing a snapshot rather than the live string — say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); font-style: normal; }
-.dock pre {
-  margin: 0;
+.dock .terminal pre {
   padding: 10px;
   max-height: 24vh;
   min-height: 46px;
-  overflow: auto;
-  color: var(--subtext-1);
-  background: var(--crust);
-  box-shadow: var(--neu-inset);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font: 500 12px/1.75 var(--mono);
+  line-height: 1.75;
 }
-.dock mark {
+.dock mark, .pattern-well mark {
   padding: 1px 0;
   color: var(--crust);
   background: var(--mauve);
-  border-radius: 3px;
+  border-radius: 4px;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--mauve) 40%, transparent);
 }
 .dock mark.is-current { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); }
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
-.swatch { width: 8px; height: 8px; border-radius: 2px; background: var(--mauve); display: inline-block; margin-right: 5px; vertical-align: -1px; }
+.swatch { width: 8px; height: 8px; border-radius: 4px; background: var(--mauve); display: inline-block; margin-right: 5px; vertical-align: -1px; }
 
-/* ── Dialogs — they float, so a deep drop rather than carved depth ──────── */
+/* ── Dialogs — native <dialog>; they float, so the pop shadow, not neu ──── */
 
 dialog {
   padding: 0;
@@ -431,7 +268,7 @@ dialog {
   border: 1px solid var(--surface-1);
   border-radius: var(--pane-radius);
   background: var(--base);
-  box-shadow: 0 24px 70px rgb(17 17 27 / .78);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
   /* Discrete `display`/`overlay` transitions keep the element painted long
      enough to animate itself out of the top layer. */
@@ -444,7 +281,7 @@ dialog[open] { opacity: 1; transform: none; }
 @starting-style { dialog[open] { opacity: 0; transform: translateY(10px) scale(.99); } }
 
 dialog::backdrop {
-  background: rgb(17 17 27 / .66);
+  background: var(--neu-dark);
   backdrop-filter: blur(3px);
   opacity: 0;
   transition: opacity .22s ease, overlay .22s ease allow-discrete, display .22s ease allow-discrete;
@@ -461,23 +298,22 @@ dialog[open]::backdrop { opacity: 1; }
    them (a scroll container's automatic minimum size is zero). */
 .sheet-body > * { flex: none; }
 .sheet-body textarea { min-height: 96px; }
-.sheet-links { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-.sheet-links .btn-primary { margin-left: auto; }
 
 /* The about sheet is the one editorial surface in the app: it gets room to
    breathe, a real type scale, and none of the instrument-panel density. */
-.sheet.is-about { width: min(880px, calc(100vw - 48px)); max-height: calc(100dvh - 56px); border-radius: 18px; }
+.sheet.is-about { width: min(880px, calc(100vw - 48px)); max-height: calc(100dvh - 56px); border-radius: 16px; }
 .is-about .sheet-body { padding: 36px 44px 28px; gap: 0; }
 .is-about .eyebrow { margin-bottom: 16px; }
 .is-about .display-title { margin-bottom: 18px; font-size: clamp(28px, 3.6vw, 40px); }
-.is-about .lede { max-width: 70ch; margin-bottom: 24px; font-size: 14.5px; line-height: 1.66; }
-.is-about .sample { margin-bottom: 24px; padding: 15px 17px; border-radius: 11px; font-size: 11.5px; line-height: 1.78; }
+.is-about .lede { margin: 0 0 24px; max-width: 70ch; font-size: 14.5px; line-height: 1.66; }
+.is-about .sample { margin-bottom: 24px; padding: 15px 17px; }
 .is-about .about-list { margin-bottom: 22px; padding-left: 19px; gap: 10px; font-size: 13px; line-height: 1.6; }
 .is-about .about-list li { padding-left: 3px; }
 .is-about .about-list::marker, .is-about .about-list li::marker { color: var(--overlay-0); }
 
-/* Install lines read as terminal input, so they get the deepest well. Each one
-   copies itself, so it also behaves like a button. */
+/* Install lines read as terminal input, so they get a carved crust well —
+   borderless, per the inset canon. Each one copies itself, so it also
+   behaves like a button. */
 .install { display: flex; flex-wrap: wrap; gap: 8px; }
 .install-copy {
   padding: 8px 11px;
@@ -485,29 +321,23 @@ dialog[open]::backdrop { opacity: 1; }
   align-items: center;
   gap: 8px;
   color: var(--subtext-1);
-  border: 1px solid color-mix(in srgb, var(--surface-1) 45%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--crust) 55%, var(--mantle));
+  border: 0;
+  border-radius: 10px;
+  background: var(--crust);
   box-shadow: var(--neu-inset-soft);
   cursor: pointer;
-  transition: color .16s, border-color .16s, background .16s;
+  transition: color .16s, background .16s, box-shadow .16s;
 }
-.install-copy code { color: inherit; font: 600 12px/1 var(--mono); }
-.install-copy .prompt { color: var(--overlay-0); font: 600 12px/1 var(--mono); }
-.install-copy .copy-mark {
-  display: inline-flex;
-  align-items: center;
-  color: var(--overlay-0);
-  font: 700 9px/1 var(--mono);
-  letter-spacing: .06em;
-}
-.install-copy:hover { color: var(--text); border-color: color-mix(in srgb, var(--mauve) 45%, var(--surface-1)); }
+.install-copy .cn-code { color: inherit; font-size: 12px; line-height: 1; }
+.install-copy .prompt { color: var(--overlay-0); }
+.install-copy .copy-mark { display: inline-flex; align-items: center; color: var(--overlay-0); }
+.install-copy:hover { color: var(--text); }
 .install-copy:hover .copy-mark { color: var(--mauve); }
 .install-copy:active { box-shadow: var(--neu-inset); }
-.install-copy.is-copied { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.install-copy.is-copied { color: var(--green); }
 .install-copy.is-copied .copy-mark { color: var(--green); }
 
-/* One CTA, with the links kept subordinate beside it. */
+/* One CTA, with the links kept subordinate beside it. Divider-only foot. */
 .is-about .sheet-foot {
   flex: none;
   display: flex;
@@ -517,7 +347,6 @@ dialog[open]::backdrop { opacity: 1; }
   gap: 20px;
   padding: 16px 44px 18px;
   border-top: 1px solid color-mix(in srgb, var(--surface-1) 55%, transparent);
-  background: color-mix(in srgb, var(--crust) 24%, var(--base));
 }
 .about-links { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
 .about-links a {
@@ -525,26 +354,24 @@ dialog[open]::backdrop { opacity: 1; }
   align-items: center;
   gap: 7px;
   color: var(--overlay-2);
-  font: 700 11px/1 var(--mono);
-  letter-spacing: .04em;
+  font: 700 12px/1 var(--sans);
+  letter-spacing: .02em;
   text-decoration: none;
   transition: color .16s;
 }
 .about-links a:hover { color: var(--mauve); }
 .is-about .sheet-foot .btn-primary { min-height: 36px; padding-inline: 26px; margin-left: 0; }
 
-.eyebrow { margin: 0; color: var(--mauve); font: 700 10px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
-.display-title { margin: 0; font-size: clamp(30px, 4.4vw, 46px); line-height: 1.02; letter-spacing: -.045em; font-weight: 820; text-wrap: balance; }
-.display-title em { color: var(--mauve); font-style: normal; }
-.lede { margin: 0; color: var(--subtext-1); font-size: 13.5px; line-height: 1.6; }
-.sample { margin: 0; padding: 10px; overflow-x: auto; font: 500 11px/1.7 var(--mono); color: var(--subtext-1); }
+.sample { margin: 0; }
 .sample .tok-tag { color: var(--mauve); font-weight: 700; }
 .sample .tok-name { color: var(--teal); }
 .sample .tok-cell { color: var(--peach); }
 .about-list { margin: 0; padding-left: 17px; display: flex; flex-direction: column; gap: 6px; color: var(--subtext-0); font-size: 12px; line-height: 1.55; }
 .about-list b { color: var(--text); }
 
-.drawer {
+/* Side sheets — dialogs pinned to the right edge (the package .drawer recipe
+   is a scrim-based overlay; these ride the native <dialog> machinery). */
+.side-sheet {
   width: min(420px, calc(100vw - 24px));
   height: 100dvh;
   max-height: 100dvh;
@@ -554,57 +381,27 @@ dialog[open]::backdrop { opacity: 1; }
   border-radius: var(--pane-radius) 0 0 var(--pane-radius);
   transform: translateX(26px);
 }
-.drawer[open] { transform: none; }
-@starting-style { .drawer[open] { transform: translateX(26px); } }
-.drawer .pane-head { min-height: 38px; }
+.side-sheet[open] { transform: none; }
+@starting-style { .side-sheet[open] { transform: translateX(26px); } }
+.side-sheet .pane-head { min-height: 38px; border-radius: calc(var(--pane-radius) - 1px) 0 0 0; }
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 .drawer-group { display: flex; flex-direction: column; gap: 6px; }
-.drawer-group h3 { margin: 0; color: var(--overlay-2); font: 750 9px/1 var(--mono); letter-spacing: .1em; }
-.preset-list { display: grid; gap: 6px; }
-.preset-list button {
-  padding: 8px 10px;
-  display: flex; flex-direction: column; gap: 3px;
-  color: var(--subtext-0);
-  border: 1px solid color-mix(in srgb, var(--surface-2) 36%, transparent);
-  border-radius: 9px;
-  background: var(--base);
-  box-shadow: var(--neu-raised-soft);
-  text-align: left;
-  cursor: pointer;
-  transition: transform .16s, box-shadow .16s, border-color .16s, background .16s;
-}
-.preset-list button:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--mauve) 45%, var(--surface-1)); }
-.preset-list button.active {
-  transform: translateY(1px);
-  color: var(--text);
-  border-color: color-mix(in srgb, var(--mauve) 56%, var(--surface-1));
-  background: color-mix(in srgb, var(--mauve) 7%, var(--base));
-  box-shadow: var(--neu-inset);
-}
-.preset-list b { font: 700 12px var(--sans); }
-.preset-list small { color: var(--overlay-2); font: 500 9.5px/1.45 var(--mono); overflow-wrap: anywhere; }
+.drawer-group h3 { margin: 0; }
+
+/* Preset list — the stacked segmented recipe at instrument density. */
+.preset-list { gap: 6px; }
+.preset-list > * { min-height: 0; padding: 8px 10px; flex-direction: column; align-items: stretch; gap: 3px; }
+.preset-list small { line-height: 1.45; overflow-wrap: anywhere; }
+/* SQL inside a preset title takes the mono voice; the slight size trim keeps
+   bold mono optically level with the sans around it. */
+.preset-list b code { font-family: var(--mono); font-size: .92em; letter-spacing: -.01em; }
 
 /* ── The SQL reference ──────────────────────────────────────────────────── */
 
 /* Statements are long; the reference gets more room than the examples. */
-.drawer.is-wide { width: min(560px, calc(100vw - 24px)); }
+.side-sheet.is-wide { width: min(560px, calc(100vw - 24px)); }
 
 .drawer-search { flex: none; padding: 10px 12px 0; }
-.drawer-search input {
-  width: 100%;
-  min-height: 28px;
-  padding: 6px 9px;
-  color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--surface-1) 42%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--crust) 62%, var(--mantle));
-  box-shadow: var(--neu-inset);
-  font: 500 11px/1.4 var(--mono);
-  transition: border-color .18s, box-shadow .18s;
-}
-.drawer-search input::placeholder { color: var(--overlay-0); }
-.drawer-search input:hover { border-color: var(--surface-2); }
-.drawer-search input:focus { box-shadow: var(--neu-inset), 0 0 0 2px color-mix(in srgb, var(--mauve) 20%, transparent); }
 
 /* Prose is prose: only the syntax itself, and the chrome around it, stay mono. */
 .ref-blurb { margin: 0; color: var(--subtext-0); font: 400 12px/1.5 var(--sans); }
@@ -612,7 +409,7 @@ dialog[open]::backdrop { opacity: 1; }
 .ref-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .ref-list li { display: flex; flex-direction: column; gap: 3px; }
 
-/* The syntax line is carved in, like the console it fills. */
+/* The syntax line is a carved code well, like the console it fills. */
 .ref-syntax {
   width: 100%;
   padding: 7px 9px;
@@ -620,42 +417,39 @@ dialog[open]::backdrop { opacity: 1; }
   align-items: baseline;
   gap: 10px;
   color: var(--subtext-1);
-  border: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
-  border-radius: 9px;
+  border: 0;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--crust) 48%, var(--mantle));
   box-shadow: var(--neu-inset-soft);
-  font: 600 11px/1.65 var(--mono);
+  font: 600 12px/1.65 var(--mono);
   text-align: left;
   overflow-wrap: anywhere;
 }
 .ref-syntax code { min-width: 0; font: inherit; color: inherit; }
-button.ref-syntax { cursor: pointer; transition: border-color .16s, background .16s, box-shadow .16s; }
-button.ref-syntax:hover { border-color: color-mix(in srgb, var(--mauve) 45%, var(--surface-1)); }
+button.ref-syntax { cursor: pointer; transition: background .16s, box-shadow .16s, color .16s; }
+button.ref-syntax:hover { background: color-mix(in srgb, var(--mauve) 7%, var(--base)); }
 button.ref-syntax:active { box-shadow: var(--neu-inset); }
-.ref-use {
-  margin-left: auto;
-  flex: 0 0 auto;
-  color: var(--overlay-0);
-  font: 700 9px/1 var(--mono);
-  letter-spacing: .06em;
-}
+.ref-use { margin-left: auto; flex: 0 0 auto; color: var(--overlay-0); }
 button.ref-syntax:hover .ref-use { color: var(--mauve); }
-.ref-note { margin: 0 0 0 2px; color: var(--overlay-2); font: 400 11.5px/1.5 var(--sans); }
+.ref-note { margin: 0 0 0 2px; color: var(--overlay-2); font: 400 12px/1.5 var(--sans); }
 
 /* What the dialect refuses gets the dashed, unfilled treatment. */
 .ref-tags { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
 .ref-tags li {
   padding: 3px 8px;
   color: var(--overlay-1);
-  border: 1px dashed color-mix(in srgb, var(--surface-2) 55%, transparent);
+  border: 1px dashed var(--surface-1);
   border-radius: 999px;
-  font: 500 11px/1.35 var(--sans);
+  font: 500 12px/1.35 var(--sans);
 }
 
 .sql-kw { color: var(--mauve); font-weight: 750; }
 .sql-type { color: var(--teal); }
 .sql-val { color: var(--peach); }
+/* Identifiers, operators and punctuation stay in the surface's own ink. */
+.sql-plain { color: inherit; }
 
+/* Divider-only foot, per the footer canon. */
 .drawer-foot {
   flex: none;
   display: flex;
@@ -664,22 +458,19 @@ button.ref-syntax:hover .ref-use { color: var(--mauve); }
   gap: 12px;
   padding: 9px 12px;
   border-top: 1px solid color-mix(in srgb, var(--surface-1) 55%, transparent);
-  background: color-mix(in srgb, var(--crust) 24%, var(--base));
 }
-.drawer-foot span { color: var(--overlay-0); font: 400 11px/1 var(--sans); }
+.drawer-foot span { color: var(--overlay-0); font: 400 12px/1 var(--sans); }
 .drawer-foot a {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--overlay-2);
-  font: 700 10px/1 var(--mono);
-  letter-spacing: .04em;
+  font: 700 12px/1 var(--sans);
+  letter-spacing: .02em;
   text-decoration: none;
   transition: color .16s;
 }
 .drawer-foot a:hover { color: var(--mauve); }
-
-.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
@@ -701,15 +492,7 @@ button.ref-syntax:hover .ref-use { color: var(--mauve); }
   .about-links { gap: 16px; justify-content: space-between; }
   .is-about .sheet-foot .btn-primary { width: 100%; }
   .app-shell { height: auto; min-height: 100dvh; }
-  .tagline { display: none; }
   .workbench { grid-template-rows: auto auto auto; }
   .scan-pane, .result-pane { max-height: none; }
   .pane-body { max-height: 60vh; }
-
-  thead { display: none; }
-  tbody, tr, td { display: block; }
-  tbody { padding: 6px; }
-  tbody tr { margin-bottom: 6px; padding: 8px; display: grid; gap: 6px; border: 1px solid var(--surface-0); border-radius: 9px; background: var(--mantle); }
-  td { padding: 0; border: 0; display: flex; flex-direction: column; gap: 2px; }
-  td::before { content: attr(data-label); color: var(--overlay-1); font: 700 8px var(--mono); letter-spacing: .06em; }
 }

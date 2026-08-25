@@ -50,15 +50,15 @@ export function StringDock({
       className={`dock${open ? "" : " is-collapsed"}`}
       aria-labelledby="dock-heading"
     >
-      <div class="pane-head">
-        <h2 id="dock-heading">
+      <div class="pane-head cn-bg-head">
+        <h2 id="dock-heading" class="cn-microlabel">
           the database string
           {explain && historic ? (
             <em class="as-of"> · before the write</em>
           ) : null}
         </h2>
         <div class="head-chips">
-          <span class="note" id="blob-note">
+          <span class="note cn-meta" id="blob-note">
             {total !== 0 && (
               <>
                 <span class="swatch" />
@@ -72,7 +72,7 @@ export function StringDock({
           </span>
           {scan?.matches?.length ? (
             <button
-              class={`btn-flat${explain ? " is-on" : ""}`}
+              class={`btn-flat${explain ? " active" : ""}`}
               aria-pressed={String(explain)}
               title={
                 historic
@@ -127,7 +127,7 @@ export function StringDock({
         </div>
       </div>
       <div class="collapsible">
-        <div class="pane-body is-flush">
+        <div class="pane-body is-flush terminal">
           <pre
             class="scroll-well"
             aria-live="polite"
