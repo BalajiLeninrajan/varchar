@@ -14,9 +14,9 @@ function Table({ columns, rows }) {
       <thead>
         <tr>
           {columns.map((column, index) => (
-            <th key={index}>
+            <th key={index} class="cn-nowrap cn-sticky-top">
               {column.label}
-              <small class="cn-microlabel">
+              <small class="cn-microlabel cn-block cn-mt-4">
                 {column.type}
                 {column.nullable ? "" : " NOT NULL"}
               </small>
@@ -56,13 +56,13 @@ function Offender({ statement, detail }) {
 
 function ErrorView({ statement, error }) {
   return (
-    <div class="scan-body" style={{ padding: "9px" }}>
+    <div class="cn-stack cn-p-12">
       <Banner tone="red">{error.message}</Banner>
       {error.detail && typeof error.detail.start === "number" ? (
         <Offender statement={statement} detail={error.detail} />
       ) : null}
-      <ul class="scan-steps">
-        <li>
+      <ul class="cn-list-none cn-stack cn-gap-8">
+        <li class="cn-row cn-top cn-mt-0">
           <span class="mark-solid" style={{ "--accent": "var(--green)" }}>
             ✓
           </span>
@@ -128,7 +128,7 @@ export function ResultPane({ outcome, placeholder }) {
       <PaneHead title="result" id="result-heading">
         {chips}
       </PaneHead>
-      <div class="pane-body is-flush scroll-well">{body}</div>
+      <div class="pane-body scroll-well">{body}</div>
     </Pane>
   );
 }

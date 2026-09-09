@@ -50,15 +50,15 @@ export function StringDock({
       className={`dock${open ? "" : " is-collapsed"}`}
       aria-labelledby="dock-heading"
     >
-      <div class="pane-head cn-bg-head">
-        <h2 id="dock-heading" class="cn-microlabel">
+      <div class="pane-head panel-heading">
+        <h2 id="dock-heading" class="cn-microlabel cn-nowrap">
           the database string
           {explain && historic ? (
             <em class="as-of"> · before the write</em>
           ) : null}
         </h2>
-        <div class="head-chips">
-          <span class="note cn-meta" id="blob-note">
+        <div class="cn-row cn-gap-4 cn-min-0">
+          <span class="cn-meta cn-truncate" id="blob-note">
             {total !== 0 && (
               <>
                 <span class="swatch" />
@@ -85,7 +85,7 @@ export function StringDock({
             </button>
           ) : null}
           {drawn > 0 ? (
-            <span class="match-nav">
+            <span class="match-nav cn-row cn-gap-4">
               <button
                 class="btn-flat"
                 onClick={() => step(-1)}
@@ -94,7 +94,7 @@ export function StringDock({
               >
                 <Icon id="left" />
               </button>
-              <output>
+              <output class="cn-meta cn-text-center">
                 {current + 1} / {drawn}
               </output>
               <button
@@ -127,7 +127,7 @@ export function StringDock({
         </div>
       </div>
       <div class="collapsible">
-        <div class="pane-body is-flush terminal">
+        <div class="pane-body terminal">
           <pre
             class="scroll-well"
             aria-live="polite"

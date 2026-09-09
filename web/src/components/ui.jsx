@@ -18,11 +18,11 @@ export function Pane({ className = "", children, ...rest }) {
 
 export function PaneHead({ title, id, children }) {
   return (
-    <div class="pane-head cn-bg-head">
-      <h2 id={id} class="cn-microlabel">
+    <div class="pane-head panel-heading">
+      <h2 id={id} class="cn-microlabel cn-nowrap">
         {title}
       </h2>
-      <div class="head-chips">{children}</div>
+      <div class="cn-row cn-gap-4 cn-min-0">{children}</div>
     </div>
   );
 }
@@ -35,9 +35,9 @@ export function Marked({ text }) {
     .map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
 }
 
-export function Chip({ tone, title, children }) {
+export function Chip({ tone, title, class: extra = "", children }) {
   // Tint rides the package --tone contract prop via the cn-tone-* setters.
-  const className = tone ? `chip is-toned cn-tone-${tone}` : "chip";
+  const className = `${tone ? `chip is-toned cn-tone-${tone}` : "chip"} ${extra}`.trim();
   return (
     <span class={className} title={title}>
       {children}
@@ -55,7 +55,7 @@ export function Banner({ tone = "peach", children }) {
 
 export function EmptyState({ title, children }) {
   return (
-    <div class="empty-state">
+    <div class="empty-state is-fill">
       <strong>{title}</strong>
       <span>{children}</span>
     </div>
@@ -93,7 +93,7 @@ export function CopyButton({ text, label = "copy", icon }) {
   );
 }
 
-/** A shell command that copies itself when clicked. */
+/** A shell command line with the package copy control. */
 export function CopyCommand({ command }) {
   const [copied, setCopied] = useState(false);
 
@@ -104,22 +104,33 @@ export function CopyCommand({ command }) {
   }, [copied]);
 
   return (
-    <button
-      class={`install-copy${copied ? " is-copied" : ""}`}
-      title="Copy to clipboard"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(command);
-          setCopied(true);
-        } catch {
-          /* clipboard denied; the command is still selectable */
-        }
-      }}
-    >
-      <span class="prompt cn-code">$</span>
-      <code class="cn-code">{command}</code>
-      <span class="copy-mark cn-microlabel">{copied ? "copied" : <Icon id="copy" size={11} />}</span>
-    </button>
+    <div class={`command${copied ? " is-copied" : ""}`}>
+      <code class="command-text">
+        <span class="command-prompt">$</span>
+        {command}
+      </code>
+      <button
+        type="button"
+        class="btn-icon command-copy"
+        aria-label="Copy to clipboard"
+        title="Copy to clipboard"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(command);
+            setCopied(true);
+          } catch {
+            /* clipboard denied; the command is still selectable */
+          }
+        }}
+      >
+        <svg class="copy-glyph" aria-hidden="true">
+          <use href="#i-copy" />
+        </svg>
+        <svg class="done-glyph" aria-hidden="true">
+          <use href="#i-check" />
+        </svg>
+      </button>
+    </div>
   );
 }
 

@@ -7,18 +7,18 @@ import { tokenizeSql } from "../lib/sql.js";
 
 export function AboutDialog({ open, onClose }) {
   return (
-    <Modal open={open} onClose={onClose} className="sheet is-about">
+    <Modal open={open} onClose={onClose} className="modal sheet is-about">
       <div class="sheet-body">
-        <p class="eyebrow">a really dumb SQL database</p>
-        <h1 class="display-title">
+        <p class="eyebrow cn-mb-16">a really dumb SQL database</p>
+        <h1 class="display-title cn-mb-16">
           The whole database is <em>one string</em>.
         </h1>
-        <p class="lede">
+        <p class="lede cn-mt-0 cn-mb-22">
           Schemas, constraints, sequence state and every row live in a single UTF-8 <code>String</code>, and
           every <code>SELECT</code> is a regular expression scanned across it. This page runs the real engine
           compiled to WebAssembly: nothing leaves your tab, and nothing survives a reload.
         </p>
-        <pre class="sample codeblock">
+        <pre class="sample codeblock cn-mt-0 cn-mb-22">
           <span class="tok-tag">V2;</span>
           {"\n"}
           <span class="tok-tag">~S|</span>
@@ -46,7 +46,7 @@ export function AboutDialog({ open, onClose }) {
           <span class="tok-cell">B1</span>
           <span class="tok-tag">;</span>
         </pre>
-        <ul class="about-list">
+        <ul class="about-list cn-mb-22">
           <li>
             <b>Run</b> anything in the console. Statements are split on <code>;</code> and executed one at a
             time.
@@ -57,30 +57,30 @@ export function AboutDialog({ open, onClose }) {
           </li>
           <li>The string is the whole database. Copy it, save it, or import one back.</li>
         </ul>
-        <div class="install">
+        <div class="cn-grid-2">
           <CopyCommand command="cargo add varchar" />
           <CopyCommand command="cargo install varchar-cli" />
         </div>
       </div>
       {/* Outside the scrolling body so the CTA is reachable on a short screen. */}
-      <footer class="sheet-foot">
-          <nav class="about-links">
-            <a href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener">
-              <Icon id="github" size={13} /> GitHub
-            </a>
-            <a href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener">
-              <Icon id="crate" size={13} /> crates.io
-            </a>
-            <a href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener">
-              <Icon id="crate" size={13} /> varchar-cli
-            </a>
-            <a href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener">
-              <Icon id="book" size={13} /> docs.rs
-            </a>
-          </nav>
-          <button class="btn btn-primary" onClick={onClose}>
-            start
-          </button>
+      <footer class="sheet-foot panel-footer">
+        <nav class="cn-cluster cn-gap-22">
+          <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener">
+            <Icon id="github" size={13} /> GitHub
+          </a>
+          <a class="btn-text" href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener">
+            <Icon id="crate" size={13} /> crates.io
+          </a>
+          <a class="btn-text" href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener">
+            <Icon id="crate" size={13} /> varchar-cli
+          </a>
+          <a class="btn-text" href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener">
+            <Icon id="book" size={13} /> docs.rs
+          </a>
+        </nav>
+        <button class="btn btn-primary is-lg" onClick={onClose}>
+          start
+        </button>
       </footer>
     </Modal>
   );
@@ -89,8 +89,8 @@ export function AboutDialog({ open, onClose }) {
 export function PresetsDrawer({ open, onClose, onPick }) {
   const [active, setActive] = useState(null);
   return (
-    <Modal open={open} onClose={onClose} className="side-sheet">
-      <div class="pane-head cn-bg-head">
+    <Modal open={open} onClose={onClose} className="drawer side-sheet">
+      <div class="pane-head panel-heading">
         <h2 class="cn-microlabel">examples</h2>
         <button class="btn-flat" onClick={onClose}>
           close
@@ -98,9 +98,9 @@ export function PresetsDrawer({ open, onClose, onPick }) {
       </div>
       <div class="drawer-body scroll-well">
         {GROUPS.map((group) => (
-          <div class="drawer-group" key={group.title}>
-            <h3 class="cn-microlabel">{group.title}</h3>
-            <div class="preset-list segmented is-stacked">
+          <div class="cn-stack cn-gap-8" key={group.title}>
+            <h3 class="cn-microlabel cn-m-0">{group.title}</h3>
+            <div class="preset-list segmented is-stacked cn-gap-8">
               {group.presets.map((preset) => (
                 <button
                   key={preset.id}
@@ -164,8 +164,8 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
   }, [open]);
 
   return (
-    <Modal open={open} onClose={onClose} className="side-sheet is-wide">
-      <div class="pane-head cn-bg-head">
+    <Modal open={open} onClose={onClose} className="drawer side-sheet is-wide">
+      <div class="pane-head panel-heading">
         <h2 class="cn-microlabel">sql reference</h2>
         <button class="btn-flat" onClick={onClose}>
           close
@@ -192,53 +192,49 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
           </EmptyState>
         ) : null}
         {sections.map((section) => (
-          <section class="drawer-group" key={section.title}>
-            <h3 class="cn-microlabel">{section.title}</h3>
-            {section.blurb ? <p class="ref-blurb">{section.blurb}</p> : null}
+          <section class="cn-stack cn-gap-8" key={section.title}>
+            <h3 class="cn-microlabel cn-m-0">{section.title}</h3>
+            {section.blurb ? <p class="cn-meta cn-m-0">{section.blurb}</p> : null}
             {section.entries?.length ? (
-              <ul class="ref-list">
+              <ul class="cn-list-none cn-stack cn-gap-8">
                 {section.entries.map((entry) => (
-                  <li key={entry.syntax}>
-                    {/* A complete statement is a button that loads the console;
-                        a fragment is shown for its shape and nothing else. */}
-                    {entry.run ? (
-                      <button
-                        type="button"
-                        class="ref-syntax"
-                        title="Put this in the console"
-                        onClick={() => onUse(entry.syntax)}
-                      >
-                        <code>
-                          <Sql text={entry.syntax} />
-                        </code>
-                        <span class="ref-use cn-microlabel">use</span>
-                      </button>
-                    ) : (
-                      <div class="ref-syntax">
-                        <code>
-                          <Sql text={entry.syntax} />
-                        </code>
-                      </div>
-                    )}
-                    <p class="ref-note">{entry.note}</p>
+                  <li key={entry.syntax} class="cn-stack cn-gap-4 cn-mt-0">
+                    {/* A complete statement carries a button that loads the
+                        console; a fragment is shown for its shape alone. */}
+                    <div class="command is-full is-wrap">
+                      <code class="command-text">
+                        <Sql text={entry.syntax} />
+                      </code>
+                      {entry.run ? (
+                        <button
+                          type="button"
+                          class="btn-text cn-fixed"
+                          title="Put this in the console"
+                          onClick={() => onUse(entry.syntax)}
+                        >
+                          use
+                        </button>
+                      ) : null}
+                    </div>
+                    <p class="cn-meta cn-m-0">{entry.note}</p>
                   </li>
                 ))}
               </ul>
             ) : null}
             {section.items?.length ? (
-              <ul class="ref-tags">
+              <ul class="ref-tags cn-list-none cn-cluster cn-gap-4">
                 {section.items.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>
             ) : null}
-            {section.note ? <p class="ref-blurb is-foot">{section.note}</p> : null}
+            {section.note ? <p class="cn-meta cn-m-0">{section.note}</p> : null}
           </section>
         ))}
       </div>
-      <footer class="drawer-foot">
-        <span>The dialect is small on purpose.</span>
-        <a href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener">
+      <footer class="panel-footer">
+        <span class="cn-meta">The dialect is small on purpose.</span>
+        <a class="btn-text" href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener">
           <Icon id="book" size={13} /> full reference
         </a>
       </footer>
@@ -261,14 +257,14 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} className="sheet is-narrow">
-      <div class="pane-head cn-bg-head">
+    <Modal open={open} onClose={onClose} className="modal sheet">
+      <div class="pane-head panel-heading">
         <h2 class="cn-microlabel">import</h2>
         <button class="btn-flat" onClick={onClose}>
           close
         </button>
       </div>
-      <div class="sheet-body">
+      <div class="sheet-body cn-stack cn-gap-16">
         <div class="field">
           <label for="blob-input">paste an encoded database string</label>
           <textarea
@@ -280,7 +276,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
             onInput={(event) => setText(event.currentTarget.value)}
           />
         </div>
-        <div class="button-row is-end">
+        <div class="cn-row cn-wrap cn-end">
           <button class="btn btn-secondary" onClick={() => blobFile.current?.click()}>
             <Icon id="upload" /> open .varchar file
           </button>
@@ -292,7 +288,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           Or turn a CSV into a table — column types are inferred, then a <code>CREATE TABLE</code> and one{" "}
           <code>INSERT</code> per row are run for you.
         </p>
-        <div class="button-row is-end">
+        <div class="cn-row cn-wrap cn-end">
           <button class="btn btn-secondary" onClick={() => csvFile.current?.click()}>
             <Icon id="upload" /> import CSV as a table
           </button>
