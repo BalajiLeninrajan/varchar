@@ -6,7 +6,7 @@ export function ScanPane({ scan, placeholder }) {
     return (
       <Pane className="scan-pane" aria-labelledby="scan-heading">
         <PaneHead title="the regex" id="scan-heading" />
-        <div class="pane-body scroll-well">
+        <div class="pane-body panel-body scroll-well">
           <EmptyState title={placeholder.title}>{placeholder.body}</EmptyState>
         </div>
       </Pane>
@@ -44,7 +44,7 @@ export function ScanPane({ scan, placeholder }) {
         <CopyButton text={scan.pattern} />
       </PaneHead>
 
-      <div class="pane-body scroll-well">
+      <div class="pane-body panel-body scroll-well">
         <pre class="pattern cn-code">
           {tokenizePattern(scan.pattern).map((token, index) => (
             <span key={index} class={`re-${token.kind}`}>

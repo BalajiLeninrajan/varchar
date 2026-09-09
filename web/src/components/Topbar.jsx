@@ -24,23 +24,22 @@ export function Topbar({
   onOpenAbout,
 }) {
   return (
-    <header class="appbar">
-      <div class="appbar-start">
+    <header class="appbar topbar is-compact is-split">
+      <span class="wordmark">
         <span class="mark-solid">
           <Icon id="mark" size={13} />
         </span>
-        <span class="wordmark">
-          var<em>char</em>
-        </span>
-      </div>
-      <div class="appbar-end">
-        <Chip title="Length of the encoded string in bytes">
+        var<em>char</em>
+      </span>
+      <div class="cn-row cn-wrap cn-end cn-gap-4 cn-min-0">
+        {/* Stat pills are numeric readouts, not labels: the mono meta voice. */}
+        <Chip class="cn-code-meta cn-gap-4" title="Length of the encoded string in bytes">
           <b>{stats.bytes.toLocaleString()}</b>B
         </Chip>
-        <Chip title="~S records in the string">
+        <Chip class="cn-code-meta cn-gap-4" title="~S records in the string">
           <b>{stats.tables}</b>tbl
         </Chip>
-        <Chip title="~R records in the string">
+        <Chip class="cn-code-meta cn-gap-4" title="~R records in the string">
           <b>{stats.rows}</b>rows
         </Chip>
         <button class="btn-flat" onClick={onOpenPresets}>

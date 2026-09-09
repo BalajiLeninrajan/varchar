@@ -1,10 +1,11 @@
 /* ── varchar playground — app layer ─────────────────────────────────────────
    Sits unlayered on top of the catppuccin-neu package (cn.tokens /
-   cn.utilities / cn.recipes), so every rule here wins without !important.
+   cn.recipes / cn.utilities), so every rule here wins without !important.
    Only genuinely app-specific styling lives here: the one-screen pane grid,
-   the native <dialog> machinery, and the string-dock / syntax-highlight
-   colors. Tokens, utilities and recipes come from the package.
-   The app runs at [data-density="compact"] (set on <html>).                 */
+   the reveal animations, and the string-dock / syntax-highlight colors.
+   Layout is classes in the markup (panel-heading, cn-row, cn-stack, the
+   command line, the native dialog hosts); tokens, utilities and recipes come
+   from the package. The app runs at [data-density="dense"] (set on <html>). */
 
 :root {
   --gap: 8px;
@@ -12,12 +13,12 @@
 
 html, body { height: 100%; }
 body { overflow: hidden; }
-/* Class-level display would otherwise beat the UA rules for these two. */
+/* Class-level display would otherwise beat the UA rule. */
 [hidden] { display: none !important; }
-dialog:not([open]) { display: none; }
 /* Inline code in prose — the semantic code element is a code context. The
-   size floors at 12px so code inside 12-13px prose never dips below it. */
-code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--teal); }
+   size floors at 12px so code inside 12-13px prose never dips below it. The
+   command line's code element is chrome, not prose, and keeps its recipe. */
+code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--teal); }
 
 .app-shell {
   height: 100dvh;
@@ -30,7 +31,8 @@ code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--tea
 /* ── Panes — the package .panel run as instrument chrome ────────────────── */
 
 /* Markup composes "pane panel": the panel recipe paints the surface, this
-   class only turns it into a flex column that clips its own scrolling. */
+   class only turns it into a flex column that clips its own scrolling. The
+   heading band is the package panel-heading with a cn-microlabel title. */
 .pane {
   min-height: 0;
   min-width: 0;
@@ -38,58 +40,24 @@ code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--tea
   flex-direction: column;
   overflow: hidden;
 }
-
-/* Recessed heading band (fill composed via cn-bg-head in markup; the title
-   is a cn-microlabel). Densities here are the app's instrument scale. */
-.pane-head {
-  min-height: 30px;
-  padding: 4px 8px;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--surface-1) 40%, transparent);
-  /* Band corner rule: the filled first child of a rounded surface takes
-     calc(parent - 1px) on its outer corners. */
-  border-radius: calc(var(--pane-radius) - 1px) calc(var(--pane-radius) - 1px) 0 0;
-}
-.pane-head h2 { margin: 0; color: var(--overlay-2); white-space: nowrap; }
-.head-chips { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; }
-
-.pane-body { min-height: 0; flex: 1 1 auto; padding: 9px; overflow: auto; }
-.pane-body.is-flush { padding: 0; }
+.pane-body { min-height: 0; flex: 1 1 auto; overflow: auto; }
 
 /* Terminal surfaces embedded in panes sit flush: the pane's own radius and
    clipping do the shaping, the terminal keeps its crust fill and mono pre. */
 .pane-body.terminal { border-radius: 0; }
 .log-pane .terminal { box-shadow: none; }
 
-/* ── App bar — a compact strip, not the package's sticky page topbar ────── */
+/* ── App bar — the package topbar (compact, split) as a strip in the grid.
+   The shell never scrolls, so the bar has nothing to stick to. ─────────── */
 
-.appbar {
-  min-height: 34px;
-  padding: 3px 4px 3px 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--surface-1) 45%, transparent);
-  border-radius: var(--pane-radius);
-  background: color-mix(in srgb, var(--crust) 40%, var(--mantle));
-  box-shadow: var(--neu-raised-soft), inset 0 1px color-mix(in srgb, var(--surface-1) 30%, transparent);
-}
-.appbar-start { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.appbar-end { min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.appbar .mark-solid { width: 20px; height: 20px; }
-.wordmark { color: var(--text); font: 800 14px/1 var(--sans); letter-spacing: -.02em; }
-.wordmark em { color: var(--mauve); font-style: normal; }
+.appbar { position: static; }
 
 /* ── Controls — package buttons, with the app's few extras ──────────────── */
 
 .btn-flat.is-danger:hover:not(:disabled) {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 8%, transparent);
+  --tone: var(--red);
+  color: var(--tone);
+  background: var(--tint);
 }
 .btn-flat[aria-expanded="false"] svg { transform: rotate(180deg); }
 
@@ -99,17 +67,11 @@ code { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--tea
   height: 15px;
   flex: 0 0 auto;
   margin: 0 3px;
-  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  background: var(--edge);
 }
 
-.button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.button-row.is-end { justify-content: flex-end; }
-
+/* Readout chips: the count is the message, the unit is the label. */
 .chip b { color: var(--text); font-weight: 750; }
-/* Stat pills in the app bar are numeric readouts, not labels: compact, and
-   mono so the digits keep a fixed width as the counts change. */
-.appbar-end .chip { padding: 3px 8px; gap: 4px; font: 600 11px/1 var(--mono); }
-.appbar-end .chip b { font-weight: 700; }
 /* Toned status chips keep the pill recipe but take their tint through the
    --tone contract prop (set via the package cn-tone-* setters in markup). */
 .chip.is-toned { color: var(--tone); border-color: color-mix(in srgb, var(--tone) 45%, transparent); }
@@ -129,6 +91,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   gap: var(--gap);
 }
 .console-pane { grid-column: 1; grid-row: 1; }
+/* The textarea takes the slack and the button row keeps its height, which a
+   grid stack would split between them. */
 .console-body { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 .console-body textarea { flex: 1 1 auto; resize: none; }
 /* The hard offset shadow is drawn outside the box, so the button is inset by
@@ -138,13 +102,10 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .scan-pane { grid-column: 2; grid-row: 1; }
 .result-pane { grid-column: 1 / 3; grid-row: 2; }
 
-/* Dense empty states inside panes and drawers. */
-.pane .empty-state, .drawer-body .empty-state { height: 100%; min-height: 90px; padding: 16px; gap: 6px; }
-.pane .empty-state span, .drawer-body .empty-state span { max-width: 46ch; }
+/* Empty states fill their pane (empty-state is-fill); the copy stays a short measure. */
+.empty-state span { max-width: 46ch; }
 
 /* ── The regex — app syntax-highlight surfaces ──────────────────────────── */
-
-.scan-body { display: flex; flex-direction: column; gap: 9px; }
 
 /* The pattern is the whole point of this pane, so it gets the whole pane.
    Markup composes cn-code for the face; these are the pane's own metrics. */
@@ -155,10 +116,10 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   line-height: 1.85;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  animation: pattern-in .2s ease both;
+  animation: pattern-in var(--t-base) var(--ease-out) both;
 }
 /* An offending statement, carved like a code block, with the span marked. */
-.pattern-well { margin: 0; padding: 9px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pattern-well { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .re-meta { color: var(--mauve); font-weight: 800; }
 .re-esc { color: var(--overlay-1); }
 .re-class { color: var(--peach); }
@@ -166,49 +127,22 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .re-lit { color: var(--text); }
 @keyframes pattern-in { from { opacity: 0; transform: translateY(3px); } }
 
-.scan-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
-.scan-steps li { display: flex; gap: 8px; align-items: flex-start; color: var(--subtext-0); font-size: 12px; line-height: 1.55; }
-.scan-steps .mark-solid { width: 20px; height: 20px; }
-.scan-steps strong { color: var(--text); font-weight: 750; }
+.match-nav output { min-width: 52px; }
 
-.match-nav { display: inline-flex; align-items: center; gap: 2px; }
-.match-nav output {
-  min-width: 52px;
-  text-align: center;
-  color: var(--overlay-2);
-  font: 650 12px var(--sans);
-  font-variant-numeric: tabular-nums;
-}
+/* ── Result table — the package table at dense density ──────────────────── */
 
-/* ── Result table — the package table at instrument density ─────────────── */
-
-.result-pane .table-neu th {
-  padding: 6px 9px;
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  white-space: nowrap;
-}
-.result-pane .table-neu th small { display: block; margin-top: 3px; }
-.result-pane .table-neu td {
-  padding: 6px 9px;
-  font-size: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+.result-pane .table-neu td { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Value-type colors — app semantics. */
 .table-neu td.is-null { color: var(--overlay-0); font-style: italic; }
 .table-neu td.is-boolean { color: var(--teal); }
 .table-neu td.is-integer { color: var(--peach); }
 
-/* ── Log + string dock ──────────────────────────────────────────────────── */
-
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
    reduced-motion block in the package tokens turns all of it off.           */
 
-.log-pane { animation: pane-in .19s ease both; }
-.log-pane.is-leaving { animation: pane-out .17s ease both; }
+.log-pane { animation: pane-in var(--t-base) var(--ease-out) both; }
+.log-pane.is-leaving { animation: pane-out .14s var(--ease-in) both; }
 @keyframes pane-in {
   from { opacity: 0; max-height: 0; transform: translateY(5px); }
   to { opacity: 1; max-height: 34vh; transform: none; }
@@ -219,17 +153,19 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 }
 
 .result-pane .pane-body > *, .scan-pane .empty-state, .match-nav {
-  animation: content-in .18s ease both;
+  animation: content-in var(--t-fast) var(--ease-out) both;
 }
 @keyframes content-in { from { opacity: 0; transform: translateY(4px); } }
 
 /* A grid row collapsing from 1fr to 0fr animates height without measuring it. */
-.collapsible { min-height: 0; display: grid; grid-template-rows: 1fr; transition: grid-template-rows .22s ease; }
+.collapsible { min-height: 0; display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--t-base) var(--ease-out); }
 .collapsible > * { min-height: 0; overflow: hidden; }
 .dock.is-collapsed .collapsible { grid-template-rows: 0fr; }
 
+/* ── Log + string dock ──────────────────────────────────────────────────── */
+
 .log-pane .pane-body { max-height: 26vh; }
-.log-pane .terminal pre { padding: 9px 10px; max-height: 26vh; }
+.log-pane .terminal pre { max-height: 26vh; }
 .log-line { display: block; }
 .log-line .log-sql { color: var(--text); }
 .log-line.is-error .log-sql { color: var(--red); }
@@ -239,12 +175,10 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-note { color: var(--overlay-1); }
 
 .dock .pane-head { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
-.dock .note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The dock is showing a snapshot rather than the live string — say so in the
    one place nobody can miss. */
-.dock .as-of { color: var(--peach); font-style: normal; }
+.dock .as-of { color: var(--peach); }
 .dock .terminal pre {
-  padding: 10px;
   max-height: 24vh;
   min-height: 46px;
   line-height: 1.75;
@@ -260,136 +194,35 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
 .swatch { width: 8px; height: 8px; border-radius: 4px; background: var(--mauve); display: inline-block; margin-right: 5px; vertical-align: -1px; }
 
-/* ── Dialogs — native <dialog>; they float, so the pop shadow, not neu ──── */
-
-dialog {
-  padding: 0;
-  color: var(--text);
-  border: 1px solid var(--surface-1);
-  border-radius: var(--pane-radius);
-  background: var(--base);
-  box-shadow: var(--shadow-pop);
-  overflow: hidden;
-  /* Discrete `display`/`overlay` transitions keep the element painted long
-     enough to animate itself out of the top layer. */
-  opacity: 0;
-  transform: translateY(10px) scale(.99);
-  transition: opacity .2s ease, transform .2s ease,
-              overlay .2s ease allow-discrete, display .2s ease allow-discrete;
-}
-dialog[open] { opacity: 1; transform: none; }
-@starting-style { dialog[open] { opacity: 0; transform: translateY(10px) scale(.99); } }
-
-dialog::backdrop {
-  background: var(--neu-dark);
-  backdrop-filter: blur(3px);
-  opacity: 0;
-  transition: opacity .22s ease, overlay .22s ease allow-discrete, display .22s ease allow-discrete;
-}
-dialog[open]::backdrop { opacity: 1; }
-@starting-style { dialog[open]::backdrop { opacity: 0; } }
+/* ── Dialogs — the package dialog.modal / dialog.drawer hosts ───────────── */
 
 /* Column layout so the body — not the dialog — is what scrolls when the sheet
-   is taller than the viewport. */
-.sheet { width: min(680px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; }
-.sheet.is-narrow { width: min(520px, calc(100vw - 24px)); }
-.sheet-body { min-height: 0; padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow: auto; }
-/* Sections keep their intrinsic height; the body scrolls instead of squeezing
-   them (a scroll container's automatic minimum size is zero). */
-.sheet-body > * { flex: none; }
+   is taller than the viewport. Only the open sheet sets display, so the
+   package's closed state (display: none) keeps winning; the discrete display
+   transition holds flex through the exit. */
+.sheet { flex-direction: column; }
+.sheet[open] { display: flex; }
+.sheet-body { min-height: 0; padding: 20px; overflow: auto; }
 .sheet-body textarea { min-height: 96px; }
 
 /* The about sheet is the one editorial surface in the app: it gets room to
-   breathe, a real type scale, and none of the instrument-panel density. */
-.sheet.is-about { width: min(880px, calc(100vw - 48px)); max-height: calc(100dvh - 56px); border-radius: 16px; }
-.is-about .sheet-body { padding: 36px 44px 28px; gap: 0; }
-.is-about .eyebrow { margin-bottom: 16px; }
-.is-about .display-title { margin-bottom: 18px; font-size: clamp(28px, 3.6vw, 40px); }
-.is-about .lede { margin: 0 0 24px; max-width: 70ch; font-size: 14.5px; line-height: 1.66; }
-.is-about .sample { margin-bottom: 24px; padding: 15px 17px; }
-.is-about .about-list { margin-bottom: 22px; padding-left: 19px; gap: 10px; font-size: 13px; line-height: 1.6; }
-.is-about .about-list li { padding-left: 3px; }
-.is-about .about-list::marker, .is-about .about-list li::marker { color: var(--overlay-0); }
+   breathe and a display size that fits a dialog. */
+.sheet.is-about { width: min(880px, calc(100vw - 48px)); border-radius: 16px; }
+.is-about .sheet-body { padding: 36px 44px 28px; }
+.is-about .display-title { font-size: clamp(28px, 3.6vw, 40px); }
+.is-about .sheet-foot { padding: 16px 44px 18px; }
 
-/* Install lines read as terminal input, so they get a carved crust well —
-   borderless, per the inset canon. Each one copies itself, so it also
-   behaves like a button. */
-.install { display: flex; flex-wrap: wrap; gap: 8px; }
-.install-copy {
-  padding: 8px 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--subtext-1);
-  border: 0;
-  border-radius: 10px;
-  background: var(--crust);
-  box-shadow: var(--neu-inset-soft);
-  cursor: pointer;
-  transition: color .16s, background .16s, box-shadow .16s;
-}
-.install-copy .cn-code { color: inherit; font-size: 12px; line-height: 1; }
-.install-copy .prompt { color: var(--overlay-0); }
-.install-copy .copy-mark { display: inline-flex; align-items: center; color: var(--overlay-0); }
-.install-copy:hover { color: var(--text); }
-.install-copy:hover .copy-mark { color: var(--mauve); }
-.install-copy:active { box-shadow: var(--neu-inset); }
-.install-copy.is-copied { color: var(--green); }
-.install-copy.is-copied .copy-mark { color: var(--green); }
-
-/* One CTA, with the links kept subordinate beside it. Divider-only foot. */
-.is-about .sheet-foot {
-  flex: none;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 44px 18px;
-  border-top: 1px solid color-mix(in srgb, var(--surface-1) 55%, transparent);
-}
-.about-links { display: flex; align-items: center; flex-wrap: wrap; gap: 20px; }
-.about-links a {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--overlay-2);
-  font: 700 12px/1 var(--sans);
-  letter-spacing: .02em;
-  text-decoration: none;
-  transition: color .16s;
-}
-.about-links a:hover { color: var(--mauve); }
-.is-about .sheet-foot .btn-primary { min-height: 36px; padding-inline: 26px; margin-left: 0; }
-
-.sample { margin: 0; }
 .sample .tok-tag { color: var(--mauve); font-weight: 700; }
 .sample .tok-name { color: var(--teal); }
 .sample .tok-cell { color: var(--peach); }
-.about-list { margin: 0; padding-left: 17px; display: flex; flex-direction: column; gap: 6px; color: var(--subtext-0); font-size: 12px; line-height: 1.55; }
 .about-list b { color: var(--text); }
 
-/* Side sheets — dialogs pinned to the right edge (the package .drawer recipe
-   is a scrim-based overlay; these ride the native <dialog> machinery). */
-.side-sheet {
-  width: min(420px, calc(100vw - 24px));
-  height: 100dvh;
-  max-height: 100dvh;
-  margin: 0 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--pane-radius) 0 0 var(--pane-radius);
-  transform: translateX(26px);
-}
-.side-sheet[open] { transform: none; }
-@starting-style { .side-sheet[open] { transform: translateX(26px); } }
-.side-sheet .pane-head { min-height: 38px; border-radius: calc(var(--pane-radius) - 1px) 0 0 0; }
+/* Side sheets — the package drawer has square corners, so its heading band
+   drops the panel corner rule. */
+.side-sheet .pane-head { border-radius: 0; }
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
-.drawer-group { display: flex; flex-direction: column; gap: 6px; }
-.drawer-group h3 { margin: 0; }
 
 /* Preset list — the stacked segmented recipe at instrument density. */
-.preset-list { gap: 6px; }
 .preset-list > * { min-height: 0; padding: 8px 10px; flex-direction: column; align-items: stretch; gap: 3px; }
 .preset-list small { line-height: 1.45; overflow-wrap: anywhere; }
 /* SQL inside a preset title takes the mono voice; the slight size trim keeps
@@ -399,43 +232,13 @@ dialog[open]::backdrop { opacity: 1; }
 /* ── The SQL reference ──────────────────────────────────────────────────── */
 
 /* Statements are long; the reference gets more room than the examples. */
-.side-sheet.is-wide { width: min(560px, calc(100vw - 24px)); }
+.side-sheet.is-wide { width: min(560px, calc(100vw - 40px)); }
 
 .drawer-search { flex: none; padding: 10px 12px 0; }
 
-/* Prose is prose: only the syntax itself, and the chrome around it, stay mono. */
-.ref-blurb { margin: 0; color: var(--subtext-0); font: 400 12px/1.5 var(--sans); }
-.ref-blurb.is-foot { color: var(--overlay-0); }
-.ref-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-.ref-list li { display: flex; flex-direction: column; gap: 3px; }
-
-/* The syntax line is a carved code well, like the console it fills. */
-.ref-syntax {
-  width: 100%;
-  padding: 7px 9px;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  color: var(--subtext-1);
-  border: 0;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--crust) 48%, var(--mantle));
-  box-shadow: var(--neu-inset-soft);
-  font: 600 12px/1.65 var(--mono);
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-.ref-syntax code { min-width: 0; font: inherit; color: inherit; }
-button.ref-syntax { cursor: pointer; transition: background .16s, box-shadow .16s, color .16s; }
-button.ref-syntax:hover { background: color-mix(in srgb, var(--mauve) 7%, var(--base)); }
-button.ref-syntax:active { box-shadow: var(--neu-inset); }
-.ref-use { margin-left: auto; flex: 0 0 auto; color: var(--overlay-0); }
-button.ref-syntax:hover .ref-use { color: var(--mauve); }
-.ref-note { margin: 0 0 0 2px; color: var(--overlay-2); font: 400 12px/1.5 var(--sans); }
-
 /* What the dialect refuses gets the dashed, unfilled treatment. */
-.ref-tags { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
 .ref-tags li {
+  margin: 0;
   padding: 3px 8px;
   color: var(--overlay-1);
   border: 1px dashed var(--surface-1);
@@ -448,29 +251,6 @@ button.ref-syntax:hover .ref-use { color: var(--mauve); }
 .sql-val { color: var(--peach); }
 /* Identifiers, operators and punctuation stay in the surface's own ink. */
 .sql-plain { color: inherit; }
-
-/* Divider-only foot, per the footer canon. */
-.drawer-foot {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--surface-1) 55%, transparent);
-}
-.drawer-foot span { color: var(--overlay-0); font: 400 12px/1 var(--sans); }
-.drawer-foot a {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--overlay-2);
-  font: 700 12px/1 var(--sans);
-  letter-spacing: .02em;
-  text-decoration: none;
-  transition: color .16s;
-}
-.drawer-foot a:hover { color: var(--mauve); }
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
@@ -486,11 +266,7 @@ button.ref-syntax:hover .ref-use { color: var(--mauve); }
   body { overflow: auto; }
   .sheet.is-about { width: calc(100vw - 20px); }
   .is-about .sheet-body { padding: 28px 24px 24px; }
-  .is-about .lede { margin-bottom: 22px; font-size: 14.5px; }
-  .is-about .sample, .is-about .about-list { margin-bottom: 22px; }
-  .is-about .sheet-foot { flex-direction: column; align-items: stretch; gap: 16px; padding: 18px 24px 20px; }
-  .about-links { gap: 16px; justify-content: space-between; }
-  .is-about .sheet-foot .btn-primary { width: 100%; }
+  .is-about .sheet-foot { padding: 18px 24px 20px; }
   .app-shell { height: auto; min-height: 100dvh; }
   .workbench { grid-template-rows: auto auto auto; }
   .scan-pane, .result-pane { max-height: none; }

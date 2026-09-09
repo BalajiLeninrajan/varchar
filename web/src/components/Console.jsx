@@ -19,7 +19,7 @@ export function Console({ sql, onSql, onRun, onSeed }) {
         </button>
         <span class="cn-meta">⌘/ctrl + ⏎</span>
       </PaneHead>
-      <div class="pane-body console-body">
+      <div class="pane-body panel-body console-body">
         <textarea
           ref={field}
           id="sql"
@@ -39,7 +39,7 @@ export function Console({ sql, onSql, onRun, onSeed }) {
             }
           }}
         />
-        <div class="button-row is-end">
+        <div class="cn-row cn-wrap cn-end">
           <button class="btn btn-ghost" onClick={onSeed}>
             seed demo data
           </button>
