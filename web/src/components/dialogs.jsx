@@ -47,12 +47,12 @@ export function AboutDialog({ open, onClose }) {
         </pre>
         <ul class="about-list cn-mb-24">
           <li>
-            <b>Run</b> anything in the console. Statements are split on <code class="cn-code-inline">;</code> and executed one at a
+            <b>Run</b> anything in the input at the top. Statements are split on <code class="cn-code-inline">;</code> and executed one at a
             time.
           </li>
           <li>
-            Every <code class="cn-code-inline">SELECT</code> shows the pattern it compiled to, and highlights the bytes it matched in
-            the string at the bottom.
+            Every <code class="cn-code-inline">SELECT</code> shows the pattern it compiled to, and lights the records it matched on
+            the tape.
           </li>
           <li>The string is the whole database. Copy it, save it, or import one back.</li>
         </ul>
@@ -78,7 +78,7 @@ export function AboutDialog({ open, onClose }) {
           </a>
         </nav>
         <button class="btn btn-primary is-lg" onClick={onClose}>
-          start
+          close
         </button>
       </footer>
     </Modal>

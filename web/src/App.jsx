@@ -1,27 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 
-import { Console } from "./components/Console.jsx";
+import { Answer, ReadHead } from "./components/Answer.jsx";
+import { Ask } from "./components/Ask.jsx";
 import { LogPane } from "./components/LogPane.jsx";
-import { ResultPane } from "./components/ResultPane.jsx";
-import { ScanPane } from "./components/ScanPane.jsx";
-import { StringDock } from "./components/StringDock.jsx";
-import { Topbar } from "./components/Topbar.jsx";
+import { Printout } from "./components/Printout.jsx";
+import { Tape } from "./components/Tape.jsx";
+import { Footer, Topbar } from "./components/Topbar.jsx";
 import { AboutDialog, ImportDialog, PresetsDrawer, ReferenceDrawer } from "./components/dialogs.jsx";
 import { Banner } from "./components/ui.jsx";
-import { byteLength } from "./lib/bytes.js";
+import { byteLength, encode } from "./lib/bytes.js";
 import { createDb, describe, exec, load, splitStatements } from "./lib/db.js";
 import { csvToStatements } from "./lib/csv.js";
 import { useMountTransition } from "./lib/transition.js";
 import { DEMO } from "./lib/presets.js";
+import { readScan, splitRecords } from "./lib/tape.js";
 
 const CSV_ROW_LIMIT = 500;
 const FIRST_QUERY = "SELECT name, email FROM users WHERE active = TRUE";
-
-const SCAN_PLACEHOLDER = {
-  title: "No scan yet",
-  body: "Run a SELECT and the pattern the planner compiled appears here, with every byte it matched highlighted in the string below.",
-};
-const RESULT_PLACEHOLDER = { title: "Nothing run yet", body: "Rows, affected counts and errors land here." };
 
 export function App() {
   const db = useRef(null);
@@ -31,17 +26,18 @@ export function App() {
   const [bootError, setBootError] = useState(null);
   const [blob, setBlob] = useState("");
   const [outcome, setOutcome] = useState(null);
-  const [scan, setScan] = useState(null);
   const [blobBefore, setBlobBefore] = useState(null);
-  const [explain, setExplain] = useState(true);
-  const [current, setCurrent] = useState(0);
+  const [showBefore, setShowBefore] = useState(true);
   const [entries, setEntries] = useState([]);
   const [sql, setSql] = useState(FIRST_QUERY);
   const [logOpen, setLogOpen] = useState(false);
-  const [dockOpen, setDockOpen] = useState(true);
-  const [dialog, setDialog] = useState("about");
-  const [scanPlaceholder, setScanPlaceholder] = useState(SCAN_PLACEHOLDER);
-  const [resultPlaceholder, setResultPlaceholder] = useState(RESULT_PLACEHOLDER);
+  const [dialog, setDialog] = useState(null);
+  // Each run remounts the tape so the head crosses it once more. The pointed
+  // row starts on the first one, and the parked head only glides between
+  // rows once the reader has pointed at one.
+  const [runId, setRunId] = useState(0);
+  const [pointed, setPointed] = useState(0);
+  const [live, setLive] = useState(false);
 
   const write = useCallback((entry) => {
     nextId.current += 1;
@@ -50,18 +46,6 @@ export function App() {
       { id: nextId.current, time: new Date().toLocaleTimeString([], { hour12: false }), ...entry },
     ]);
   }, []);
-
-  // The engine is booted exactly once for the lifetime of the tab.
-  useEffect(() => {
-    createDb()
-      .then((instance) => {
-        db.current = instance;
-        setBlob(instance.dump());
-        setBooted(true);
-        write({ text: "varchar engine ready. The empty database is the three bytes in the dock", tone: "ok" });
-      })
-      .catch((error) => setBootError(String(error)));
-  }, [write]);
 
   const logStatement = useCallback(
     (statement, envelope) =>
@@ -74,25 +58,17 @@ export function App() {
     [write],
   );
 
-  /** Applies one envelope to the panes: string, highlights, scan and result. */
+  /** Shows one envelope: the string, the scan, and the rows. */
   const settle = useCallback((statement, envelope) => {
     setBlob(envelope.blob);
     // A mutation's ranges index the string it read, so that one is kept
     // alongside the live blob for as long as its scan is on screen.
     setBlobBefore(envelope.ok ? (envelope.blobBefore ?? null) : null);
+    setShowBefore(true);
     setOutcome({ statement, envelope });
-    setScan(envelope.ok ? (envelope.scan ?? null) : null);
-    setCurrent(0);
-    if (envelope.ok && !envelope.scan) {
-      // A statement with no scan leaves nothing to highlight, so the pattern
-      // that drew the previous highlights cannot stay on screen either.
-      setScanPlaceholder({
-        title: "No scan for this statement",
-        body: "Only a SELECT compiles to a pattern. Run one and every byte it matches lights up in the string below.",
-      });
-    } else if (!envelope.ok) {
-      setScanPlaceholder({ title: "No scan", body: "The statement was rejected before anything was scanned." });
-    }
+    setRunId((id) => id + 1);
+    setPointed(0);
+    setLive(false);
   }, []);
 
   /** Runs statements in order, stopping at the first failure. */
@@ -115,36 +91,41 @@ export function App() {
     [logStatement, settle, write],
   );
 
+  // The engine boots once per tab, seeded with the demo data and answering
+  // the first example, so the first screen already shows a scan.
+  useEffect(() => {
+    createDb()
+      .then((instance) => {
+        db.current = instance;
+        setBooted(true);
+        write({ text: "varchar engine ready", tone: "ok" });
+        run(DEMO, { note: "seeding the demo schema and data" });
+        run(FIRST_QUERY);
+      })
+      .catch((error) => setBootError(String(error)));
+  }, [write, run]);
+
   const onDrop = useCallback(() => {
     db.current.reset();
     setBlob(db.current.dump());
+    setBlobBefore(null);
     setOutcome(null);
-    setScan(null);
-    setCurrent(0);
-    setScanPlaceholder(SCAN_PLACEHOLDER);
-    setResultPlaceholder({ title: "Empty", body: "Nothing left. Seed the demo data to start again." });
+    setRunId((id) => id + 1);
     write({ text: "database dropped, back to the three-byte header", tone: "note" });
   }, [write]);
 
   const onLoadBlob = useCallback(
     (text) => {
       const envelope = load(db.current, text.trim());
-      setBlob(envelope.blob);
-      setScan(null);
-      setCurrent(0);
       if (envelope.ok) {
         write({ text: `loaded ${byteLength(text.trim())} bytes into the database`, tone: "ok" });
         setDialog(null);
-        setScanPlaceholder({
-          title: "No scan yet",
-          body: "Run a SELECT against the imported data to see its pattern.",
-        });
       } else {
         write({ text: `import rejected: ${envelope.error.message}`, tone: "err" });
       }
-      setOutcome({ statement: text.slice(0, 200), envelope });
+      settle(text.slice(0, 200), envelope);
     },
-    [write],
+    [settle, write],
   );
 
   const onImportCsv = useCallback(
@@ -166,8 +147,8 @@ export function App() {
       }
       setDialog(null);
       run(plan.statements);
-      // The generated DDL and inserts are in the log; leave the console holding
-      // something the reader can actually run against the new table.
+      // The generated DDL and inserts are in the log. Leave the input holding
+      // something the reader can run against the new table.
       setSql(`SELECT * FROM ${plan.table}`);
     },
     [run, write],
@@ -183,86 +164,115 @@ export function App() {
   }, [blob]);
 
   const log = useMountTransition(logOpen);
+  // The log opens under the printout, so bring it into view.
+  useEffect(() => {
+    if (logOpen) document.getElementById("log-pane")?.scrollIntoView({ block: "nearest" });
+  }, [logOpen]);
 
-  const stats = useMemo(
-    () => ({
-      bytes: byteLength(blob),
-      tables: (blob.match(/~S\|/g) || []).length,
-      rows: (blob.match(/~R\|/g) || []).length,
-    }),
-    [blob],
-  );
+  // What the tape shows. A mutation's scan indexes the string before the
+  // write, so its highlights are drawn over that string or not at all.
+  const envelope = outcome?.envelope;
+  const rawScan = envelope?.ok ? (envelope.scan ?? null) : null;
+  const beforeWrite = rawScan?.appliesTo === "before";
+  const canShowBefore = beforeWrite && typeof blobBefore === "string";
+  const historic = canShowBefore && showBefore;
+  const shown = historic ? blobBefore : blob;
+  const scan = beforeWrite && !historic ? null : rawScan;
+
+  const reading = useMemo(() => {
+    const bytes = encode(shown);
+    const records = splitRecords(bytes);
+    const result = envelope?.kind === "rows" ? envelope.result : null;
+    const { state, rows } = readScan(records, scan, result);
+    let lit = 0;
+    let litBytes = 0;
+    let tested = 0;
+    records.forEach((record, index) => {
+      if (state[index] === "lit" || state[index] === "half") {
+        lit += 1;
+        litBytes += record.end - record.at;
+      }
+      if (record.kind === "row" && scan?.sources.includes(record.table)) tested += 1;
+    });
+    return { records, state, rows, scan, total: bytes.length, lit, litBytes, tested, historic };
+  }, [shown, scan, envelope, historic]);
+
+  const hasDemo = blob.includes("~S|users|") && blob.includes("~S|posts|");
 
   if (bootError) {
     return (
-      <div class="app-shell" style={{ padding: "24px" }}>
+      <div class="app-shell cn-p-24">
         <Banner tone="red">The varchar engine failed to load: {bootError}</Banner>
       </div>
     );
   }
 
   return (
-    <div class="app-shell is-fixed">
+    <div class="app-shell">
       <Topbar
-        stats={stats}
         logOpen={logOpen}
         onToggleLog={() => setLogOpen((open) => !open)}
-        onOpenPresets={() => setDialog("presets")}
         onOpenReference={() => setDialog("reference")}
         onOpenImport={() => setDialog("import")}
         onOpenAbout={() => setDialog("about")}
       />
 
-      <main class="workbench">
-        <Console
+      <main class="page-main page-enter vc-main">
+        <Ask
           sql={sql}
           onSql={setSql}
           onRun={() => run(sql)}
+          hasDemo={hasDemo}
           onSeed={() => {
             run(DEMO, { note: "seeding the demo schema and data" });
             setSql(FIRST_QUERY);
           }}
+          onExample={(statement) => {
+            setSql(statement);
+            run(statement);
+          }}
+          onMore={() => setDialog("presets")}
         />
-        <ScanPane scan={scan} placeholder={scanPlaceholder} />
-        <ResultPane outcome={booted ? outcome : null} placeholder={resultPlaceholder} />
+        <Answer booted={booted} outcome={outcome} reading={reading} />
+        <ReadHead outcome={outcome} reading={reading} />
+        <Tape
+          reading={reading}
+          runId={runId}
+          pointed={reading.rows?.[pointed] ?? []}
+          live={live}
+          historic={historic}
+          onHistoric={canShowBefore ? () => setShowBefore((on) => !on) : null}
+          blob={blob}
+          onSave={onSave}
+          onDrop={onDrop}
+        />
+        <Printout
+          booted={booted}
+          outcome={outcome}
+          reading={reading}
+          onPoint={(index) => {
+            setLive(true);
+            setPointed(index);
+          }}
+        />
+        {log.mounted ? (
+          <LogPane
+            leaving={log.leaving}
+            entries={entries}
+            onClear={() => setEntries([])}
+            onClose={() => setLogOpen(false)}
+          />
+        ) : null}
       </main>
 
-      {log.mounted ? (
-        <LogPane
-          leaving={log.leaving}
-          entries={entries}
-          onClear={() => setEntries([])}
-          onClose={() => setLogOpen(false)}
-        />
-      ) : null}
-
-      <StringDock
-        blob={blob}
-        blobBefore={blobBefore}
-        scan={scan}
-        explain={explain}
-        onExplain={() => {
-          setDockOpen(true);
-          setCurrent(0);
-          setExplain((on) => !on);
-        }}
-        current={current}
-        onCurrent={(index) => {
-          setDockOpen(true);
-          setCurrent(index);
-        }}
-        open={dockOpen}
-        onToggle={() => setDockOpen((open) => !open)}
-        onSave={onSave}
-        onDrop={onDrop}
-      />
+      <Footer />
 
       <AboutDialog open={dialog === "about"} onClose={() => setDialog(null)} />
       <PresetsDrawer
         open={dialog === "presets"}
         onClose={() => setDialog(null)}
         onPick={(preset) => {
-          // The console is loaded, not fired: the reader presses run.
+          // The input is loaded, not fired: the reader presses run.
           setSql(preset.sql.join(";\n"));
           setDialog(null);
         }}

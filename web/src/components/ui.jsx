@@ -35,16 +35,6 @@ export function Marked({ text }) {
     .map((part, i) => (i % 2 ? <code key={i} class="cn-code-inline">{part}</code> : part));
 }
 
-export function Chip({ tone, title, class: extra = "", children }) {
-  // A toned chip is the package status tag, tinted through the cn-tone-* setters.
-  const className = `${tone ? `tag cn-tone-${tone}` : "chip"} ${extra}`.trim();
-  return (
-    <span class={className} title={title}>
-      {children}
-    </span>
-  );
-}
-
 export function Banner({ tone = "peach", children }) {
   return (
     <div class={`banner cn-tone-${tone}`}>
@@ -53,9 +43,10 @@ export function Banner({ tone = "peach", children }) {
   );
 }
 
-export function EmptyState({ title, children }) {
+/** `fill` stretches it over the pane or drawer it sits in. */
+export function EmptyState({ title, fill = true, children }) {
   return (
-    <div class="empty-state is-fill">
+    <div class={`empty-state${fill ? " is-fill" : ""}`}>
       <strong>{title}</strong>
       <span>{children}</span>
     </div>
@@ -165,6 +156,7 @@ export function Modal({ open, onClose, className = "", children }) {
     <dialog
       ref={ref}
       class={className}
+      data-density="compact"
       onClose={onClose}
       onCancel={onClose}
       onMouseDown={press}
