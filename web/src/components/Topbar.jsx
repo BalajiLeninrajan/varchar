@@ -51,8 +51,9 @@ export function Topbar({
           import
         </button>
         <button
-          class={"btn btn-ghost is-sm"}
-          aria-pressed={String(logOpen)}
+          class="btn btn-ghost is-sm"
+          aria-expanded={String(logOpen)}
+          aria-controls="log-pane"
           onClick={onToggleLog}
         >
           log
