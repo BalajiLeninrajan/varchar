@@ -58,18 +58,17 @@ export function StringDock({
           ) : null}
         </h2>
         <div class="cn-row cn-gap-4 cn-min-0">
-          <span class="cn-meta cn-truncate" id="blob-note">
-            {total !== 0 && (
-              <>
-                <span class="swatch" />
+          {total !== 0 && (
+            <span class="legend-item cn-tone-mauve cn-min-0" id="blob-note">
+              <span class="cn-truncate">
                 {total.toLocaleString()} byte range{total === 1 ? "" : "s"}{" "}
                 matched
                 {drawn < total
                   ? ` · first ${drawn.toLocaleString()} shown`
                   : ""}
-              </>
-            )}
-          </span>
+              </span>
+            </span>
+          )}
           {scan?.matches?.length ? (
             <button
               class={"btn btn-ghost is-sm"}

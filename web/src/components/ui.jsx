@@ -32,12 +32,12 @@ export function PaneHead({ title, id, children }) {
 export function Marked({ text }) {
   return text
     .split("`")
-    .map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+    .map((part, i) => (i % 2 ? <code key={i} class="cn-code-inline">{part}</code> : part));
 }
 
 export function Chip({ tone, title, class: extra = "", children }) {
-  // Tint rides the package --tone contract prop via the cn-tone-* setters.
-  const className = `${tone ? `chip is-toned cn-tone-${tone}` : "chip"} ${extra}`.trim();
+  // A toned chip is the package status tag, tinted through the cn-tone-* setters.
+  const className = `${tone ? `tag cn-tone-${tone}` : "chip"} ${extra}`.trim();
   return (
     <span class={className} title={title}>
       {children}

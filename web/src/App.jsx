@@ -202,7 +202,7 @@ export function App() {
   }
 
   return (
-    <div class="app-shell">
+    <div class="app-shell is-fixed">
       <Topbar
         stats={stats}
         logOpen={logOpen}
