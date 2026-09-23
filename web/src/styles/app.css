@@ -22,7 +22,7 @@
 
 /* Markup composes "pane panel": the panel recipe paints the surface, this
    class only turns it into a flex column that clips its own scrolling. The
-   heading band is the package panel-header with a cn-microlabel title. */
+   heading band is the package panel-header with a plain h2 title. */
 .pane {
   min-height: 0;
   min-width: 0;

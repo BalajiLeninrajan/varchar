@@ -61,14 +61,7 @@ function ErrorView({ statement, error }) {
       {error.detail && typeof error.detail.start === "number" ? (
         <Offender statement={statement} detail={error.detail} />
       ) : null}
-      <ul class="cn-list-none cn-stack cn-gap-8">
-        <li class="cn-row cn-top cn-mt-0">
-          <span class="mark" style={{ "--accent": "var(--green)" }}>
-            ✓
-          </span>
-          <div>The database string is unchanged, byte for byte. A failed statement never touches it.</div>
-        </li>
-      </ul>
+      <p class="cn-meta cn-m-0">The database string is unchanged, byte for byte. A failed statement never touches it.</p>
     </div>
   );
 }
@@ -93,11 +86,6 @@ export function ResultPane({ outcome, placeholder }) {
   if (outcome) {
     const { statement, envelope } = outcome;
     if (!envelope.ok) {
-      chips = (
-        <Chip tone="red">
-          <b>{envelope.error.kind}</b> error
-        </Chip>
-      );
       body = <ErrorView statement={statement} error={envelope.error} />;
     } else if (envelope.kind === "rows") {
       const { columns, rows } = envelope.result;
@@ -125,7 +113,7 @@ export function ResultPane({ outcome, placeholder }) {
 
   return (
     <Pane className="result-pane" aria-labelledby="result-heading">
-      <PaneHead title="result" id="result-heading">
+      <PaneHead title="Result" id="result-heading">
         {chips}
       </PaneHead>
       <div class="pane-body scroll-well">{body}</div>

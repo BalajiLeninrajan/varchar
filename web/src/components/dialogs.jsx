@@ -89,8 +89,8 @@ export function PresetsDrawer({ open, onClose, onPick }) {
   const [active, setActive] = useState(null);
   return (
     <Modal open={open} onClose={onClose} className="drawer side-sheet">
-      <header>
-        <h2 class="cn-microlabel">examples</h2>
+      <header class="panel-header">
+        <h2>Examples</h2>
         <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>
@@ -98,7 +98,7 @@ export function PresetsDrawer({ open, onClose, onPick }) {
       <div class="drawer-body scroll-well">
         {GROUPS.map((group) => (
           <div class="cn-stack cn-gap-8" key={group.title}>
-            <h3 class="cn-microlabel cn-m-0">{group.title}</h3>
+            <h3 class="cn-ui cn-m-0">{group.title}</h3>
             <div class="preset-list segmented is-stacked cn-gap-8">
               {group.presets.map((preset) => (
                 <button
@@ -164,8 +164,8 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
 
   return (
     <Modal open={open} onClose={onClose} className="drawer side-sheet is-wide">
-      <header>
-        <h2 class="cn-microlabel">sql reference</h2>
+      <header class="panel-header">
+        <h2>SQL reference</h2>
         <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>
@@ -192,7 +192,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
         ) : null}
         {sections.map((section) => (
           <section class="cn-stack cn-gap-8" key={section.title}>
-            <h3 class="cn-microlabel cn-m-0">{section.title}</h3>
+            <h3 class="cn-ui cn-m-0">{section.title}</h3>
             {section.blurb ? <p class="cn-meta cn-m-0">{section.blurb}</p> : null}
             {section.entries?.length ? (
               <ul class="cn-list-none cn-stack cn-gap-8">
@@ -259,8 +259,8 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
 
   return (
     <Modal open={open} onClose={onClose} className="modal sheet">
-      <header>
-        <h2 class="cn-microlabel">import</h2>
+      <header class="panel-header">
+        <h2>Import</h2>
         <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>

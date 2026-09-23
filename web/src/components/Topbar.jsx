@@ -32,14 +32,13 @@ export function Topbar({
         var<em>char</em>
       </span>
       <div class="cn-row cn-wrap cn-end cn-gap-4 cn-min-0">
-        {/* Stat pills are numeric readouts, not labels: the mono meta voice. */}
-        <Chip class="cn-code-meta cn-gap-4" title="Length of the encoded string in bytes">
+        <Chip class="cn-gap-4" title="Length of the encoded string in bytes">
           <b>{stats.bytes.toLocaleString()}</b>B
         </Chip>
-        <Chip class="cn-code-meta cn-gap-4" title="~S records in the string">
+        <Chip class="cn-gap-4" title="~S records in the string">
           <b>{stats.tables}</b>tbl
         </Chip>
-        <Chip class="cn-code-meta cn-gap-4" title="~R records in the string">
+        <Chip class="cn-gap-4" title="~R records in the string">
           <b>{stats.rows}</b>rows
         </Chip>
         <button class="btn btn-ghost is-sm" onClick={onOpenPresets}>

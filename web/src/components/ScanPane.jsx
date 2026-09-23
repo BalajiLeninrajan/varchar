@@ -5,7 +5,7 @@ export function ScanPane({ scan, placeholder }) {
   if (!scan) {
     return (
       <Pane className="scan-pane" aria-labelledby="scan-heading">
-        <PaneHead title="the regex" id="scan-heading" />
+        <PaneHead title="The regex" id="scan-heading" />
         <div class="pane-body panel-body scroll-well">
           <EmptyState title={placeholder.title}>{placeholder.body}</EmptyState>
         </div>
@@ -17,7 +17,7 @@ export function ScanPane({ scan, placeholder }) {
 
   return (
     <Pane className="scan-pane" aria-labelledby="scan-heading">
-      <PaneHead title="the regex" id="scan-heading">
+      <PaneHead title="The regex" id="scan-heading">
         {scan.exact ? (
           <Chip tone="green" title="Every predicate is in the pattern: the matches are the result rows">
             <b>exact</b> filter

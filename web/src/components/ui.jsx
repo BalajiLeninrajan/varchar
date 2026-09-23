@@ -19,10 +19,10 @@ export function Pane({ className = "", children, ...rest }) {
 export function PaneHead({ title, id, children }) {
   return (
     <div class="panel-header">
-      <h2 id={id} class="cn-microlabel cn-nowrap">
+      <h2 id={id} class="cn-nowrap">
         {title}
       </h2>
-      <div class="cn-row cn-gap-4 cn-min-0">{children}</div>
+      {children ? <div class="band-actions">{children}</div> : null}
     </div>
   );
 }

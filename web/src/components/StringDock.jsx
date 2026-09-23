@@ -51,13 +51,13 @@ export function StringDock({
       aria-labelledby="dock-heading"
     >
       <div class="panel-header">
-        <h2 id="dock-heading" class="cn-microlabel cn-nowrap">
-          the database string
+        <h2 id="dock-heading" class="cn-nowrap">
+          The database string
           {explain && historic ? (
-            <em class="as-of"> · before the write</em>
+            <span class="as-of"> · before the write</span>
           ) : null}
         </h2>
-        <div class="cn-row cn-gap-4 cn-min-0">
+        <div class="band-actions">
           {total !== 0 && (
             <span class="legend-item cn-tone-mauve cn-min-0" id="blob-note">
               <span class="cn-truncate">
@@ -106,7 +106,7 @@ export function StringDock({
               </button>
             </span>
           ) : null}
-          <span class="head-rule" />
+          {total !== 0 || scan?.matches?.length ? <span class="head-rule" /> : null}
           <button class="btn btn-ghost is-sm is-danger" onClick={onDrop}>
             <Icon id="trash" /> drop all
           </button>
