@@ -18,7 +18,7 @@ export function Pane({ className = "", children, ...rest }) {
 
 export function PaneHead({ title, id, children }) {
   return (
-    <div class="pane-head panel-heading">
+    <div class="panel-header">
       <h2 id={id} class="cn-microlabel cn-nowrap">
         {title}
       </h2>
@@ -73,7 +73,7 @@ export function CopyButton({ text, label = "copy", icon }) {
 
   return (
     <button
-      class="btn-flat"
+      class="btn btn-ghost is-sm"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -111,7 +111,7 @@ export function CopyCommand({ command }) {
       </code>
       <button
         type="button"
-        class="btn-icon command-copy"
+        class="btn is-icon command-copy"
         aria-label="Copy to clipboard"
         title="Copy to clipboard"
         onClick={async () => {

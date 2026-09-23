@@ -9,16 +9,15 @@ export function AboutDialog({ open, onClose }) {
   return (
     <Modal open={open} onClose={onClose} className="modal sheet is-about">
       <div class="sheet-body">
-        <p class="eyebrow cn-mb-16">a really dumb SQL database</p>
         <h1 class="display-title cn-mb-16">
           The whole database is <em>one string</em>.
         </h1>
-        <p class="lede cn-mt-0 cn-mb-22">
+        <p class="lede cn-mt-0 cn-mb-24">
           Schemas, constraints, sequence state and every row live in a single UTF-8 <code>String</code>, and
           every <code>SELECT</code> is a regular expression scanned across it. This page runs the real engine
           compiled to WebAssembly: nothing leaves your tab, and nothing survives a reload.
         </p>
-        <pre class="sample codeblock cn-mt-0 cn-mb-22">
+        <pre class="sample codeblock cn-mt-0 cn-mb-24">
           <span class="tok-tag">V2;</span>
           {"\n"}
           <span class="tok-tag">~S|</span>
@@ -46,7 +45,7 @@ export function AboutDialog({ open, onClose }) {
           <span class="tok-cell">B1</span>
           <span class="tok-tag">;</span>
         </pre>
-        <ul class="about-list cn-mb-22">
+        <ul class="about-list cn-mb-24">
           <li>
             <b>Run</b> anything in the console. Statements are split on <code>;</code> and executed one at a
             time.
@@ -64,7 +63,7 @@ export function AboutDialog({ open, onClose }) {
       </div>
       {/* Outside the scrolling body so the CTA is reachable on a short screen. */}
       <footer class="sheet-foot panel-footer">
-        <nav class="cn-cluster cn-gap-22">
+        <nav class="cn-cluster cn-gap-24">
           <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener">
             <Icon id="github" size={13} /> GitHub
           </a>
@@ -90,12 +89,12 @@ export function PresetsDrawer({ open, onClose, onPick }) {
   const [active, setActive] = useState(null);
   return (
     <Modal open={open} onClose={onClose} className="drawer side-sheet">
-      <div class="pane-head panel-heading">
+      <header>
         <h2 class="cn-microlabel">examples</h2>
-        <button class="btn-flat" onClick={onClose}>
+        <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>
-      </div>
+      </header>
       <div class="drawer-body scroll-well">
         {GROUPS.map((group) => (
           <div class="cn-stack cn-gap-8" key={group.title}>
@@ -105,7 +104,7 @@ export function PresetsDrawer({ open, onClose, onPick }) {
                 <button
                   key={preset.id}
                   type="button"
-                  class={active === preset.id ? "active" : ""}
+                  aria-pressed={String(active === preset.id)}
                   onClick={() => {
                     setActive(preset.id);
                     onPick(preset);
@@ -165,12 +164,12 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
 
   return (
     <Modal open={open} onClose={onClose} className="drawer side-sheet is-wide">
-      <div class="pane-head panel-heading">
+      <header>
         <h2 class="cn-microlabel">sql reference</h2>
-        <button class="btn-flat" onClick={onClose}>
+        <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>
-      </div>
+      </header>
       <div class="drawer-search">
         <input
           type="search"
@@ -258,12 +257,12 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
 
   return (
     <Modal open={open} onClose={onClose} className="modal sheet">
-      <div class="pane-head panel-heading">
+      <header>
         <h2 class="cn-microlabel">import</h2>
-        <button class="btn-flat" onClick={onClose}>
+        <button class="btn btn-ghost is-sm" onClick={onClose}>
           close
         </button>
-      </div>
+      </header>
       <div class="sheet-body cn-stack cn-gap-16">
         <div class="field">
           <label for="blob-input">paste an encoded database string</label>

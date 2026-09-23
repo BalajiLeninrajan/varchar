@@ -50,7 +50,7 @@ export function StringDock({
       className={`dock${open ? "" : " is-collapsed"}`}
       aria-labelledby="dock-heading"
     >
-      <div class="pane-head panel-heading">
+      <div class="panel-header">
         <h2 id="dock-heading" class="cn-microlabel cn-nowrap">
           the database string
           {explain && historic ? (
@@ -72,7 +72,7 @@ export function StringDock({
           </span>
           {scan?.matches?.length ? (
             <button
-              class={`btn-flat${explain ? " active" : ""}`}
+              class={"btn btn-ghost is-sm"}
               aria-pressed={String(explain)}
               title={
                 historic
@@ -87,7 +87,7 @@ export function StringDock({
           {drawn > 0 ? (
             <span class="match-nav cn-row cn-gap-4">
               <button
-                class="btn-flat"
+                class="btn btn-ghost is-sm"
                 onClick={() => step(-1)}
                 title="Previous match"
                 aria-label="Previous match"
@@ -98,7 +98,7 @@ export function StringDock({
                 {current + 1} / {drawn}
               </output>
               <button
-                class="btn-flat"
+                class="btn btn-ghost is-sm"
                 onClick={() => step(1)}
                 title="Next match"
                 aria-label="Next match"
@@ -108,16 +108,16 @@ export function StringDock({
             </span>
           ) : null}
           <span class="head-rule" />
-          <button class="btn-flat is-danger" onClick={onDrop}>
+          <button class="btn btn-ghost is-sm is-danger" onClick={onDrop}>
             <Icon id="trash" /> drop all
           </button>
           <span class="head-rule" />
           <CopyButton text={blob} icon="copy" />
-          <button class="btn-flat" onClick={onSave}>
+          <button class="btn btn-ghost is-sm" onClick={onSave}>
             <Icon id="download" /> save
           </button>
           <button
-            class="btn-flat"
+            class="btn btn-ghost is-sm"
             aria-expanded={String(open)}
             title={open ? "Collapse" : "Expand"}
             onClick={onToggle}

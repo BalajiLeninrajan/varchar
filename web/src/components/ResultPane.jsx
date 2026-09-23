@@ -10,11 +10,11 @@ const CELL = {
 
 function Table({ columns, rows }) {
   return (
-    <table class="table-neu">
+    <table class="data-table is-sticky-head">
       <thead>
         <tr>
           {columns.map((column, index) => (
-            <th key={index} class="cn-nowrap cn-sticky-top">
+            <th key={index} class="cn-nowrap">
               {column.label}
               <small class="cn-microlabel cn-block cn-mt-4">
                 {column.type}
@@ -63,7 +63,7 @@ function ErrorView({ statement, error }) {
       ) : null}
       <ul class="cn-list-none cn-stack cn-gap-8">
         <li class="cn-row cn-top cn-mt-0">
-          <span class="mark-solid" style={{ "--accent": "var(--green)" }}>
+          <span class="mark" style={{ "--accent": "var(--green)" }}>
             ✓
           </span>
           <div>The database string is unchanged, byte for byte. A failed statement never touches it.</div>

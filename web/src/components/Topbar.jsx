@@ -26,7 +26,7 @@ export function Topbar({
   return (
     <header class="appbar topbar is-compact is-split">
       <span class="wordmark">
-        <span class="mark-solid">
+        <span class="mark">
           <Icon id="mark" size={13} />
         </span>
         var<em>char</em>
@@ -42,29 +42,29 @@ export function Topbar({
         <Chip class="cn-code-meta cn-gap-4" title="~R records in the string">
           <b>{stats.rows}</b>rows
         </Chip>
-        <button class="btn-flat" onClick={onOpenPresets}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenPresets}>
           examples
         </button>
-        <button class="btn-flat" onClick={onOpenReference}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenReference}>
           sql
         </button>
-        <button class="btn-flat" onClick={onOpenImport}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenImport}>
           import
         </button>
         <button
-          class={`btn-flat${logOpen ? " active" : ""}`}
-          aria-expanded={String(logOpen)}
+          class={"btn btn-ghost is-sm"}
+          aria-pressed={String(logOpen)}
           onClick={onToggleLog}
         >
           log
         </button>
-        <button class="btn-flat" onClick={onOpenAbout}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenAbout}>
           about
         </button>
         {LINKS.map((link) => (
           <a
             key={link.id}
-            class="btn-flat"
+            class="btn btn-ghost is-sm"
             href={link.href}
             title={link.title}
             target="_blank"

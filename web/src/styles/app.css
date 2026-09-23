@@ -3,9 +3,9 @@
    cn.recipes / cn.utilities), so every rule here wins without !important.
    Only genuinely app-specific styling lives here: the one-screen pane grid,
    the reveal animations, and the string-dock / syntax-highlight colors.
-   Layout is classes in the markup (panel-heading, cn-row, cn-stack, the
+   Layout is classes in the markup (panel-header, cn-row, cn-stack, the
    command line, the native dialog hosts); tokens, utilities and recipes come
-   from the package. The app runs at [data-density="dense"] (set on <html>). */
+   from the package. The app runs at [data-density="compact"] (set on <html>). */
 
 :root {
   --gap: 8px;
@@ -32,7 +32,7 @@ code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px
 
 /* Markup composes "pane panel": the panel recipe paints the surface, this
    class only turns it into a flex column that clips its own scrolling. The
-   heading band is the package panel-heading with a cn-microlabel title. */
+   heading band is the package panel-header with a cn-microlabel title. */
 .pane {
   min-height: 0;
   min-width: 0;
@@ -59,7 +59,7 @@ code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px
   color: var(--tone);
   background: var(--tint);
 }
-.btn-flat[aria-expanded="false"] svg { transform: rotate(180deg); }
+.btn-ghost[aria-expanded="false"] svg { transform: rotate(180deg); }
 
 /* Hairline grouping the dock's actions without boxing them in. */
 .head-rule {
@@ -129,13 +129,13 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 
 .match-nav output { min-width: 52px; }
 
-/* ── Result table — the package table at dense density ──────────────────── */
+/* ── Result table — the package table at compact density ──────────────────── */
 
-.result-pane .table-neu td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.result-pane .data-table td { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Value-type colors — app semantics. */
-.table-neu td.is-null { color: var(--overlay-0); font-style: italic; }
-.table-neu td.is-boolean { color: var(--teal); }
-.table-neu td.is-integer { color: var(--peach); }
+.data-table td.is-null { color: var(--overlay-0); font-style: italic; }
+.data-table td.is-boolean { color: var(--teal); }
+.data-table td.is-integer { color: var(--peach); }
 
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
@@ -174,7 +174,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-err { color: var(--red); }
 .log-note { color: var(--overlay-1); }
 
-.dock .pane-head { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
+.dock .panel-header { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
 /* The dock is showing a snapshot rather than the live string — say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); }
