@@ -9,6 +9,8 @@
 
 :root {
   --gap: 8px;
+  /* A matched byte range; the one in focus is solid --mauve. */
+  --vc-match: color-mix(in srgb, var(--mauve) 38%, transparent);
 }
 
 .app-shell {
@@ -175,50 +177,23 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   outline: 1px dashed var(--overlay-1);
   outline-offset: -1px;
 }
-.vc-rec.is-lit { background: var(--mauve); }
+.vc-rec.is-lit { background: var(--vc-match); }
 /* Half-lit: the pattern matched it, then Rust dropped it. */
-.vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--mauve) 50%, var(--surface-1) 50%); }
+.vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--vc-match) 50%, var(--surface-1) 50%); }
 .vc-key-plain { --tone: var(--surface-1); }
+.vc-key-lit { --tone: var(--vc-match); }
 /* The records behind the pointed result row. */
-.vc-rec.is-current { outline: 2px solid var(--text); outline-offset: 1px; }
+.vc-rec.is-current { background: var(--mauve); }
 
-/* The scan. One head crosses the tape once per run, because a regex reads
-   the string left to right at one rate, on a near-constant curve that
-   src/lib/tape.js solves per record, so each one lights as the head reaches
-   it. Then the head parks on the first match, or the pointed row's record. */
-.vc-tape { --vc-scan: 1.6s; --vc-start: .3s; --vc-read: cubic-bezier(.25, .2, .75, .8); }
+/* The scan. Matched records light in turn, left to right, the order a regex
+   reads the string, on a near-constant curve src/lib/tape.js solves per
+   record. There is no moving head: the records themselves carry the sweep. */
+.vc-tape { --vc-start: .3s; }
 .vc-rec.is-lit, .vc-rec.is-half {
   animation: vc-light var(--t-slow) var(--ease-out) backwards;
   animation-delay: calc(var(--vc-start) + var(--d, 0s));
 }
 @keyframes vc-light { from { background: var(--surface-2); } }
-.vc-head, .vc-park { position: absolute; inset: -4px 0; pointer-events: none; opacity: 0; }
-.vc-head {
-  transform: translateX(-100%);
-  animation: vc-scan var(--vc-scan) var(--vc-read) var(--vc-start) both;
-}
-.vc-head::after, .vc-park::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  border-radius: 1px;
-  background: var(--text);
-}
-.vc-head::after { right: 0; }
-@keyframes vc-scan {
-  0% { transform: translateX(-100%); opacity: 1; }
-  94% { opacity: 1; }
-  100% { transform: translateX(0); opacity: 0; }
-}
-.vc-park {
-  transform: translateX(var(--x, 0%));
-  transition: transform var(--t-base) var(--ease-out);
-  animation: vc-park var(--t-base) var(--ease-out) calc(var(--vc-start) + var(--vc-scan)) forwards;
-}
-.vc-park::before { left: -1px; }
-@keyframes vc-park { to { opacity: 1; } }
 
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
@@ -266,14 +241,14 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   min-height: 46px;
   line-height: 1.75;
 }
+/* A match is translucent mauve; the one in focus is solid mauve. */
 .dock mark, .pattern-well mark {
   padding: 1px 0;
-  color: var(--crust);
-  background: var(--mauve);
+  color: var(--text);
+  background: var(--vc-match);
   border-radius: 4px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mauve) 40%, transparent);
 }
-.dock mark.is-current { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); }
+.dock mark.is-current { color: var(--crust); background: var(--mauve); }
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
 
 /* ── Dialogs: the package dialog.modal / dialog.drawer hosts ───────────── */
@@ -338,10 +313,3 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   .vc-ruler span.is-mid { display: none; }
 }
 
-/* Reduced motion: the package zeroes delays and durations, so every lit
-   record lands at once, the crossing head never shows, and the parked head
-   is already in place. */
-@media (prefers-reduced-motion: reduce) {
-  .vc-head { display: none; }
-  .vc-park { opacity: 1; }
-}

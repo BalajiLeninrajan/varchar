@@ -224,6 +224,16 @@ export function App() {
     return { records, state, rows, scan: tapeScan, total: bytes.length, litBytes };
   }, [shown, tapeScan, envelope]);
 
+  // The records in focus on the tape: the hovered result row's, or else the
+  // record holding the match the dock is on.
+  const focused = useMemo(() => {
+    if (pointed !== null && reading.rows?.[pointed]) return reading.rows[pointed];
+    const match = tapeScan?.matches?.[current];
+    if (!match) return [];
+    const index = reading.records.findIndex((r) => match.start >= r.at && match.start < r.end);
+    return index === -1 ? [] : [index];
+  }, [pointed, reading, tapeScan, current]);
+
   if (bootError) {
     return (
       <div class="app-shell" style={{ padding: "24px" }}>
@@ -290,7 +300,7 @@ export function App() {
         onToggle={() => setDockOpen((open) => !open)}
         onSave={onSave}
         onDrop={onDrop}
-        tape={<Tape reading={reading} runId={runId} pointed={(pointed !== null && reading.rows?.[pointed]) || []} />}
+        tape={<Tape reading={reading} runId={runId} pointed={focused} />}
       />
 
       <AboutDialog open={dialog === "about"} onClose={() => setDialog(null)} />

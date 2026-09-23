@@ -1,13 +1,13 @@
 // The database string drawn as a byte map, shown in the string dock above
 // the string itself: one span per record, grouped under
 // a bracket per table, with a byte ruler below. After a scan the read head
-// crosses the map once and lights each record it matched as it gets there.
+// lights each matched record in turn, left to right, the order a regex reads.
 
 import { Fragment } from "preact";
 
 import { reach, regions, ticks } from "../lib/tape.js";
 
-/** Seconds the head takes to cross the tape. Mirrors --vc-scan in app.css. */
+/** Seconds the lighting takes to sweep the tape, left to right. */
 const SCAN_SECONDS = 1.6;
 
 const pct = (n, total) => `${((n / total) * 100).toFixed(3)}%`;
@@ -19,14 +19,13 @@ export function Tape({ reading, runId, pointed }) {
   const delay = (record) => `${(reach(record.at / Math.max(total, 1)) * SCAN_SECONDS).toFixed(3)}s`;
   const has = (s) => state.includes(s);
   const scanned = Boolean(scan?.matches);
-  const parkAt = pointed.length ? records[pointed[0]] : records[state.findIndex((s) => LIT.has(s))];
   const lit = state.filter((s) => LIT.has(s)).length;
 
   return (
     <div class="vc-tape">
       <div class="vc-map">
         <ul class="legend" aria-label="The tape">
-          {has("lit") ? <li class="legend-item cn-tone-mauve">matched</li> : null}
+          {has("lit") ? <li class="legend-item vc-key-lit">matched</li> : null}
           {has("half") ? <li class="legend-item vc-key-half">matched, dropped by Rust</li> : null}
           {has("tested") ? <li class="legend-item vc-key-tested">tested, rejected</li> : null}
           <li class="legend-item vc-key-plain">{scanned ? "not a candidate" : "record"}</li>
@@ -58,10 +57,6 @@ export function Tape({ reading, runId, pointed }) {
               style={{ flexGrow: record.end - record.at, "--d": delay(record) }}
             />
           ))}
-          {scanned ? <span class="vc-head" aria-hidden="true" /> : null}
-          {scanned && parkAt ? (
-            <span class="vc-park" aria-hidden="true" style={{ "--x": pct(parkAt.at, total) }} />
-          ) : null}
         </div>
         <div class="vc-ruler" aria-hidden="true">
           {ticks(total).map((at) => (
