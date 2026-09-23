@@ -9,6 +9,7 @@
     "build": "pnpm run build:wasm && vite build",
     "dev": "pnpm run build:wasm && vite",
     "preview": "vite preview",
+    "test": "node --test \"src/**/*.test.js\"",
     "deploy": "pnpm run build && wrangler deploy"
   },
   "dependencies": {
