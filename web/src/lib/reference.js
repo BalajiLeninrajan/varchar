@@ -85,7 +85,7 @@ export const SECTIONS = [
       { syntax: "UNIQUE", note: "Rejects duplicate non-NULL values; several NULLs are fine." },
       {
         syntax: "CHECK (views >= 0)",
-        note: "Table-local, and may name any column of the table, including one declared later. Rejects only false — unknown passes.",
+        note: "Table-local, and may name any column of the table, including one declared later. Rejects only false, so unknown passes.",
       },
       {
         syntax: "REFERENCES users(id)",

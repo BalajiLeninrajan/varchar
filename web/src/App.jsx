@@ -58,7 +58,7 @@ export function App() {
         db.current = instance;
         setBlob(instance.dump());
         setBooted(true);
-        write({ text: "varchar engine ready — the empty database is the three bytes in the dock", tone: "ok" });
+        write({ text: "varchar engine ready. The empty database is the three bytes in the dock", tone: "ok" });
       })
       .catch((error) => setBootError(String(error)));
   }, [write]);
@@ -123,7 +123,7 @@ export function App() {
     setCurrent(0);
     setScanPlaceholder(SCAN_PLACEHOLDER);
     setResultPlaceholder({ title: "empty", body: "Nothing left. Seed the demo data to start again." });
-    write({ text: "database dropped — back to the three-byte header", tone: "note" });
+    write({ text: "database dropped, back to the three-byte header", tone: "note" });
   }, [write]);
 
   const onLoadBlob = useCallback(

@@ -75,7 +75,7 @@ const DONE = {
     "created",
     `Table ${envelope.table} created. Its schema now lives in the string as a ~S record.`,
   ],
-  explain: () => ["explained", "Pattern compiled. No rows were scanned — EXPLAIN REGEX stops at the plan."],
+  explain: () => ["explained", "Pattern compiled. No rows were scanned, because EXPLAIN REGEX stops at the plan."],
   loaded: () => ["loaded", "Database string loaded and validated."],
 };
 

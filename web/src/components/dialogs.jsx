@@ -180,7 +180,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
           autocapitalize="off"
           autocorrect="off"
           aria-label="Filter the SQL reference"
-          placeholder="filter — like, cascade, order by"
+          placeholder="filter: like, cascade, order by"
           onInput={(event) => setQuery(event.currentTarget.value)}
         />
       </div>
@@ -286,7 +286,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           </button>
         </div>
         <p class="cn-meta">
-          Or turn a CSV into a table — column types are inferred, then a <code class="cn-code-inline">CREATE TABLE</code> and one{" "}
+          Or turn a CSV into a table. Column types are inferred, then a <code class="cn-code-inline">CREATE TABLE</code> and one{" "}
           <code class="cn-code-inline">INSERT</code> per row are run for you.
         </p>
         <div class="cn-row cn-wrap cn-end">

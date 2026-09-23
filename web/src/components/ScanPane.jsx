@@ -36,7 +36,7 @@ export function ScanPane({ scan, placeholder }) {
         {scan.appliesTo === "before" ? (
           <Chip
             tone="blue"
-            title="A mutation scans the string as it stood before the write, so those bytes have since been rewritten or removed — there is nothing left to highlight"
+            title="A mutation scans the string as it stood before the write, so those bytes have since been rewritten or removed and there is nothing left to highlight"
           >
             before the write
           </Chip>

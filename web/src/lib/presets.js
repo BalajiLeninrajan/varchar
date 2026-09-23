@@ -127,7 +127,7 @@ export const GROUPS = [
       {
         id: "constraint",
         name: "Break a constraint",
-        blurb: "Rejected — the string stays byte-for-byte identical",
+        blurb: "Rejected, and the string stays byte-for-byte identical",
         sql: ["INSERT INTO users (name, email) VALUES ('Ada Again', 'ada@example.com')"],
       },
     ],
