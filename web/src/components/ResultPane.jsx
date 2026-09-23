@@ -68,15 +68,15 @@ function ErrorView({ statement, error }) {
 
 const DONE = {
   affected: (envelope) => [
-    "committed",
+    "Committed",
     `${envelope.rows.toLocaleString()} row${envelope.rows === 1 ? "" : "s"} written. The string below was rewritten in full.`,
   ],
   created: (envelope) => [
-    "created",
+    "Created",
     `Table ${envelope.table} created. Its schema now lives in the string as a ~S record.`,
   ],
-  explain: () => ["explained", "Pattern compiled. No rows were scanned, because EXPLAIN REGEX stops at the plan."],
-  loaded: () => ["loaded", "Database string loaded and validated."],
+  explain: () => ["Explained", "Pattern compiled. No rows were scanned, because EXPLAIN REGEX stops at the plan."],
+  loaded: () => ["Loaded", "Database string loaded and validated."],
 };
 
 export function ResultPane({ outcome, placeholder }) {
@@ -101,12 +101,12 @@ export function ResultPane({ outcome, placeholder }) {
       );
       body =
         rows.length === 0 ? (
-          <EmptyState title="no rows">The scan ran and matched nothing that survived the filter.</EmptyState>
+          <EmptyState title="No rows">The scan ran and matched nothing that survived the filter.</EmptyState>
         ) : (
           <Table columns={columns} rows={rows} />
         );
     } else {
-      const [title, detail] = (DONE[envelope.kind] ?? (() => ["done", ""]))(envelope);
+      const [title, detail] = (DONE[envelope.kind] ?? (() => ["Done", ""]))(envelope);
       body = <EmptyState title={title}>{detail}</EmptyState>;
     }
   }

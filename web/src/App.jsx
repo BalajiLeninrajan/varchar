@@ -18,10 +18,10 @@ const CSV_ROW_LIMIT = 500;
 const FIRST_QUERY = "SELECT name, email FROM users WHERE active = TRUE";
 
 const SCAN_PLACEHOLDER = {
-  title: "no scan yet",
+  title: "No scan yet",
   body: "Run a SELECT and the pattern the planner compiled appears here, with every byte it matched highlighted in the string below.",
 };
-const RESULT_PLACEHOLDER = { title: "nothing run yet", body: "Rows, affected counts and errors land here." };
+const RESULT_PLACEHOLDER = { title: "Nothing run yet", body: "Rows, affected counts and errors land here." };
 
 export function App() {
   const db = useRef(null);
@@ -87,11 +87,11 @@ export function App() {
       // A statement with no scan leaves nothing to highlight, so the pattern
       // that drew the previous highlights cannot stay on screen either.
       setScanPlaceholder({
-        title: "no scan for this statement",
+        title: "No scan for this statement",
         body: "Only a SELECT compiles to a pattern. Run one and every byte it matches lights up in the string below.",
       });
     } else if (!envelope.ok) {
-      setScanPlaceholder({ title: "no scan", body: "The statement was rejected before anything was scanned." });
+      setScanPlaceholder({ title: "No scan", body: "The statement was rejected before anything was scanned." });
     }
   }, []);
 
@@ -122,7 +122,7 @@ export function App() {
     setScan(null);
     setCurrent(0);
     setScanPlaceholder(SCAN_PLACEHOLDER);
-    setResultPlaceholder({ title: "empty", body: "Nothing left. Seed the demo data to start again." });
+    setResultPlaceholder({ title: "Empty", body: "Nothing left. Seed the demo data to start again." });
     write({ text: "database dropped, back to the three-byte header", tone: "note" });
   }, [write]);
 
@@ -136,7 +136,7 @@ export function App() {
         write({ text: `loaded ${byteLength(text.trim())} bytes into the database`, tone: "ok" });
         setDialog(null);
         setScanPlaceholder({
-          title: "no scan yet",
+          title: "No scan yet",
           body: "Run a SELECT against the imported data to see its pattern.",
         });
       } else {

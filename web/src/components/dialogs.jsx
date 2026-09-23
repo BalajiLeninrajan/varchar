@@ -186,7 +186,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
       </div>
       <div class="drawer-body scroll-well" ref={body}>
         {sections.length === 0 ? (
-          <EmptyState title="nothing matches">
+          <EmptyState title="Nothing matches">
             No clause in the dialect mentions that. The whole grammar is on the other side of the filter.
           </EmptyState>
         ) : null}
