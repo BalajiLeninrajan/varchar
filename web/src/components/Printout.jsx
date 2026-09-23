@@ -21,9 +21,19 @@ function Cell({ value, label }) {
   return <td data-label={label}>{text}</td>;
 }
 
-function Rows({ columns, rows, reading, onPoint }) {
+function Rows({ columns, rows, reading, pointed, onPoint }) {
   const { records, total } = reading;
   const traced = reading.rows;
+  // One tab stop for the whole table, on the pointed row. Arrow keys, Home
+  // and End move between rows, so a 500-row result doesn't add 500 stops.
+  const active = Math.min(pointed, rows.length - 1);
+  const step = (event) => {
+    const moves = { ArrowDown: 1, ArrowUp: -1, Home: -Infinity, End: Infinity };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const next = Math.min(rows.length - 1, Math.max(0, active + moves[event.key]));
+    event.currentTarget.parentElement.children[next]?.focus();
+  };
   return (
     <table class="data-table">
       <thead>
@@ -39,7 +49,13 @@ function Rows({ columns, rows, reading, onPoint }) {
           const from = traced?.[rowIndex].map((index) => records[index]);
           const point = from ? () => onPoint(rowIndex) : undefined;
           return (
-            <tr key={rowIndex} tabindex={from ? 0 : undefined} onPointerEnter={point} onFocus={point}>
+            <tr
+              key={rowIndex}
+              tabindex={from ? (rowIndex === active ? 0 : -1) : undefined}
+              onPointerEnter={point}
+              onFocus={point}
+              onKeyDown={from ? step : undefined}
+            >
               {from ? (
                 <td class="vc-at" data-label="on the tape">
                   <span class="cn-meta cn-tabular">bytes {from.map((r) => `${r.at} to ${r.end}`).join(", ")}</span>
@@ -80,7 +96,7 @@ const DONE = {
   loaded: () => ["Nothing printed", "The string was loaded and validated. Run a SELECT against it."],
 };
 
-export function Printout({ booted, outcome, reading, onPoint }) {
+export function Printout({ booted, outcome, reading, pointed, onPoint }) {
   let meta = null;
   let body = (
     <EmptyState fill={false} title={booted ? "Nothing run yet" : "Starting"}>Rows, affected counts and errors land here.</EmptyState>
@@ -104,7 +120,7 @@ export function Printout({ booted, outcome, reading, onPoint }) {
         rows.length === 0 ? (
           <EmptyState fill={false} title="No rows">The scan ran and nothing it matched survived the filter.</EmptyState>
         ) : (
-          <Rows columns={columns} rows={rows} reading={reading} onPoint={onPoint} />
+          <Rows columns={columns} rows={rows} reading={reading} pointed={pointed} onPoint={onPoint} />
         );
     } else {
       const [title, detail] = (DONE[envelope.kind] ?? (() => ["Done", ""]))(envelope);

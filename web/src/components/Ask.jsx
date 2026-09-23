@@ -22,7 +22,7 @@ export function Ask({ sql, onSql, onRun, hasDemo, onSeed, onExample, onMore }) {
           id="sql"
           name="sql"
           rows={1}
-          class="input vc-sql"
+          class="input is-code vc-sql"
           value={sql}
           spellcheck={false}
           autocapitalize="off"

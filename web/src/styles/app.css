@@ -17,7 +17,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
   grid-template-areas: "ask aside" "answer aside" "tape tape" "rows rows";
-  gap: var(--space-5) 56px;
+  gap: var(--space-5) calc(var(--space-6) + var(--space-5));
   align-content: start;
 }
 .vc-ask { grid-area: ask; }
@@ -28,7 +28,7 @@
 /* The log, when open, runs the full width under the printout. */
 .log-pane { grid-column: 1 / -1; }
 
-/* The query is code, so the one input earns the mono face. */
+/* The query is code, so the one input takes is-code and the mono face. */
 .vc-ask-row { display: flex; gap: var(--space-3); align-items: flex-end; }
 .vc-sql {
   flex: 1;
@@ -37,7 +37,6 @@
   max-height: 12lh;
   field-sizing: content;
   resize: none;
-  font: var(--cn-type-code-weight) var(--cn-type-code-size) / var(--cn-type-code-leading) var(--mono);
 }
 /* The hard offset shadow is drawn outside the box, so the button keeps its
    own offset clear of the row. */
@@ -78,7 +77,7 @@
   padding: 0 var(--space-1);
   background: var(--crust);
   color: var(--overlay-2);
-  font: var(--cn-type-meta-weight) 11px/1 var(--mono);
+  font: var(--cn-type-meta-weight) var(--cn-type-micro-size)/1 var(--mono);
   white-space: nowrap;
 }
 .vc-ruler i { position: absolute; top: 0; width: 1px; height: 4px; background: var(--overlay-0); }
@@ -87,7 +86,7 @@
   top: 5px;
   transform: translateX(-50%);
   color: var(--overlay-1);
-  font: 11px/1 var(--mono);
+  font: var(--cn-type-micro-size)/1 var(--mono);
   white-space: nowrap;
 }
 .vc-ruler span:first-of-type { transform: none; }
@@ -108,7 +107,8 @@
 .vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--mauve) 50%, var(--surface-1) 50%); }
 .vc-key-plain { --tone: var(--surface-1); }
 /* The records a pointed-at row came from get the hard plate. */
-.vc-rec.is-current { box-shadow: 2px 2px 0 var(--text); }
+/* Half the usual offset, so a narrow record's plate doesn't cover its neighbour. */
+.vc-rec.is-current { --vc-off: calc(var(--hard-offset) / 2); box-shadow: var(--vc-off) var(--vc-off) 0 var(--plate, var(--text)); }
 
 /* The string, wrapped at any byte so each line runs the full width. A huge
    database scrolls inside the well instead of pushing the rows away. */
@@ -189,7 +189,7 @@
 .vc-mini {
   position: relative;
   display: inline-block;
-  width: 140px;
+  width: calc(var(--space-6) * 4);
   height: 6px;
   margin-left: var(--space-3);
   border-radius: 999px;
@@ -200,8 +200,11 @@
 .vc-rows td { overflow-wrap: anywhere; }
 .vc-null { color: var(--overlay-1); font-style: italic; }
 .vc-rows tbody tr[tabindex] { cursor: default; }
-.vc-rows tbody tr:focus-visible { outline: 2px solid var(--mauve); outline-offset: -2px; }
+/* The panel clips an outside ring, so the global focus ring sits inside. */
+.vc-rows tbody tr:focus-visible { outline-offset: -2px; }
 .vc-offender { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The bad span reads like a lit record. */
+.vc-offender mark { padding: 2px 0; color: var(--crust); background: var(--mauve); border-radius: 3px; }
 
 /* ── The aside: the pattern, all neutral ────────────────────────────────── */
 
@@ -226,12 +229,13 @@
 .pane-body { min-height: 0; flex: 1 1 auto; overflow: auto; }
 .pane-body.terminal { border-radius: 0; box-shadow: none; }
 .log-pane .terminal pre { max-height: 26vh; }
-.log-line { display: block; }
+/* Status is a mark at the line's edge, green or red. The text stays ink. */
+.log-line { display: block; padding-left: var(--space-2); box-shadow: inset 2px 0 transparent; }
+.log-line.is-ok { box-shadow: inset 2px 0 var(--green); }
+.log-line.is-err { box-shadow: inset 2px 0 var(--red); }
 .log-line .log-sql { color: var(--text); }
-.log-line.is-error .log-sql { color: var(--red); }
 .log-time { color: var(--overlay-0); }
-.log-ok { color: var(--green); }
-.log-err { color: var(--red); }
+.log-ok, .log-err { color: var(--subtext-0); }
 .log-note { color: var(--overlay-1); }
 
 /* The log opens and closes in place. */
@@ -261,8 +265,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .is-about .sheet-foot { padding: 16px 44px 18px; }
 
 .sample .tok-tag { color: var(--mauve); font-weight: 700; }
-.sample .tok-name { color: var(--teal); }
-.sample .tok-cell { color: var(--peach); }
+.sample .tok-name { color: var(--text); }
+.sample .tok-cell { color: var(--overlay-2); }
 .about-list b { color: var(--text); }
 
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
@@ -276,8 +280,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .drawer-search { flex: none; padding: 10px 12px 0; }
 
 .sql-kw { color: var(--mauve); font-weight: 750; }
-.sql-type { color: var(--teal); }
-.sql-val { color: var(--peach); }
+.sql-type { color: var(--text); }
+.sql-val { color: var(--overlay-2); }
 /* Identifiers, operators and punctuation stay in the surface's own ink. */
 .sql-plain { color: inherit; }
 

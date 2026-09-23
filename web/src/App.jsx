@@ -250,6 +250,7 @@ export function App() {
           booted={booted}
           outcome={outcome}
           reading={reading}
+          pointed={pointed}
           onPoint={(index) => {
             setLive(true);
             setPointed(index);

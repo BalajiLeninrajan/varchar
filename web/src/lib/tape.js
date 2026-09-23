@@ -101,8 +101,8 @@ export function ticks(total) {
  * The engine reports no row provenance, so rows are traced back by value:
  * each result column names its origin table and column, and the stored cells
  * of a matched record either agree with the row or they don't. When a row
- * can't be traced the whole mapping is dropped, and matched records stay
- * plainly lit rather than being guessed at.
+ * can't be traced, or its cells fit more than one record, the whole mapping
+ * is dropped, and matched records stay plainly lit rather than guessed at.
  */
 export function readScan(records, scan, result) {
   const matches = scan?.matches ?? [];
@@ -143,9 +143,11 @@ function trace(records, matched, sources, { columns, rows }) {
         .map((column, position) => ({ position, field: order.indexOf(column.column) + 2, table: column.table }))
         .filter((pick) => pick.table === table);
       return { table, picks };
-    })
-    .filter((entry) => entry.picks.length > 0);
-  if (plan.length === 0 || plan.some((entry) => entry.picks.some((pick) => pick.field < 2))) return null;
+    });
+  // A source that supplies no result column can't be traced, and a partial
+  // trace would pin a join row on a single record.
+  if (plan.some((entry) => entry.picks.length === 0)) return null;
+  if (plan.some((entry) => entry.picks.some((pick) => pick.field < 2))) return null;
 
   const pool = new Map(plan.map((entry) => [entry.table, [...matched].filter((i) => records[i].table === entry.table)]));
   const single = sources.length === 1;
@@ -154,15 +156,17 @@ function trace(records, matched, sources, { columns, rows }) {
   for (const row of rows) {
     const found = [];
     for (const { table, picks } of plan) {
-      const index = pool.get(table).find(
-        (candidate) =>
-          !(single && taken.has(candidate)) &&
-          picks.every((pick) => {
-            const field = records[candidate].fields[pick.field];
-            return field !== undefined && sameValue(decodeCell(field), row[pick.position]);
-          }),
+      const fits = pool.get(table).filter((candidate) =>
+        picks.every((pick) => {
+          const field = records[candidate].fields[pick.field];
+          return field !== undefined && sameValue(decodeCell(field), row[pick.position]);
+        }),
       );
-      if (index === undefined) return null;
+      // Two records that agree on every projected cell can't be told apart,
+      // so the trace would be a guess. Give up and leave the matches lit.
+      if (fits.length !== 1) return null;
+      const index = fits[0];
+      if (single && taken.has(index)) return null;
       found.push(index);
     }
     // One table's rows each become at most one result row. A join repeats

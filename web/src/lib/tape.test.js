@@ -63,6 +63,26 @@ test("a join traces each row to both of its records", () => {
   assert.equal(state[records.findIndex((r) => r.at === 285)], "half");
 });
 
+test("rows that don't identify their record leave every match lit", () => {
+  // SELECT published FROM posts WHERE views > 1000: four posts are published,
+  // so a true value could have come from any of them.
+  const scan = { sources: ["posts"], matches: spans([453, 509], [509, 563], [563, 610], [610, 659], [659, 703]) };
+  const yes = { t: "boolean", v: true };
+  const result = { columns: [col("posts", "published")], rows: [[yes], [yes], [yes]] };
+  const { rows, state } = readScan(records, scan, result);
+  assert.equal(rows, null);
+  const posts = state.filter((_, i) => records[i].table === "posts" && records[i].kind === "row");
+  assert.deepEqual(posts, ["lit", "lit", "lit", "lit", "lit"]);
+});
+
+test("a join that projects one table leaves every match lit", () => {
+  const scan = { sources: ["users", "posts"], matches: spans([285, 703]) };
+  const result = { columns: [col("users", "name")], rows: [[text("Grace Hopper")]] };
+  const { rows, state } = readScan(records, scan, result);
+  assert.equal(rows, null);
+  assert.ok(state.every((s) => s !== "half"));
+});
+
 test("an untraceable row keeps every match plainly lit", () => {
   const scan = { sources: ["users"], matches: spans([285, 331]) };
   const result = { columns: [col("users", "name")], rows: [[text("Nobody")]] };

@@ -62,10 +62,11 @@ function sentence({ booted, outcome, reading }) {
   }
   if (kind === "affected" && scan) {
     const done = verb(statement) === "delete" ? "removed" : "rewrote";
-    return [
-      [`Your ${verb(statement)} lit `, [plural(lit, "row")], ` and ${done} `, [envelope.rows.toLocaleString()], "."],
-      reading.historic ? "The tape shows the string as the scan read it, before the write." : "The tape now shows the string after the write, so nothing is lit.",
-    ];
+    const where = reading.historic ? "The tape shows the string as the scan read it, before the write." : "The tape now shows the string after the write, so nothing is lit.";
+    // The engine doesn't say which lit records it wrote, so when Rust
+    // re-checked some away the lede says so rather than the tape.
+    const recheck = !scan.exact && envelope.rows < lit ? `Rust re-checked all ${lit.toLocaleString()} and ${done} ${envelope.rows.toLocaleString()}. ` : "";
+    return [[`Your ${verb(statement)} lit `, [plural(lit, "record")], ` and ${done} `, [envelope.rows.toLocaleString()], "."], recheck + where];
   }
   if (kind === "affected") {
     return [[`Your ${verb(statement) || "statement"} wrote `, [plural(envelope.rows, "row")], ". The string is now ", [plural(reading.total, "byte")], "."], "Every write re-encodes the whole string."];

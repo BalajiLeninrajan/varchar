@@ -125,7 +125,7 @@ export function Tape({ reading, runId, pointed, live, historic, onHistoric, blob
           </>
         ) : null}
       </div>
-      <pre key={runId} class="scroll-well" aria-label="The encoded database string">
+      <pre key={runId} class="scroll-well" role="region" tabindex={0} aria-label="The encoded database string">
         {total === 0 ? <span class="vc-null">(empty)</span> : pieces}
       </pre>
     </section>

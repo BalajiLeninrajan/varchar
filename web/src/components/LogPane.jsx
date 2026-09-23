@@ -22,7 +22,7 @@ export function LogPane({ entries, leaving, onClear, onClose }) {
       <div class="pane-body terminal">
         <pre ref={stream} class="scroll-well" aria-live="polite">
           {entries.map((entry) => (
-            <span key={entry.id} class={`log-line${entry.tone === "err" ? " is-error" : ""}`}>
+            <span key={entry.id} class={`log-line is-${entry.tone}`}>
               <span class="log-time">{entry.time} </span>
               <span class={entry.statement ? "log-sql" : `log-${entry.tone}`}>{entry.text}</span>
               {entry.detail ? (
