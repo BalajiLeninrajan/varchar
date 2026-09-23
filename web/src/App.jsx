@@ -5,14 +5,16 @@ import { LogPane } from "./components/LogPane.jsx";
 import { ResultPane } from "./components/ResultPane.jsx";
 import { ScanPane } from "./components/ScanPane.jsx";
 import { StringDock } from "./components/StringDock.jsx";
+import { Tape } from "./components/Tape.jsx";
 import { Topbar } from "./components/Topbar.jsx";
 import { AboutDialog, ImportDialog, PresetsDrawer, ReferenceDrawer } from "./components/dialogs.jsx";
 import { Banner } from "./components/ui.jsx";
-import { byteLength } from "./lib/bytes.js";
+import { byteLength, encode } from "./lib/bytes.js";
 import { createDb, describe, exec, load, splitStatements } from "./lib/db.js";
 import { csvToStatements } from "./lib/csv.js";
 import { useMountTransition } from "./lib/transition.js";
 import { DEMO } from "./lib/presets.js";
+import { readScan, splitRecords } from "./lib/tape.js";
 
 const CSV_ROW_LIMIT = 500;
 const FIRST_QUERY = "SELECT name, email FROM users WHERE active = TRUE";
@@ -42,6 +44,10 @@ export function App() {
   const [dialog, setDialog] = useState("about");
   const [scanPlaceholder, setScanPlaceholder] = useState(SCAN_PLACEHOLDER);
   const [resultPlaceholder, setResultPlaceholder] = useState(RESULT_PLACEHOLDER);
+  // Each run remounts the tape's track so the head crosses it once more. The
+  // pointed row is the result row under the pointer or focus, if any.
+  const [runId, setRunId] = useState(0);
+  const [pointed, setPointed] = useState(null);
 
   const write = useCallback((entry) => {
     nextId.current += 1;
@@ -83,6 +89,8 @@ export function App() {
     setOutcome({ statement, envelope });
     setScan(envelope.ok ? (envelope.scan ?? null) : null);
     setCurrent(0);
+    setRunId((id) => id + 1);
+    setPointed(null);
     if (envelope.ok && !envelope.scan) {
       // A statement with no scan leaves nothing to highlight, so the pattern
       // that drew the previous highlights cannot stay on screen either.
@@ -121,6 +129,7 @@ export function App() {
     setOutcome(null);
     setScan(null);
     setCurrent(0);
+    setPointed(null);
     setScanPlaceholder(SCAN_PLACEHOLDER);
     setResultPlaceholder({ title: "Empty", body: "Nothing left. Seed the demo data to start again." });
     write({ text: "database dropped, back to the three-byte header", tone: "note" });
@@ -132,6 +141,7 @@ export function App() {
       setBlob(envelope.blob);
       setScan(null);
       setCurrent(0);
+      setPointed(null);
       if (envelope.ok) {
         write({ text: `loaded ${byteLength(text.trim())} bytes into the database`, tone: "ok" });
         setDialog(null);
@@ -193,6 +203,37 @@ export function App() {
     [blob],
   );
 
+  // The tape reads the same string the dock shows: a mutation's scan indexes
+  // the string before the write, so its matches are drawn over that one or
+  // not at all.
+  const beforeWrite = scan?.appliesTo === "before";
+  const historic = beforeWrite && typeof blobBefore === "string";
+  const shown = historic && explain ? blobBefore : blob;
+  const tapeScan = explain && (historic || !beforeWrite) ? scan : null;
+  const envelope = outcome?.envelope;
+
+  const reading = useMemo(() => {
+    const bytes = encode(shown);
+    const records = splitRecords(bytes);
+    const result = tapeScan && envelope?.ok && envelope.kind === "rows" ? envelope.result : null;
+    const { state, rows } = readScan(records, tapeScan, result);
+    let litBytes = 0;
+    records.forEach((record, index) => {
+      if (state[index] === "lit" || state[index] === "half") litBytes += record.end - record.at;
+    });
+    return { records, state, rows, scan: tapeScan, total: bytes.length, litBytes };
+  }, [shown, tapeScan, envelope]);
+
+  // The records in focus on the tape: the hovered result row's, or else the
+  // record holding the match the dock is on.
+  const focused = useMemo(() => {
+    if (pointed !== null && reading.rows?.[pointed]) return reading.rows[pointed];
+    const match = tapeScan?.matches?.[current];
+    if (!match) return [];
+    const index = reading.records.findIndex((r) => match.start >= r.at && match.start < r.end);
+    return index === -1 ? [] : [index];
+  }, [pointed, reading, tapeScan, current]);
+
   if (bootError) {
     return (
       <div class="app-shell" style={{ padding: "24px" }}>
@@ -224,7 +265,11 @@ export function App() {
           }}
         />
         <ScanPane scan={scan} placeholder={scanPlaceholder} />
-        <ResultPane outcome={booted ? outcome : null} placeholder={resultPlaceholder} />
+        <ResultPane
+          outcome={booted ? outcome : null}
+          placeholder={resultPlaceholder}
+          onPoint={reading.rows ? setPointed : null}
+        />
       </main>
 
       {log.mounted ? (
@@ -255,6 +300,7 @@ export function App() {
         onToggle={() => setDockOpen((open) => !open)}
         onSave={onSave}
         onDrop={onDrop}
+        tape={<Tape reading={reading} runId={runId} pointed={focused} />}
       />
 
       <AboutDialog open={dialog === "about"} onClose={() => setDialog(null)} />

@@ -9,6 +9,8 @@
 
 :root {
   --gap: 8px;
+  /* A matched byte range; the one in focus is solid --mauve. */
+  --vc-match: color-mix(in srgb, var(--mauve) 38%, transparent);
 }
 
 .app-shell {
@@ -61,12 +63,13 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 
 /* ── Workbench ──────────────────────────────────────────────────────────── */
 
-/* Two rows: input and its explanation on top, the data underneath. */
+/* Input and its explanation on top, kept short, then the result across the
+   full width taking the rest. The tape lives in the string dock. */
 .workbench {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(300px, .78fr) minmax(0, 1.22fr);
-  grid-template-rows: minmax(170px, 34%) minmax(0, 1fr);
+  grid-template-rows: clamp(150px, 24vh, 220px) minmax(0, 1fr);
   gap: var(--gap);
 }
 .console-pane { grid-column: 1; grid-row: 1; }
@@ -111,10 +114,86 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 /* ── Result table: the package table at compact density ──────────────────── */
 
 .result-pane .data-table td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.result-pane .empty-state { padding-block: var(--space-5); }
+/* A focused row outlines inside the scroller, where it can't be clipped. */
+.result-pane tbody tr:focus-visible { outline-offset: -2px; }
 /* Value-type colors. These are app semantics. */
 .data-table td.is-null { color: var(--overlay-0); font-style: italic; }
 .data-table td.is-boolean { color: var(--teal); }
 .data-table td.is-integer { color: var(--peach); }
+
+/* ── The tape: table brackets over the byte map, a byte ruler under it ──── */
+
+.vc-map {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--edge-soft);
+}
+.vc-map > .legend { justify-content: flex-end; }
+
+/* Brackets and ticks are structure, so they stay neutral. */
+.vc-brackets, .vc-ruler { position: relative; height: 16px; }
+.vc-brackets span {
+  position: absolute;
+  bottom: 0;
+  height: 8px;
+  border: 1px solid var(--overlay-0);
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+}
+.vc-brackets b {
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  background: var(--base);
+  color: var(--overlay-2);
+  font: var(--cn-type-meta-weight) var(--cn-type-micro-size)/1 var(--mono);
+  white-space: nowrap;
+}
+.vc-ruler i { position: absolute; top: 0; width: 1px; height: 4px; background: var(--overlay-0); }
+.vc-ruler span {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  color: var(--overlay-1);
+  font: var(--cn-type-micro-size)/1 var(--mono);
+  white-space: nowrap;
+}
+.vc-ruler span:first-of-type { transform: none; }
+.vc-ruler span.is-end { left: 100%; transform: translateX(-100%); }
+
+/* One span per record, as wide as its bytes. */
+.vc-track { position: relative; display: flex; gap: 2px; height: 28px; }
+.vc-rec { min-width: 2px; border-radius: 2px; background: var(--surface-0); }
+.vc-rec.is-row { background: var(--surface-1); }
+/* Tested and rejected: the pattern reached this record and said no. */
+.vc-rec.is-tested, .vc-key-tested::before {
+  background: transparent;
+  outline: 1px dashed var(--overlay-1);
+  outline-offset: -1px;
+}
+.vc-rec.is-lit { background: var(--vc-match); }
+/* Half-lit: the pattern matched it, then Rust dropped it. */
+.vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--vc-match) 50%, var(--surface-1) 50%); }
+.vc-key-plain { --tone: var(--surface-1); }
+.vc-key-lit { --tone: var(--vc-match); }
+/* The records behind the pointed result row. */
+.vc-rec.is-current { background: var(--mauve); }
+
+/* The scan. Matched records light in turn, left to right, the order a regex
+   reads the string, on a near-constant curve src/lib/tape.js solves per
+   record. There is no moving head: the records themselves carry the sweep. */
+.vc-tape { --vc-start: .3s; }
+.vc-rec.is-lit, .vc-rec.is-half {
+  animation: vc-light var(--t-slow) var(--ease-out) backwards;
+  animation-delay: calc(var(--vc-start) + var(--d, 0s));
+}
+@keyframes vc-light { from { background: var(--surface-2); } }
 
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
@@ -162,14 +241,14 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   min-height: 46px;
   line-height: 1.75;
 }
+/* A match is translucent mauve; the one in focus is solid mauve. */
 .dock mark, .pattern-well mark {
   padding: 1px 0;
-  color: var(--crust);
-  background: var(--mauve);
+  color: var(--text);
+  background: var(--vc-match);
   border-radius: 4px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mauve) 40%, transparent);
 }
-.dock mark.is-current { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); }
+.dock mark.is-current { color: var(--crust); background: var(--mauve); }
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
 
 /* ── Dialogs: the package dialog.modal / dialog.drawer hosts ───────────── */
@@ -215,9 +294,9 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 1060px) {
-  .workbench { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(0, 1fr); }
+  .workbench { grid-template-columns: 1fr; grid-template-rows: clamp(140px, 20vh, 200px) auto minmax(0, 1fr); }
   .console-pane { grid-column: 1; grid-row: 1; }
-  .scan-pane { grid-column: 1; grid-row: 2; max-height: 40vh; }
+  .scan-pane { grid-column: 1; grid-row: 2; max-height: 30vh; }
   .result-pane { grid-column: 1; grid-row: 3; }
   .console-body textarea { min-height: 74px; }
 }
@@ -230,3 +309,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   .scan-pane, .result-pane { max-height: none; }
   .pane-body { max-height: 60vh; }
 }
+@media (max-width: 520px) {
+  .vc-ruler span.is-mid { display: none; }
+}
+
