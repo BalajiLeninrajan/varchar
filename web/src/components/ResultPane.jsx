@@ -8,7 +8,8 @@ const CELL = {
   text: (value) => ({ className: "", text: value.v }),
 };
 
-function Table({ columns, rows }) {
+/** With `onPoint`, a row under the pointer or focus outlines its records on the tape. */
+function Table({ columns, rows, onPoint }) {
   return (
     <table class="data-table is-sticky-head">
       <thead>
@@ -26,7 +27,14 @@ function Table({ columns, rows }) {
       </thead>
       <tbody>
         {rows.map((row, rowIndex) => (
-          <tr key={rowIndex}>
+          <tr
+            key={rowIndex}
+            tabindex={onPoint ? 0 : undefined}
+            onMouseEnter={onPoint && (() => onPoint(rowIndex))}
+            onMouseLeave={onPoint && (() => onPoint(null))}
+            onFocus={onPoint && (() => onPoint(rowIndex))}
+            onBlur={onPoint && (() => onPoint(null))}
+          >
             {row.map((value, index) => {
               const cell = (CELL[value.t] ?? CELL.text)(value);
               return (
@@ -79,7 +87,7 @@ const DONE = {
   loaded: () => ["Loaded", "Database string loaded and validated."],
 };
 
-export function ResultPane({ outcome, placeholder }) {
+export function ResultPane({ outcome, placeholder, onPoint }) {
   let chips = null;
   let body = <EmptyState title={placeholder.title}>{placeholder.body}</EmptyState>;
 
@@ -103,7 +111,7 @@ export function ResultPane({ outcome, placeholder }) {
         rows.length === 0 ? (
           <EmptyState title="No rows">The scan ran and matched nothing that survived the filter.</EmptyState>
         ) : (
-          <Table columns={columns} rows={rows} />
+          <Table columns={columns} rows={rows} onPoint={onPoint} />
         );
     } else {
       const [title, detail] = (DONE[envelope.kind] ?? (() => ["Done", ""]))(envelope);
