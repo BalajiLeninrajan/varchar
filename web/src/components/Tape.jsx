@@ -1,10 +1,10 @@
-// The database string drawn as a byte map: one span per record, grouped under
+// The database string drawn as a byte map, shown in the string dock above
+// the string itself: one span per record, grouped under
 // a bracket per table, with a byte ruler below. After a scan the read head
 // crosses the map once and lights each record it matched as it gets there.
 
 import { Fragment } from "preact";
 
-import { Pane, PaneHead } from "./ui.jsx";
 import { reach, regions, ticks } from "../lib/tape.js";
 
 /** Seconds the head takes to cross the tape. Mirrors --vc-scan in app.css. */
@@ -23,16 +23,14 @@ export function Tape({ reading, runId, pointed }) {
   const lit = state.filter((s) => LIT.has(s)).length;
 
   return (
-    <Pane className="vc-tape" aria-labelledby="tape-heading">
-      <PaneHead title="The tape" id="tape-heading">
-        <ul class="legend">
+    <div class="vc-tape">
+      <div class="vc-map">
+        <ul class="legend" aria-label="The tape">
           {has("lit") ? <li class="legend-item cn-tone-mauve">matched</li> : null}
           {has("half") ? <li class="legend-item vc-key-half">matched, dropped by Rust</li> : null}
           {has("tested") ? <li class="legend-item vc-key-tested">tested, rejected</li> : null}
           <li class="legend-item vc-key-plain">{scanned ? "not a candidate" : "record"}</li>
         </ul>
-      </PaneHead>
-      <div class="vc-map">
         <div class="vc-brackets" aria-hidden="true">
           {regions(records).map((region) => (
             <span
@@ -78,6 +76,6 @@ export function Tape({ reading, runId, pointed }) {
           <span class="is-end">{total.toLocaleString()} B</span>
         </div>
       </div>
-    </Pane>
+    </div>
   );
 }

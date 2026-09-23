@@ -17,6 +17,7 @@ export function StringDock({
   onToggle,
   onSave,
   onDrop,
+  tape,
 }) {
   const marks = useRef([]);
 
@@ -126,6 +127,8 @@ export function StringDock({
         </div>
       </div>
       <div class="collapsible">
+        <div>
+        {tape}
         <div class="pane-body terminal">
           <pre
             class="scroll-well"
@@ -151,6 +154,7 @@ export function StringDock({
               ),
             )}
           </pre>
+        </div>
         </div>
       </div>
     </Pane>

@@ -255,7 +255,6 @@ export function App() {
           }}
         />
         <ScanPane scan={scan} placeholder={scanPlaceholder} />
-        <Tape reading={reading} runId={runId} pointed={(pointed !== null && reading.rows?.[pointed]) || []} />
         <ResultPane
           outcome={booted ? outcome : null}
           placeholder={resultPlaceholder}
@@ -291,6 +290,7 @@ export function App() {
         onToggle={() => setDockOpen((open) => !open)}
         onSave={onSave}
         onDrop={onDrop}
+        tape={<Tape reading={reading} runId={runId} pointed={(pointed !== null && reading.rows?.[pointed]) || []} />}
       />
 
       <AboutDialog open={dialog === "about"} onClose={() => setDialog(null)} />
