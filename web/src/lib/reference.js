@@ -1,4 +1,4 @@
-// The dialect, clause by clause — a condensed docs/sql-reference.md, kept here
+// The dialect, clause by clause. A condensed docs/sql-reference.md, kept here
 // so the playground can answer "what can I type?" without leaving the tab.
 //
 // An entry marked `run` is a complete statement the console can execute; those

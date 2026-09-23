@@ -1,4 +1,4 @@
-/* ── varchar playground — app layer ─────────────────────────────────────────
+/* ── varchar playground: app layer ─────────────────────────────────────────
    Sits unlayered on top of the catppuccin-neu package (cn.tokens /
    cn.recipes / cn.utilities), so every rule here wins without !important.
    Only genuinely app-specific styling lives here: the one-screen pane grid,
@@ -18,7 +18,7 @@
   padding: var(--gap);
 }
 
-/* ── Panes — the package .panel run as instrument chrome ────────────────── */
+/* ── Panes: the package .panel run as instrument chrome ────────────────── */
 
 /* Markup composes "pane panel": the panel recipe paints the surface, this
    class only turns it into a flex column that clips its own scrolling. The
@@ -37,12 +37,12 @@
 .pane-body.terminal { border-radius: 0; }
 .log-pane .terminal { box-shadow: none; }
 
-/* ── App bar — the package topbar (compact, split) as a strip in the grid.
+/* ── App bar: the package topbar (compact, split) as a strip in the grid.
    The shell never scrolls, so the bar has nothing to stick to. ─────────── */
 
 .appbar { position: static; }
 
-/* ── Controls — package buttons, with the app's few extras ──────────────── */
+/* ── Controls: package buttons, with the app's few extras ──────────────── */
 
 .btn-ghost[aria-expanded="false"] svg { transform: rotate(180deg); }
 
@@ -84,7 +84,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 /* Empty states fill their pane (empty-state is-fill); the copy stays a short measure. */
 .empty-state span { max-width: 46ch; }
 
-/* ── The regex — app syntax-highlight surfaces ──────────────────────────── */
+/* ── The regex: app syntax-highlight surfaces ──────────────────────────── */
 
 /* The pattern is the whole point of this pane, so it gets the whole pane.
    Markup composes cn-code for the face; these are the pane's own metrics. */
@@ -108,10 +108,10 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 
 .match-nav output { min-width: 52px; }
 
-/* ── Result table — the package table at compact density ──────────────────── */
+/* ── Result table: the package table at compact density ──────────────────── */
 
 .result-pane .data-table td { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Value-type colors — app semantics. */
+/* Value-type colors. These are app semantics. */
 .data-table td.is-null { color: var(--overlay-0); font-style: italic; }
 .data-table td.is-boolean { color: var(--teal); }
 .data-table td.is-integer { color: var(--peach); }
@@ -154,7 +154,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-note { color: var(--overlay-1); }
 
 .dock .panel-header { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
-/* The dock is showing a snapshot rather than the live string — say so in the
+/* The dock is showing a snapshot rather than the live string, so say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); }
 .dock .terminal pre {
@@ -172,9 +172,9 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .dock mark.is-current { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); }
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
 
-/* ── Dialogs — the package dialog.modal / dialog.drawer hosts ───────────── */
+/* ── Dialogs: the package dialog.modal / dialog.drawer hosts ───────────── */
 
-/* Column layout so the body — not the dialog — is what scrolls when the sheet
+/* Column layout so the body, not the dialog, is what scrolls when the sheet
    is taller than the viewport. Only the open sheet sets display, so the
    package's closed state (display: none) keeps winning; the discrete display
    transition holds flex through the exit. */
@@ -195,7 +195,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 
-/* Preset list — the stacked segmented recipe at instrument density. */
+/* Preset list: the stacked segmented recipe at instrument density. */
 .preset-list > * { min-height: 0; padding: 8px 10px; flex-direction: column; align-items: stretch; gap: 3px; }
 .preset-list small { line-height: 1.45; overflow-wrap: anywhere; }
 

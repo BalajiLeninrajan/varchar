@@ -21,7 +21,7 @@ export function StringDock({
   const marks = useRef([]);
 
   // A mutation's ranges index the string it scanned, which is the one from
-  // before the write — so lighting them up means showing that string too. If
+  // before the write, so lighting them up means showing that string too. If
   // that string is missing the ranges describe nothing on screen, and drawing
   // them over the live blob would be worse than drawing nothing.
   const beforeWrite = scan?.appliesTo === "before";
