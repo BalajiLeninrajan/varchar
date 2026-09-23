@@ -12,7 +12,7 @@
     "deploy": "pnpm run build && wrangler deploy"
   },
   "dependencies": {
-    "catppuccin-neu": "github:BalajiLeninrajan/catppuccin-neu#v0.3.1",
+    "catppuccin-neu": "github:BalajiLeninrajan/catppuccin-neu#v0.4.0",
     "preact": "^10.28.3"
   },
   "devDependencies": {
