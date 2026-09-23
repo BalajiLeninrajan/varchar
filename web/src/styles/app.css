@@ -1,38 +1,30 @@
-/* ── varchar playground — app layer ─────────────────────────────────────────
+/* ── varchar playground: app layer ─────────────────────────────────────────
    Sits unlayered on top of the catppuccin-neu package (cn.tokens /
    cn.recipes / cn.utilities), so every rule here wins without !important.
    Only genuinely app-specific styling lives here: the one-screen pane grid,
    the reveal animations, and the string-dock / syntax-highlight colors.
-   Layout is classes in the markup (panel-heading, cn-row, cn-stack, the
+   Layout is classes in the markup (panel-header, cn-row, cn-stack, the
    command line, the native dialog hosts); tokens, utilities and recipes come
-   from the package. The app runs at [data-density="dense"] (set on <html>). */
+   from the package. The app runs at [data-density="compact"] (set on <html>). */
 
 :root {
   --gap: 8px;
+  /* A matched byte range; the one in focus is solid --mauve. */
+  --vc-match: color-mix(in srgb, var(--mauve) 38%, transparent);
 }
 
-html, body { height: 100%; }
-body { overflow: hidden; }
-/* Class-level display would otherwise beat the UA rule. */
-[hidden] { display: none !important; }
-/* Inline code in prose — the semantic code element is a code context. The
-   size floors at 12px so code inside 12-13px prose never dips below it. The
-   command line's code element is chrome, not prose, and keeps its recipe. */
-code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px); color: var(--teal); }
-
 .app-shell {
-  height: 100dvh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: var(--gap);
   padding: var(--gap);
 }
 
-/* ── Panes — the package .panel run as instrument chrome ────────────────── */
+/* ── Panes: the package .panel run as instrument chrome ────────────────── */
 
 /* Markup composes "pane panel": the panel recipe paints the surface, this
    class only turns it into a flex column that clips its own scrolling. The
-   heading band is the package panel-heading with a cn-microlabel title. */
+   heading band is the package panel-header with a plain h2 title. */
 .pane {
   min-height: 0;
   min-width: 0;
@@ -47,19 +39,14 @@ code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px
 .pane-body.terminal { border-radius: 0; }
 .log-pane .terminal { box-shadow: none; }
 
-/* ── App bar — the package topbar (compact, split) as a strip in the grid.
+/* ── App bar: the package topbar (compact, split) as a strip in the grid.
    The shell never scrolls, so the bar has nothing to stick to. ─────────── */
 
 .appbar { position: static; }
 
-/* ── Controls — package buttons, with the app's few extras ──────────────── */
+/* ── Controls: package buttons, with the app's few extras ──────────────── */
 
-.btn-flat.is-danger:hover:not(:disabled) {
-  --tone: var(--red);
-  color: var(--tone);
-  background: var(--tint);
-}
-.btn-flat[aria-expanded="false"] svg { transform: rotate(180deg); }
+.btn-ghost[aria-expanded="false"] svg { transform: rotate(180deg); }
 
 /* Hairline grouping the dock's actions without boxing them in. */
 .head-rule {
@@ -70,24 +57,19 @@ code:not(.command-text) { font: 650 1em var(--mono); font-size: max(0.92em, 12px
   background: var(--edge);
 }
 
-/* Readout chips: the count is the message, the unit is the label. */
-.chip b { color: var(--text); font-weight: 750; }
-/* Toned status chips keep the pill recipe but take their tint through the
-   --tone contract prop (set via the package cn-tone-* setters in markup). */
-.chip.is-toned { color: var(--tone); border-color: color-mix(in srgb, var(--tone) 45%, transparent); }
-
 /* Code-entry fields: SQL and encoded-string input is code, so the carved
    package input keeps the mono face here. */
 textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2; }
 
 /* ── Workbench ──────────────────────────────────────────────────────────── */
 
-/* Two rows: input and its explanation on top, the data underneath. */
+/* Input and its explanation on top, kept short, then the result across the
+   full width taking the rest. The tape lives in the string dock. */
 .workbench {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(300px, .78fr) minmax(0, 1.22fr);
-  grid-template-rows: minmax(170px, 34%) minmax(0, 1fr);
+  grid-template-rows: clamp(150px, 24vh, 220px) minmax(0, 1fr);
   gap: var(--gap);
 }
 .console-pane { grid-column: 1; grid-row: 1; }
@@ -105,7 +87,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 /* Empty states fill their pane (empty-state is-fill); the copy stays a short measure. */
 .empty-state span { max-width: 46ch; }
 
-/* ── The regex — app syntax-highlight surfaces ──────────────────────────── */
+/* ── The regex: app syntax-highlight surfaces ──────────────────────────── */
 
 /* The pattern is the whole point of this pane, so it gets the whole pane.
    Markup composes cn-code for the face; these are the pane's own metrics. */
@@ -129,13 +111,89 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 
 .match-nav output { min-width: 52px; }
 
-/* ── Result table — the package table at dense density ──────────────────── */
+/* ── Result table: the package table at compact density ──────────────────── */
 
-.result-pane .table-neu td { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Value-type colors — app semantics. */
-.table-neu td.is-null { color: var(--overlay-0); font-style: italic; }
-.table-neu td.is-boolean { color: var(--teal); }
-.table-neu td.is-integer { color: var(--peach); }
+.result-pane .data-table td { white-space: pre-wrap; overflow-wrap: anywhere; }
+.result-pane .empty-state { padding-block: var(--space-5); }
+/* A focused row outlines inside the scroller, where it can't be clipped. */
+.result-pane tbody tr:focus-visible { outline-offset: -2px; }
+/* Value-type colors. These are app semantics. */
+.data-table td.is-null { color: var(--overlay-0); font-style: italic; }
+.data-table td.is-boolean { color: var(--teal); }
+.data-table td.is-integer { color: var(--peach); }
+
+/* ── The tape: table brackets over the byte map, a byte ruler under it ──── */
+
+.vc-map {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--edge-soft);
+}
+.vc-map > .legend { justify-content: flex-end; }
+
+/* Brackets and ticks are structure, so they stay neutral. */
+.vc-brackets, .vc-ruler { position: relative; height: 16px; }
+.vc-brackets span {
+  position: absolute;
+  bottom: 0;
+  height: 8px;
+  border: 1px solid var(--overlay-0);
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+}
+.vc-brackets b {
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 var(--space-1);
+  background: var(--base);
+  color: var(--overlay-2);
+  font: var(--cn-type-meta-weight) var(--cn-type-micro-size)/1 var(--mono);
+  white-space: nowrap;
+}
+.vc-ruler i { position: absolute; top: 0; width: 1px; height: 4px; background: var(--overlay-0); }
+.vc-ruler span {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  color: var(--overlay-1);
+  font: var(--cn-type-micro-size)/1 var(--mono);
+  white-space: nowrap;
+}
+.vc-ruler span:first-of-type { transform: none; }
+.vc-ruler span.is-end { left: 100%; transform: translateX(-100%); }
+
+/* One span per record, as wide as its bytes. */
+.vc-track { position: relative; display: flex; gap: 2px; height: 28px; }
+.vc-rec { min-width: 2px; border-radius: 2px; background: var(--surface-0); }
+.vc-rec.is-row { background: var(--surface-1); }
+/* Tested and rejected: the pattern reached this record and said no. */
+.vc-rec.is-tested, .vc-key-tested::before {
+  background: transparent;
+  outline: 1px dashed var(--overlay-1);
+  outline-offset: -1px;
+}
+.vc-rec.is-lit { background: var(--vc-match); }
+/* Half-lit: the pattern matched it, then Rust dropped it. */
+.vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--vc-match) 50%, var(--surface-1) 50%); }
+.vc-key-plain { --tone: var(--surface-1); }
+.vc-key-lit { --tone: var(--vc-match); }
+/* The records behind the pointed result row. */
+.vc-rec.is-current { background: var(--mauve); }
+
+/* The scan. Matched records light in turn, left to right, the order a regex
+   reads the string, on a near-constant curve src/lib/tape.js solves per
+   record. There is no moving head: the records themselves carry the sweep. */
+.vc-tape { --vc-start: .3s; }
+.vc-rec.is-lit, .vc-rec.is-half {
+  animation: vc-light var(--t-slow) var(--ease-out) backwards;
+  animation-delay: calc(var(--vc-start) + var(--d, 0s));
+}
+@keyframes vc-light { from { background: var(--surface-2); } }
 
 /* ── Reveals ────────────────────────────────────────────────────────────────
    Anything that can be hidden fades and slides rather than snapping. The
@@ -174,8 +232,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-err { color: var(--red); }
 .log-note { color: var(--overlay-1); }
 
-.dock .pane-head { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
-/* The dock is showing a snapshot rather than the live string — say so in the
+.dock .panel-header { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
+/* The dock is showing a snapshot rather than the live string, so say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); }
 .dock .terminal pre {
@@ -183,20 +241,19 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   min-height: 46px;
   line-height: 1.75;
 }
+/* A match is translucent mauve; the one in focus is solid mauve. */
 .dock mark, .pattern-well mark {
   padding: 1px 0;
-  color: var(--crust);
-  background: var(--mauve);
+  color: var(--text);
+  background: var(--vc-match);
   border-radius: 4px;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mauve) 40%, transparent);
 }
-.dock mark.is-current { background: var(--yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--yellow) 22%, transparent); }
+.dock mark.is-current { color: var(--crust); background: var(--mauve); }
 .dock .blob-empty { color: var(--overlay-0); font-style: italic; }
-.swatch { width: 8px; height: 8px; border-radius: 4px; background: var(--mauve); display: inline-block; margin-right: 5px; vertical-align: -1px; }
 
-/* ── Dialogs — the package dialog.modal / dialog.drawer hosts ───────────── */
+/* ── Dialogs: the package dialog.modal / dialog.drawer hosts ───────────── */
 
-/* Column layout so the body — not the dialog — is what scrolls when the sheet
+/* Column layout so the body, not the dialog, is what scrolls when the sheet
    is taller than the viewport. Only the open sheet sets display, so the
    package's closed state (display: none) keeps winning; the discrete display
    transition holds flex through the exit. */
@@ -206,10 +263,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .sheet-body textarea { min-height: 96px; }
 
 /* The about sheet is the one editorial surface in the app: it gets room to
-   breathe and a display size that fits a dialog. */
-.sheet.is-about { width: min(880px, calc(100vw - 48px)); border-radius: 16px; }
+   breathe. */
 .is-about .sheet-body { padding: 36px 44px 28px; }
-.is-about .display-title { font-size: clamp(28px, 3.6vw, 40px); }
 .is-about .sheet-foot { padding: 16px 44px 18px; }
 
 .sample .tok-tag { color: var(--mauve); font-weight: 700; }
@@ -217,17 +272,11 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .sample .tok-cell { color: var(--peach); }
 .about-list b { color: var(--text); }
 
-/* Side sheets — the package drawer has square corners, so its heading band
-   drops the panel corner rule. */
-.side-sheet .pane-head { border-radius: 0; }
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 
-/* Preset list — the stacked segmented recipe at instrument density. */
+/* Preset list: the stacked segmented recipe at instrument density. */
 .preset-list > * { min-height: 0; padding: 8px 10px; flex-direction: column; align-items: stretch; gap: 3px; }
 .preset-list small { line-height: 1.45; overflow-wrap: anywhere; }
-/* SQL inside a preset title takes the mono voice; the slight size trim keeps
-   bold mono optically level with the sans around it. */
-.preset-list b code { font-family: var(--mono); font-size: .92em; letter-spacing: -.01em; }
 
 /* ── The SQL reference ──────────────────────────────────────────────────── */
 
@@ -235,16 +284,6 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .side-sheet.is-wide { width: min(560px, calc(100vw - 40px)); }
 
 .drawer-search { flex: none; padding: 10px 12px 0; }
-
-/* What the dialect refuses gets the dashed, unfilled treatment. */
-.ref-tags li {
-  margin: 0;
-  padding: 3px 8px;
-  color: var(--overlay-1);
-  border: 1px dashed var(--surface-1);
-  border-radius: 999px;
-  font: 500 12px/1.35 var(--sans);
-}
 
 .sql-kw { color: var(--mauve); font-weight: 750; }
 .sql-type { color: var(--teal); }
@@ -255,16 +294,14 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 1060px) {
-  .workbench { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(0, 1fr); }
+  .workbench { grid-template-columns: 1fr; grid-template-rows: clamp(140px, 20vh, 200px) auto minmax(0, 1fr); }
   .console-pane { grid-column: 1; grid-row: 1; }
-  .scan-pane { grid-column: 1; grid-row: 2; max-height: 40vh; }
+  .scan-pane { grid-column: 1; grid-row: 2; max-height: 30vh; }
   .result-pane { grid-column: 1; grid-row: 3; }
   .console-body textarea { min-height: 74px; }
 }
 
 @media (max-width: 760px) {
-  body { overflow: auto; }
-  .sheet.is-about { width: calc(100vw - 20px); }
   .is-about .sheet-body { padding: 28px 24px 24px; }
   .is-about .sheet-foot { padding: 18px 24px 20px; }
   .app-shell { height: auto; min-height: 100dvh; }
@@ -272,3 +309,7 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
   .scan-pane, .result-pane { max-height: none; }
   .pane-body { max-height: 60vh; }
 }
+@media (max-width: 520px) {
+  .vc-ruler span.is-mid { display: none; }
+}
+

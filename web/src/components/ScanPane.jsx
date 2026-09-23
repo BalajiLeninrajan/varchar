@@ -5,7 +5,7 @@ export function ScanPane({ scan, placeholder }) {
   if (!scan) {
     return (
       <Pane className="scan-pane" aria-labelledby="scan-heading">
-        <PaneHead title="the regex" id="scan-heading" />
+        <PaneHead title="The regex" id="scan-heading" />
         <div class="pane-body panel-body scroll-well">
           <EmptyState title={placeholder.title}>{placeholder.body}</EmptyState>
         </div>
@@ -17,7 +17,7 @@ export function ScanPane({ scan, placeholder }) {
 
   return (
     <Pane className="scan-pane" aria-labelledby="scan-heading">
-      <PaneHead title="the regex" id="scan-heading">
+      <PaneHead title="The regex" id="scan-heading">
         {scan.exact ? (
           <Chip tone="green" title="Every predicate is in the pattern: the matches are the result rows">
             <b>exact</b> filter
@@ -36,7 +36,7 @@ export function ScanPane({ scan, placeholder }) {
         {scan.appliesTo === "before" ? (
           <Chip
             tone="blue"
-            title="A mutation scans the string as it stood before the write, so those bytes have since been rewritten or removed — there is nothing left to highlight"
+            title="A mutation scans the string as it stood before the write, so those bytes have since been rewritten or removed and there is nothing left to highlight"
           >
             before the write
           </Chip>

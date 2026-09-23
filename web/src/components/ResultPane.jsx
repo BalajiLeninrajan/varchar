@@ -8,13 +8,14 @@ const CELL = {
   text: (value) => ({ className: "", text: value.v }),
 };
 
-function Table({ columns, rows }) {
+/** With `onPoint`, a row under the pointer or focus outlines its records on the tape. */
+function Table({ columns, rows, onPoint }) {
   return (
-    <table class="table-neu">
+    <table class="data-table is-sticky-head">
       <thead>
         <tr>
           {columns.map((column, index) => (
-            <th key={index} class="cn-nowrap cn-sticky-top">
+            <th key={index} class="cn-nowrap">
               {column.label}
               <small class="cn-microlabel cn-block cn-mt-4">
                 {column.type}
@@ -26,7 +27,14 @@ function Table({ columns, rows }) {
       </thead>
       <tbody>
         {rows.map((row, rowIndex) => (
-          <tr key={rowIndex}>
+          <tr
+            key={rowIndex}
+            tabindex={onPoint ? 0 : undefined}
+            onMouseEnter={onPoint && (() => onPoint(rowIndex))}
+            onMouseLeave={onPoint && (() => onPoint(null))}
+            onFocus={onPoint && (() => onPoint(rowIndex))}
+            onBlur={onPoint && (() => onPoint(null))}
+          >
             {row.map((value, index) => {
               const cell = (CELL[value.t] ?? CELL.text)(value);
               return (
@@ -61,43 +69,31 @@ function ErrorView({ statement, error }) {
       {error.detail && typeof error.detail.start === "number" ? (
         <Offender statement={statement} detail={error.detail} />
       ) : null}
-      <ul class="cn-list-none cn-stack cn-gap-8">
-        <li class="cn-row cn-top cn-mt-0">
-          <span class="mark-solid" style={{ "--accent": "var(--green)" }}>
-            ✓
-          </span>
-          <div>The database string is unchanged, byte for byte. A failed statement never touches it.</div>
-        </li>
-      </ul>
+      <p class="cn-meta cn-m-0">The database string is unchanged, byte for byte. A failed statement never touches it.</p>
     </div>
   );
 }
 
 const DONE = {
   affected: (envelope) => [
-    "committed",
+    "Committed",
     `${envelope.rows.toLocaleString()} row${envelope.rows === 1 ? "" : "s"} written. The string below was rewritten in full.`,
   ],
   created: (envelope) => [
-    "created",
+    "Created",
     `Table ${envelope.table} created. Its schema now lives in the string as a ~S record.`,
   ],
-  explain: () => ["explained", "Pattern compiled. No rows were scanned — EXPLAIN REGEX stops at the plan."],
-  loaded: () => ["loaded", "Database string loaded and validated."],
+  explain: () => ["Explained", "Pattern compiled. No rows were scanned, because EXPLAIN REGEX stops at the plan."],
+  loaded: () => ["Loaded", "Database string loaded and validated."],
 };
 
-export function ResultPane({ outcome, placeholder }) {
+export function ResultPane({ outcome, placeholder, onPoint }) {
   let chips = null;
   let body = <EmptyState title={placeholder.title}>{placeholder.body}</EmptyState>;
 
   if (outcome) {
     const { statement, envelope } = outcome;
     if (!envelope.ok) {
-      chips = (
-        <Chip tone="red">
-          <b>{envelope.error.kind}</b> error
-        </Chip>
-      );
       body = <ErrorView statement={statement} error={envelope.error} />;
     } else if (envelope.kind === "rows") {
       const { columns, rows } = envelope.result;
@@ -113,19 +109,19 @@ export function ResultPane({ outcome, placeholder }) {
       );
       body =
         rows.length === 0 ? (
-          <EmptyState title="no rows">The scan ran and matched nothing that survived the filter.</EmptyState>
+          <EmptyState title="No rows">The scan ran and matched nothing that survived the filter.</EmptyState>
         ) : (
-          <Table columns={columns} rows={rows} />
+          <Table columns={columns} rows={rows} onPoint={onPoint} />
         );
     } else {
-      const [title, detail] = (DONE[envelope.kind] ?? (() => ["done", ""]))(envelope);
+      const [title, detail] = (DONE[envelope.kind] ?? (() => ["Done", ""]))(envelope);
       body = <EmptyState title={title}>{detail}</EmptyState>;
     }
   }
 
   return (
     <Pane className="result-pane" aria-labelledby="result-heading">
-      <PaneHead title="result" id="result-heading">
+      <PaneHead title="Result" id="result-heading">
         {chips}
       </PaneHead>
       <div class="pane-body scroll-well">{body}</div>

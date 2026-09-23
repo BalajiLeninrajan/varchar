@@ -17,11 +17,12 @@ export function StringDock({
   onToggle,
   onSave,
   onDrop,
+  tape,
 }) {
   const marks = useRef([]);
 
   // A mutation's ranges index the string it scanned, which is the one from
-  // before the write — so lighting them up means showing that string too. If
+  // before the write, so lighting them up means showing that string too. If
   // that string is missing the ranges describe nothing on screen, and drawing
   // them over the live blob would be worse than drawing nothing.
   const beforeWrite = scan?.appliesTo === "before";
@@ -50,29 +51,28 @@ export function StringDock({
       className={`dock${open ? "" : " is-collapsed"}`}
       aria-labelledby="dock-heading"
     >
-      <div class="pane-head panel-heading">
-        <h2 id="dock-heading" class="cn-microlabel cn-nowrap">
-          the database string
+      <div class="panel-header">
+        <h2 id="dock-heading" class="cn-nowrap">
+          The database string
           {explain && historic ? (
-            <em class="as-of"> · before the write</em>
+            <span class="as-of"> · before the write</span>
           ) : null}
         </h2>
-        <div class="cn-row cn-gap-4 cn-min-0">
-          <span class="cn-meta cn-truncate" id="blob-note">
-            {total !== 0 && (
-              <>
-                <span class="swatch" />
+        <div class="band-actions">
+          {total !== 0 && (
+            <span class="legend-item cn-tone-mauve cn-min-0" id="blob-note">
+              <span class="cn-truncate">
                 {total.toLocaleString()} byte range{total === 1 ? "" : "s"}{" "}
                 matched
                 {drawn < total
                   ? ` · first ${drawn.toLocaleString()} shown`
                   : ""}
-              </>
-            )}
-          </span>
+              </span>
+            </span>
+          )}
           {scan?.matches?.length ? (
             <button
-              class={`btn-flat${explain ? " active" : ""}`}
+              class={"btn btn-ghost is-sm"}
               aria-pressed={String(explain)}
               title={
                 historic
@@ -87,7 +87,7 @@ export function StringDock({
           {drawn > 0 ? (
             <span class="match-nav cn-row cn-gap-4">
               <button
-                class="btn-flat"
+                class="btn btn-ghost is-sm"
                 onClick={() => step(-1)}
                 title="Previous match"
                 aria-label="Previous match"
@@ -98,7 +98,7 @@ export function StringDock({
                 {current + 1} / {drawn}
               </output>
               <button
-                class="btn-flat"
+                class="btn btn-ghost is-sm"
                 onClick={() => step(1)}
                 title="Next match"
                 aria-label="Next match"
@@ -107,17 +107,17 @@ export function StringDock({
               </button>
             </span>
           ) : null}
-          <span class="head-rule" />
-          <button class="btn-flat is-danger" onClick={onDrop}>
+          {total !== 0 || scan?.matches?.length ? <span class="head-rule" /> : null}
+          <button class="btn btn-ghost is-sm is-danger" onClick={onDrop}>
             <Icon id="trash" /> drop all
           </button>
           <span class="head-rule" />
           <CopyButton text={blob} icon="copy" />
-          <button class="btn-flat" onClick={onSave}>
+          <button class="btn btn-ghost is-sm" onClick={onSave}>
             <Icon id="download" /> save
           </button>
           <button
-            class="btn-flat"
+            class="btn btn-ghost is-sm"
             aria-expanded={String(open)}
             title={open ? "Collapse" : "Expand"}
             onClick={onToggle}
@@ -127,6 +127,8 @@ export function StringDock({
         </div>
       </div>
       <div class="collapsible">
+        <div>
+        {tape}
         <div class="pane-body terminal">
           <pre
             class="scroll-well"
@@ -152,6 +154,7 @@ export function StringDock({
               ),
             )}
           </pre>
+        </div>
         </div>
       </div>
     </Pane>

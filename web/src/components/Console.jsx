@@ -7,9 +7,9 @@ export function Console({ sql, onSql, onRun, onSeed }) {
 
   return (
     <Pane className="console-pane" aria-labelledby="console-heading">
-      <PaneHead title="console" id="console-heading">
+      <PaneHead title="Console" id="console-heading">
         <button
-          class="btn-flat"
+          class="btn btn-ghost is-sm"
           onClick={() => {
             onSql("");
             field.current?.focus();

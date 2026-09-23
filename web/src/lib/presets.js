@@ -17,7 +17,7 @@ export const DEMO = [
 
 export const GROUPS = [
   {
-    title: "SCHEMA",
+    title: "Schema",
     presets: [
       {
         id: "schema-users",
@@ -34,7 +34,7 @@ export const GROUPS = [
     ],
   },
   {
-    title: "DATA",
+    title: "Data",
     presets: [
       {
         id: "seed-users",
@@ -51,7 +51,7 @@ export const GROUPS = [
     ],
   },
   {
-    title: "SELECT — WATCH THE REGEX",
+    title: "SELECT, and the regex it runs",
     presets: [
       {
         id: "select-all",
@@ -104,7 +104,7 @@ export const GROUPS = [
     ],
   },
   {
-    title: "MUTATE",
+    title: "Mutate",
     presets: [
       {
         id: "update",
@@ -127,13 +127,13 @@ export const GROUPS = [
       {
         id: "constraint",
         name: "Break a constraint",
-        blurb: "Rejected — the string stays byte-for-byte identical",
+        blurb: "Rejected, and the string stays byte-for-byte identical",
         sql: ["INSERT INTO users (name, email) VALUES ('Ada Again', 'ada@example.com')"],
       },
     ],
   },
   {
-    title: "INTROSPECT",
+    title: "Introspect",
     presets: [
       { id: "show-tables", name: "`SHOW TABLES`", blurb: "Read the catalog", sql: ["SHOW TABLES"] },
       { id: "describe", name: "`DESCRIBE users`", blurb: "Column types, keys, defaults", sql: ["DESCRIBE users"] },

@@ -1,4 +1,4 @@
-// The dialect, clause by clause — a condensed docs/sql-reference.md, kept here
+// The dialect, clause by clause. A condensed docs/sql-reference.md, kept here
 // so the playground can answer "what can I type?" without leaving the tab.
 //
 // An entry marked `run` is a complete statement the console can execute; those
@@ -7,7 +7,7 @@
 
 export const SECTIONS = [
   {
-    title: "STATEMENTS",
+    title: "Statements",
     blurb: "One statement at a time, with an optional trailing semicolon. The console splits on ; and runs them in order.",
     entries: [
       {
@@ -56,7 +56,7 @@ export const SECTIONS = [
     ],
   },
   {
-    title: "COLUMN TYPES",
+    title: "Column types",
     blurb: "Three types, and every column is nullable unless it says otherwise.",
     entries: [
       { syntax: "TEXT", note: "UTF-8. Comparison and LIKE are case- and normalization-sensitive." },
@@ -69,7 +69,7 @@ export const SECTIONS = [
     ],
   },
   {
-    title: "CONSTRAINTS",
+    title: "Constraints",
     blurb: "Inline on the column, or table-level at the end of the CREATE. Checked on insert, on update, and again when a string is imported.",
     entries: [
       { syntax: "NOT NULL", note: "The column rejects NULL." },
@@ -85,7 +85,7 @@ export const SECTIONS = [
       { syntax: "UNIQUE", note: "Rejects duplicate non-NULL values; several NULLs are fine." },
       {
         syntax: "CHECK (views >= 0)",
-        note: "Table-local, and may name any column of the table, including one declared later. Rejects only false — unknown passes.",
+        note: "Table-local, and may name any column of the table, including one declared later. Rejects only false, so unknown passes.",
       },
       {
         syntax: "REFERENCES users(id)",
@@ -128,7 +128,7 @@ export const SECTIONS = [
     note: "A NULL operand makes a leaf unknown, and WHERE keeps only what is true. There is no unary NOT.",
   },
   {
-    title: "JOINS",
+    title: "Joins",
     blurb: "Inner equijoins. JOIN and INNER JOIN are the same thing.",
     entries: [
       {
@@ -148,7 +148,7 @@ export const SECTIONS = [
     note: "Further JOIN clauses chain left to right and may refer to any earlier source. Duplicate and many-to-many matches are kept.",
   },
   {
-    title: "ORDER AND PAGE",
+    title: "Order and page",
     blurb: "The tail has one fixed shape: [ORDER BY ...] [LIMIT n] [OFFSET n].",
     entries: [
       {
@@ -167,7 +167,7 @@ export const SECTIONS = [
     ],
   },
   {
-    title: "NOT IN THE DIALECT",
+    title: "Not in the dialect",
     blurb: "Rejected outright rather than partially interpreted.",
     items: [
       "outer joins",

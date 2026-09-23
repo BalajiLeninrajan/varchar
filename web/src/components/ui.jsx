@@ -18,11 +18,11 @@ export function Pane({ className = "", children, ...rest }) {
 
 export function PaneHead({ title, id, children }) {
   return (
-    <div class="pane-head panel-heading">
-      <h2 id={id} class="cn-microlabel cn-nowrap">
+    <div class="panel-header">
+      <h2 id={id} class="cn-nowrap">
         {title}
       </h2>
-      <div class="cn-row cn-gap-4 cn-min-0">{children}</div>
+      {children ? <div class="band-actions">{children}</div> : null}
     </div>
   );
 }
@@ -32,12 +32,12 @@ export function PaneHead({ title, id, children }) {
 export function Marked({ text }) {
   return text
     .split("`")
-    .map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+    .map((part, i) => (i % 2 ? <code key={i} class="cn-code-inline">{part}</code> : part));
 }
 
 export function Chip({ tone, title, class: extra = "", children }) {
-  // Tint rides the package --tone contract prop via the cn-tone-* setters.
-  const className = `${tone ? `chip is-toned cn-tone-${tone}` : "chip"} ${extra}`.trim();
+  // A toned chip is the package status tag, tinted through the cn-tone-* setters.
+  const className = `${tone ? `tag cn-tone-${tone}` : "chip"} ${extra}`.trim();
   return (
     <span class={className} title={title}>
       {children}
@@ -73,7 +73,7 @@ export function CopyButton({ text, label = "copy", icon }) {
 
   return (
     <button
-      class="btn-flat"
+      class="btn btn-ghost is-sm"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
@@ -111,7 +111,7 @@ export function CopyCommand({ command }) {
       </code>
       <button
         type="button"
-        class="btn-icon command-copy"
+        class="btn is-icon command-copy"
         aria-label="Copy to clipboard"
         title="Copy to clipboard"
         onClick={async () => {

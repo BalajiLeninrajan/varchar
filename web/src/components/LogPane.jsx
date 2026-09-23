@@ -10,12 +10,12 @@ export function LogPane({ entries, leaving, onClear, onClose }) {
   }, [entries]);
 
   return (
-    <Pane className={`log-pane${leaving ? " is-leaving" : ""}`} aria-labelledby="log-heading">
-      <PaneHead title="log" id="log-heading">
-        <button class="btn-flat" onClick={onClear}>
+    <Pane id="log-pane" className={`log-pane${leaving ? " is-leaving" : ""}`} aria-labelledby="log-heading">
+      <PaneHead title="Log" id="log-heading">
+        <button class="btn btn-ghost is-sm" onClick={onClear}>
           clear
         </button>
-        <button class="btn-flat" onClick={onClose}>
+        <button class="btn btn-ghost is-sm" onClick={onClose}>
           hide
         </button>
       </PaneHead>

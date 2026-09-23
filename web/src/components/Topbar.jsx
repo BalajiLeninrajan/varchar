@@ -26,45 +26,45 @@ export function Topbar({
   return (
     <header class="appbar topbar is-compact is-split">
       <span class="wordmark">
-        <span class="mark-solid">
+        <span class="mark">
           <Icon id="mark" size={13} />
         </span>
         var<em>char</em>
       </span>
       <div class="cn-row cn-wrap cn-end cn-gap-4 cn-min-0">
-        {/* Stat pills are numeric readouts, not labels: the mono meta voice. */}
-        <Chip class="cn-code-meta cn-gap-4" title="Length of the encoded string in bytes">
+        <Chip class="cn-gap-4" title="Length of the encoded string in bytes">
           <b>{stats.bytes.toLocaleString()}</b>B
         </Chip>
-        <Chip class="cn-code-meta cn-gap-4" title="~S records in the string">
+        <Chip class="cn-gap-4" title="~S records in the string">
           <b>{stats.tables}</b>tbl
         </Chip>
-        <Chip class="cn-code-meta cn-gap-4" title="~R records in the string">
+        <Chip class="cn-gap-4" title="~R records in the string">
           <b>{stats.rows}</b>rows
         </Chip>
-        <button class="btn-flat" onClick={onOpenPresets}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenPresets}>
           examples
         </button>
-        <button class="btn-flat" onClick={onOpenReference}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenReference}>
           sql
         </button>
-        <button class="btn-flat" onClick={onOpenImport}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenImport}>
           import
         </button>
         <button
-          class={`btn-flat${logOpen ? " active" : ""}`}
+          class="btn btn-ghost is-sm"
           aria-expanded={String(logOpen)}
+          aria-controls="log-pane"
           onClick={onToggleLog}
         >
           log
         </button>
-        <button class="btn-flat" onClick={onOpenAbout}>
+        <button class="btn btn-ghost is-sm" onClick={onOpenAbout}>
           about
         </button>
         {LINKS.map((link) => (
           <a
             key={link.id}
-            class="btn-flat"
+            class="btn btn-ghost is-sm"
             href={link.href}
             title={link.title}
             target="_blank"
