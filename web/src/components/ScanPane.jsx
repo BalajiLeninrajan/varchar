@@ -27,7 +27,7 @@ export function ScanPane({ scan, placeholder }) {
             <b>prefilter</b>
           </Chip>
         )}
-        <Chip>
+        <Chip class="ph-no-capture">
           scans <b>{scan.sources.join(", ")}</b>
         </Chip>
         <Chip>
