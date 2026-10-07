@@ -1,3 +1,5 @@
+import posthog from "posthog-js";
+
 import { Chip, Icon } from "./ui.jsx";
 
 const LINKS = [
@@ -69,6 +71,7 @@ export function Topbar({
             title={link.title}
             target="_blank"
             rel="noreferrer noopener"
+            onClick={() => posthog.capture("outbound_link", { url: link.href, location: "topbar" })}
           >
             <Icon id={link.id} size={13} />
           </a>

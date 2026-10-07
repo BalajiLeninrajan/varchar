@@ -1,9 +1,14 @@
+import posthog from "posthog-js";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { CopyCommand, EmptyState, Icon, Marked, Modal } from "./ui.jsx";
 import { GROUPS } from "../lib/presets.js";
 import { SECTIONS } from "../lib/reference.js";
 import { tokenizeSql } from "../lib/sql.js";
+
+/** Reports a click on a link that leaves the playground, from `location`. */
+const outbound = (location) => (event) =>
+  posthog.capture("outbound_link", { url: event.currentTarget.href, location });
 
 export function AboutDialog({ open, onClose }) {
   return (
@@ -64,16 +69,16 @@ export function AboutDialog({ open, onClose }) {
       {/* Outside the scrolling body so the CTA is reachable on a short screen. */}
       <footer class="sheet-foot panel-footer">
         <nav class="cn-cluster cn-gap-24">
-          <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("about")}>
             <Icon id="github" size={13} /> GitHub
           </a>
-          <a class="btn-text" href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("about")}>
             <Icon id="crate" size={13} /> crates.io
           </a>
-          <a class="btn-text" href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener" onClick={outbound("about")}>
             <Icon id="crate" size={13} /> varchar-cli
           </a>
-          <a class="btn-text" href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("about")}>
             <Icon id="book" size={13} /> docs.rs
           </a>
         </nav>
@@ -235,7 +240,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
       </div>
       <footer class="panel-footer">
         <span class="cn-meta">The dialect is small on purpose.</span>
-        <a class="btn-text" href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener">
+        <a class="btn-text" href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener" onClick={outbound("reference")}>
           <Icon id="book" size={13} /> full reference
         </a>
       </footer>
@@ -270,7 +275,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           <label for="blob-input">paste an encoded database string</label>
           <textarea
             id="blob-input"
-            class="is-code"
+            class="is-code ph-no-capture"
             spellcheck={false}
             value={text}
             placeholder="V2;~S|users|id:I:!|name:T:?;~P|users|id;"

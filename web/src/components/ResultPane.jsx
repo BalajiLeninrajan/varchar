@@ -124,7 +124,7 @@ export function ResultPane({ outcome, placeholder, onPoint }) {
       <PaneHead title="Result" id="result-heading">
         {chips}
       </PaneHead>
-      <div class="pane-body scroll-well">{body}</div>
+      <div class="pane-body scroll-well ph-no-capture">{body}</div>
     </Pane>
   );
 }

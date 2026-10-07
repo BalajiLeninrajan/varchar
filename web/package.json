@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "catppuccin-neu": "github:BalajiLeninrajan/catppuccin-neu#v0.4.0",
+    "posthog-js": "^1.438.2",
     "preact": "^10.28.3"
   },
   "devDependencies": {

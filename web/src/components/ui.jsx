@@ -1,3 +1,4 @@
+import posthog from "posthog-js";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 export function Icon({ id, size = 12 }) {
@@ -118,6 +119,7 @@ export function CopyCommand({ command }) {
           try {
             await navigator.clipboard.writeText(command);
             setCopied(true);
+            posthog.capture("copy_command", { command });
           } catch {
             /* clipboard denied; the command is still selectable */
           }
