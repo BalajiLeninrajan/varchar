@@ -94,8 +94,8 @@ export function CopyButton({ text, label = "copy", icon }) {
   );
 }
 
-/** A shell command line with the package copy control. */
-export function CopyCommand({ command }) {
+/** A shell command line with the package copy control. `button` names it in analytics. */
+export function CopyCommand({ command, button }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -119,7 +119,7 @@ export function CopyCommand({ command }) {
           try {
             await navigator.clipboard.writeText(command);
             setCopied(true);
-            posthog.capture("copy_command", { command });
+            posthog.capture("copy_command", { button });
           } catch {
             /* clipboard denied; the command is still selectable */
           }

@@ -261,8 +261,7 @@ export function App() {
           onSql={setSql}
           onRun={() => {
             // Only that a run happened: the SQL itself never leaves the tab.
-            posthog.capture("run_query");
-            run(sql);
+            if (run(sql)) posthog.capture("run_query");
           }}
           onSeed={() => {
             run(DEMO, { note: "seeding the demo schema and data" });
