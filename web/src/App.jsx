@@ -1,4 +1,3 @@
-import posthog from "posthog-js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { Console } from "./components/Console.jsx";
@@ -259,10 +258,7 @@ export function App() {
         <Console
           sql={sql}
           onSql={setSql}
-          onRun={() => {
-            // Only that a run happened: the SQL itself never leaves the tab.
-            if (run(sql)) posthog.capture("run_query");
-          }}
+          onRun={() => run(sql)}
           onSeed={() => {
             run(DEMO, { note: "seeding the demo schema and data" });
             setSql(FIRST_QUERY);
@@ -313,7 +309,6 @@ export function App() {
         onClose={() => setDialog(null)}
         onPick={(preset) => {
           // The console is loaded, not fired: the reader presses run.
-          posthog.capture("load_example", { preset: preset.id });
           setSql(preset.sql.join(";\n"));
           setDialog(null);
         }}

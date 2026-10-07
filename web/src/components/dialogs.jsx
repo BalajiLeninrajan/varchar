@@ -62,8 +62,8 @@ export function AboutDialog({ open, onClose }) {
           <li>The string is the whole database. Copy it, save it, or import one back.</li>
         </ul>
         <div class="cn-grid-2">
-          <CopyCommand command="cargo add varchar" button="cargo_add" />
-          <CopyCommand command="cargo install varchar-cli" button="cargo_install" />
+          <CopyCommand command="cargo add varchar" />
+          <CopyCommand command="cargo install varchar-cli" />
         </div>
       </div>
       {/* Outside the scrolling body so the CTA is reachable on a short screen. */}
