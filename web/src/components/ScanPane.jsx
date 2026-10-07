@@ -27,7 +27,7 @@ export function ScanPane({ scan, placeholder }) {
             <b>prefilter</b>
           </Chip>
         )}
-        <Chip>
+        <Chip class="ph-no-capture">
           scans <b>{scan.sources.join(", ")}</b>
         </Chip>
         <Chip>
@@ -44,7 +44,7 @@ export function ScanPane({ scan, placeholder }) {
         <CopyButton text={scan.pattern} />
       </PaneHead>
 
-      <div class="pane-body panel-body scroll-well">
+      <div class="pane-body panel-body scroll-well ph-no-capture">
         <pre class="pattern cn-code">
           {tokenizePattern(scan.pattern).map((token, index) => (
             <span key={index} class={`re-${token.kind}`}>

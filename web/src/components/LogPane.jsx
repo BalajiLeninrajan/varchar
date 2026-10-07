@@ -19,7 +19,7 @@ export function LogPane({ entries, leaving, onClear, onClose }) {
           hide
         </button>
       </PaneHead>
-      <div class="pane-body terminal">
+      <div class="pane-body terminal ph-no-capture">
         <pre ref={stream} class="scroll-well" aria-live="polite">
           {entries.map((entry) => (
             <span key={entry.id} class={`log-line${entry.tone === "err" ? " is-error" : ""}`}>

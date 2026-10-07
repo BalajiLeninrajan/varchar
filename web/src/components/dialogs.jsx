@@ -1,9 +1,13 @@
+import posthog from "posthog-js";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { CopyCommand, EmptyState, Icon, Marked, Modal } from "./ui.jsx";
 import { GROUPS } from "../lib/presets.js";
 import { SECTIONS } from "../lib/reference.js";
 import { tokenizeSql } from "../lib/sql.js";
+
+/** Reports a click on a link that leaves the playground: where it goes, and where it sat. */
+const outbound = (destination, location) => () => posthog.capture("outbound_link", { destination, location });
 
 export function AboutDialog({ open, onClose }) {
   return (
@@ -15,7 +19,8 @@ export function AboutDialog({ open, onClose }) {
         <p class="lede cn-mt-0 cn-mb-24">
           Schemas, constraints, sequence state and every row live in a single UTF-8 <code class="cn-code-inline">String</code>, and
           every <code class="cn-code-inline">SELECT</code> is a regular expression scanned across it. This page runs the real engine
-          compiled to WebAssembly: nothing leaves your tab, and nothing survives a reload.
+          compiled to WebAssembly: your SQL and data never leave your tab, and nothing survives a reload. Anonymous,
+          cookieless usage counts go to PostHog.
         </p>
         <pre class="sample codeblock cn-mt-0 cn-mb-24">
           <span class="tok-tag">V2;</span>
@@ -64,16 +69,16 @@ export function AboutDialog({ open, onClose }) {
       {/* Outside the scrolling body so the CTA is reachable on a short screen. */}
       <footer class="sheet-foot panel-footer">
         <nav class="cn-cluster cn-gap-24">
-          <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://github.com/BalajiLeninrajan/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("github", "about")}>
             <Icon id="github" size={13} /> GitHub
           </a>
-          <a class="btn-text" href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://crates.io/crates/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("crates_io", "about")}>
             <Icon id="crate" size={13} /> crates.io
           </a>
-          <a class="btn-text" href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://crates.io/crates/varchar-cli" target="_blank" rel="noreferrer noopener" onClick={outbound("crates_io_cli", "about")}>
             <Icon id="crate" size={13} /> varchar-cli
           </a>
-          <a class="btn-text" href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener">
+          <a class="btn-text" href="https://docs.rs/varchar" target="_blank" rel="noreferrer noopener" onClick={outbound("docs_rs", "about")}>
             <Icon id="book" size={13} /> docs.rs
           </a>
         </nav>
@@ -235,7 +240,7 @@ export function ReferenceDrawer({ open, onClose, onUse }) {
       </div>
       <footer class="panel-footer">
         <span class="cn-meta">The dialect is small on purpose.</span>
-        <a class="btn-text" href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener">
+        <a class="btn-text" href={REFERENCE_DOC} target="_blank" rel="noreferrer noopener" onClick={outbound("sql_reference", "reference")}>
           <Icon id="book" size={13} /> full reference
         </a>
       </footer>
@@ -270,7 +275,7 @@ export function ImportDialog({ open, onClose, onLoadBlob, onImportCsv }) {
           <label for="blob-input">paste an encoded database string</label>
           <textarea
             id="blob-input"
-            class="is-code"
+            class="is-code ph-no-capture"
             spellcheck={false}
             value={text}
             placeholder="V2;~S|users|id:I:!|name:T:?;~P|users|id;"

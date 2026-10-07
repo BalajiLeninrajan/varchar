@@ -1,17 +1,21 @@
+import posthog from "posthog-js";
+
 import { Chip, Icon } from "./ui.jsx";
 
 const LINKS = [
   {
     id: "github",
+    destination: "github",
     href: "https://github.com/BalajiLeninrajan/varchar",
     title: "GitHub",
   },
   {
     id: "crate",
+    destination: "crates_io",
     href: "https://crates.io/crates/varchar",
     title: "crates.io/varchar",
   },
-  { id: "book", href: "https://docs.rs/varchar", title: "docs.rs/varchar" },
+  { id: "book", destination: "docs_rs", href: "https://docs.rs/varchar", title: "docs.rs/varchar" },
 ];
 
 export function Topbar({
@@ -69,6 +73,7 @@ export function Topbar({
             title={link.title}
             target="_blank"
             rel="noreferrer noopener"
+            onClick={() => posthog.capture("outbound_link", { destination: link.destination, location: "topbar" })}
           >
             <Icon id={link.id} size={13} />
           </a>
