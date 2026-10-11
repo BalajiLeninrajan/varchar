@@ -24,7 +24,7 @@ export function Console({ sql, onSql, onRun, onSeed }) {
           ref={field}
           id="sql"
           name="sql"
-          class="input is-code"
+          class="input is-code ph-no-capture"
           value={sql}
           spellcheck={false}
           autocapitalize="off"

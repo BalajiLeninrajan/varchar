@@ -127,7 +127,7 @@ export function StringDock({
         </div>
       </div>
       <div class="collapsible">
-        <div>
+        <div class="ph-no-capture">
         {tape}
         <div class="pane-body terminal">
           <pre
