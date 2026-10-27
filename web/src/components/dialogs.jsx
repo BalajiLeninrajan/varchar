@@ -18,9 +18,7 @@ export function AboutDialog({ open, onClose }) {
         </h1>
         <p class="lede cn-mt-0 cn-mb-24">
           Schemas, constraints, sequence state and every row live in a single UTF-8 <code class="cn-code-inline">String</code>, and
-          every <code class="cn-code-inline">SELECT</code> is a regular expression scanned across it. This page runs the real engine
-          compiled to WebAssembly: your SQL and data never leave your tab, and nothing survives a reload. Anonymous,
-          cookieless usage counts go to PostHog.
+          every <code class="cn-code-inline">SELECT</code> is a regular expression scanned across it.
         </p>
         <pre class="sample codeblock cn-mt-0 cn-mb-24">
           <span class="tok-tag">V2;</span>
@@ -50,17 +48,6 @@ export function AboutDialog({ open, onClose }) {
           <span class="tok-cell">B1</span>
           <span class="tok-tag">;</span>
         </pre>
-        <ul class="about-list cn-mb-24">
-          <li>
-            <b>Run</b> anything in the console. Statements are split on <code class="cn-code-inline">;</code> and executed one at a
-            time.
-          </li>
-          <li>
-            Every <code class="cn-code-inline">SELECT</code> shows the pattern it compiled to, and highlights the bytes it matched in
-            the string at the bottom.
-          </li>
-          <li>The string is the whole database. Copy it, save it, or import one back.</li>
-        </ul>
         <div class="cn-grid-2">
           <CopyCommand command="cargo add varchar" />
           <CopyCommand command="cargo install varchar-cli" />

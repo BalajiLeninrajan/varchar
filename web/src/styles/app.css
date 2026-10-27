@@ -270,7 +270,6 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .sample .tok-tag { color: var(--mauve); font-weight: 700; }
 .sample .tok-name { color: var(--teal); }
 .sample .tok-cell { color: var(--peach); }
-.about-list b { color: var(--text); }
 
 .drawer-body { min-height: 0; flex: 1 1 auto; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 
