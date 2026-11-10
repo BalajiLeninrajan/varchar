@@ -232,7 +232,6 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-err { color: var(--red); }
 .log-note { color: var(--overlay-1); }
 
-.dock .panel-header { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
 /* The dock is showing a snapshot rather than the live string, so say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); }
