@@ -60,7 +60,7 @@ export function StringDock({
         </h2>
         <div class="band-actions">
           {total !== 0 && (
-            <span class="legend-item cn-tone-mauve cn-min-0" id="blob-note">
+            <span class="legend-item cn-min-0" id="blob-note">
               <span class="cn-truncate">
                 {total.toLocaleString()} byte range{total === 1 ? "" : "s"}{" "}
                 matched

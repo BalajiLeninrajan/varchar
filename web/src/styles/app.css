@@ -180,8 +180,8 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .vc-rec.is-lit { background: var(--vc-match); }
 /* Half-lit: the pattern matched it, then Rust dropped it. */
 .vc-rec.is-half, .vc-key-half::before { background: linear-gradient(to top, var(--vc-match) 50%, var(--surface-1) 50%); }
-.vc-key-plain { --tone: var(--surface-1); }
-.vc-key-lit { --tone: var(--vc-match); }
+.vc-key-plain { --series: var(--surface-1); }
+.vc-key-lit { --series: var(--vc-match); }
 /* The records behind the pointed result row. */
 .vc-rec.is-current { background: var(--mauve); }
 
@@ -232,7 +232,6 @@ textarea.is-code, .field .is-code { font: 500 12px/1.6 var(--mono); tab-size: 2;
 .log-err { color: var(--red); }
 .log-note { color: var(--overlay-1); }
 
-.dock .panel-header { background: color-mix(in srgb, var(--crust) 55%, var(--mantle)); }
 /* The dock is showing a snapshot rather than the live string, so say so in the
    one place nobody can miss. */
 .dock .as-of { color: var(--peach); }
